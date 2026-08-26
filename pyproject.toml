@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto_stock"
+version = "0.1.0"
+description = "Stock recommendation and semi-automatic trading system"
+requires-python = ">=3.11"
+dependencies = [
+    "finance-datareader",
+    "pykrx",
+    "duckdb",
+    "apscheduler",
+    "pandas",
+    "pandas-ta",
+    "requests",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
