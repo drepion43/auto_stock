@@ -16,13 +16,22 @@ dependencies = [
     "pandas-ta",
     "requests",
     "python-dotenv",
+    "scikit-learn>=1.4",
+    "joblib",
+    "numpy",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-mock",
+    "pytest-cov",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: model-fitting smoke tests (training wiring) — excluded via `-m \"not slow\"` for fast runs",
+]
