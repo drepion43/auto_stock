@@ -15,15 +15,15 @@
     "volume_ratio_20",
     "channel_position_20"
   ],
-  "universe_size": 115,
+  "universe_size": 200,
   "train_start": "2021-11-26",
   "train_end": "2025-08-28",
   "test_start": "2025-09-05",
   "test_end": "2026-08-20",
-  "train_samples": 98179,
-  "test_samples": 25653,
-  "test_base_rate": 0.45959536896269443,
-  "test_roc_auc": 0.532883126208321,
-  "test_accuracy": 0.5422757572213777,
-  "trained_at": "2026-08-27T21:47:56.917784"
+  "train_samples": 166259,
+  "test_samples": 44567,
+  "test_base_rate": 0.46377364417618416,
+  "test_roc_auc": 0.5284006732679558,
+  "test_accuracy": 0.5380214059730294,
+  "trained_at": "2026-08-27T22:51:09.207318"
 }
