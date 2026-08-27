@@ -15,6 +15,8 @@ Run from the project root so `data/` resolves correctly:
 import os
 from datetime import date, timedelta
 
+from tqdm import tqdm
+
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.service import get_ohlcv, get_universe
 from auto_stock.ml_predictor.artifact import save_model
@@ -30,13 +32,17 @@ PRODUCTION_ALGORITHM = "logreg"
 
 def _collect_universe_records(cache: OHLCVCache, tickers: list[str], start: date, end: date) -> list[list]:
     all_records = []
-    for ticker in tickers:
+    skipped = 0
+    progress = tqdm(tickers, desc="OHLCV 수집", unit="종목")
+    for ticker in progress:
         try:
             records = get_ohlcv(cache, ticker, start, end, MARKET)
             if records:
                 all_records.append(records)
         except Exception as exc:  # per-ticker isolation, same principle as the orchestrator
-            print(f"  스킵 {ticker}: {exc}")
+            skipped += 1
+            tqdm.write(f"  스킵 {ticker}: {exc}")
+        progress.set_postfix(로드=len(all_records), 스킵=skipped)
     return all_records
 
 

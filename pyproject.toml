@@ -19,6 +19,7 @@ dependencies = [
     "scikit-learn>=1.4",
     "joblib",
     "numpy",
+    "tqdm",
 ]
 
 [project.optional-dependencies]

@@ -16,6 +16,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 
 from auto_stock.ml_predictor.dataset import to_xy
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS
@@ -103,7 +104,8 @@ def walk_forward_scores(dataset: TrainingDataset, n_splits: int = 5, algorithm: 
 
     splitter = TimeSeriesSplit(n_splits=n_splits)
     scores: list[float] = []
-    for train_idx, test_idx in splitter.split(X):
+    folds = tqdm(splitter.split(X), total=n_splits, desc=f"walk-forward({algorithm})", leave=False)
+    for train_idx, test_idx in folds:
         X_train = [X[i] for i in train_idx]
         y_train = [y[i] for i in train_idx]
         X_test = [X[i] for i in test_idx]
