@@ -50,7 +50,11 @@ src/auto_stock/ml_predictor/
 
 > **코드 리뷰에서 발견/수정한 버그**: 최초 구현의 `.gitignore` 패턴은 `models/*.joblib`이었는데, git의 glob은 `/`를 넘어가지 않으므로 실제 저장 경로인 `models/ml_predictor/*.joblib`을 무시하지 못해 바이너리가 커밋될 뻔했다. `models/**/*.joblib`로 수정해 실제로 무시되는지 `git check-ignore`로 확인했다.
 
-이번 저장소에는 **실제 모델 아티팩트를 커밋하지 않았다** — `scripts/train_ml_model.py`의 KRX 유니버스 조회(`data.service.get_universe` → pykrx)는 `KRX_ID`/`KRX_PW` 환경변수(모의 계정 로그인)가 필요한데 현재 로컬 환경에 설정돼 있지 않아, 전체 유니버스 학습을 실행하지 못했다. 배선 검증용으로 8개 종목·2년치 데이터를 직접 넣어 스모크 테스트했고(`chronological_split` → `train` → `save_model`/`load_model` 왕복까지 정상 동작 확인, AUC 0.46~0.53 수준으로 8종목 소표본에서 나올 법한 노이즈 범위), 그 산출물은 실제 배포 모델이 아니므로 커밋 전에 삭제했다. **실제 운영용 모델을 만들려면 `KRX_ID`/`KRX_PW`를 `.env`에 설정한 뒤 `python scripts/train_ml_model.py`를 직접 실행해야 한다.**
+이번 저장소에는 **실제 모델 아티팩트를 커밋하지 않았다.** 배선 검증용으로 8개 종목·2년치 데이터를 직접 넣어 스모크 테스트했고(`chronological_split` → `train` → `save_model`/`load_model` 왕복까지 정상 동작 확인, AUC 0.46~0.53 수준으로 8종목 소표본에서 나올 법한 노이즈 범위), 그 산출물은 실제 배포 모델이 아니므로 커밋 전에 삭제했다.
+
+전체 유니버스(200종목) 학습은 아직 실행하지 않았다(사용자 판단으로 보류 중). **원인은 이미 찾아 고쳤다** — `pykrx`(설치 버전 1.2.8)는 `KRX_ID`/`KRX_PW` 환경변수로 로그인 세션을 만들어 데이터를 요청한다(`.venv/Lib/site-packages/pykrx/website/comm/auth.py`). 문제는 `pykrx.website.comm.webio` 모듈이 **import 시점에** `_session = build_krx_session()`을 호출하는데, `.env`를 로드하는 `load_dotenv()`가 그보다 먼저 실행된 적이 없어 `os.getenv("KRX_ID")`가 항상 빈 값이었던 것이다. 콘솔의 "KRX 로그인 실패" 메시지가 바로 이 증상이었다(참고로 `docs/design/orchestrator.md`가 언급하는 "무해한 KRX 로그인 경고"는 `FinanceDataReader`가 내부적으로 찍는 **별개의** 메시지로, 이번 pykrx 로그인 실패와는 다른 원인이다 — 메시지 문구가 우연히 비슷해 초기 진단에 혼선이 있었다).
+
+**수정**: `src/auto_stock/data/sources/pykrx_source.py`의 `get_ticker_list`/`get_market_cap` 각각에 `load_dotenv()`를 호출문 앞에 추가했다. `pykrx`의 세션 재시도 로직(`get_auth_session()`)이 매 호출 시점에 `os.getenv()`를 다시 읽으므로, import 시점의 최초 로그인 시도가 실패하더라도 실제 요청 직전에 `.env`가 로드돼 있으면 재로그인에 성공한다 — `.env`에 `KRX_ID`/`KRX_PW`를 설정한 뒤 3~5종목 스모크 테스트로 로그인 성공과 정상 데이터 수신을 직접 확인했다. `notifier/credentials.py`가 이미 쓰던 "각 진입점이 필요한 시점에 `load_dotenv()`를 직접 호출" 패턴을 그대로 따른 것이다.
 
 ## 테스트 전략
 

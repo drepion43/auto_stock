@@ -102,7 +102,7 @@
 
 MVP가 end-to-end로 동작한 뒤, 아래 순서로 신호 소스를 추가해 추천 품질을 고도화한다. 추천 설명 생성기(#6)는 새 신호가 추가될 때마다 자동으로 더 풍부한 근거를 종합하도록 이미 설계되어 있으므로, 이 확장은 추천 설명 생성기의 재설계 없이 이뤄질 수 있어야 한다.
 
-1. **ML 예측 모듈 (#2)**: 구현 완료 — scikit-learn `LogisticRegression`(L2)로 확정, `explainer.generate_explanation`의 `extra_reasons` 확장 포인트를 경유한 보조 신호로 배선 완료(자체 후보 생성/필터링은 하지 않음). 상세 설계·lookahead 방어·스코프 경계는 `docs/design/ml-predictor.md` 참고. **실제 KRX 전체 유니버스 재학습은 아직 안 됨** — `KRX_ID`/`KRX_PW` 환경변수 설정 후 `scripts/train_ml_model.py` 실행 필요.
+1. **ML 예측 모듈 (#2)**: 구현 완료 — scikit-learn `LogisticRegression`(L2)로 확정, `explainer.generate_explanation`의 `extra_reasons` 확장 포인트를 경유한 보조 신호로 배선 완료(자체 후보 생성/필터링은 하지 않음). 상세 설계·lookahead 방어·스코프 경계는 `docs/design/ml-predictor.md` 참고. `get_universe("KRX")`가 의존하는 `pykrx` 로그인이 `.env` 미로드로 실패하던 문제는 `data/sources/pykrx_source.py`에 `load_dotenv()` 추가로 해결(검증 완료). **실제 200종목·5년치 전체 학습 실행은 사용자 판단으로 아직 보류 중.**
 2. **차트분석/예측 에이전트 — LLM (#3)**: 차트 데이터를 LLM에 입력해 패턴 해석
 3. **뉴스/공시 분석 에이전트 (#4)**: DART(1순위 확정) + 빅카인즈(유력 후보)로 감성·이벤트 추출 (PRD §7.2)
 

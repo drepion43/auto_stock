@@ -1,0 +1,29 @@
+{
+  "market": "KRX",
+  "algorithm": "logreg",
+  "horizon_days": 5,
+  "feature_names": [
+    "return_1d",
+    "return_5d",
+    "return_20d",
+    "rsi_14",
+    "macd_hist_norm",
+    "close_to_sma20",
+    "close_to_sma60",
+    "sma20_to_sma60",
+    "atr_14_pct",
+    "volume_ratio_20",
+    "channel_position_20"
+  ],
+  "universe_size": 115,
+  "train_start": "2021-11-26",
+  "train_end": "2025-08-28",
+  "test_start": "2025-09-05",
+  "test_end": "2026-08-20",
+  "train_samples": 98179,
+  "test_samples": 25653,
+  "test_base_rate": 0.45959536896269443,
+  "test_roc_auc": 0.532883126208321,
+  "test_accuracy": 0.5422757572213777,
+  "trained_at": "2026-08-27T21:47:56.917784"
+}
