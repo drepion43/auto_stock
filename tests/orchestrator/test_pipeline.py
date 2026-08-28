@@ -213,3 +213,196 @@ def test_ml_prediction_failure_still_sends_notification_and_records_error(mocker
     assert "모델 추론 실패" in result.errors[0][1]
     _, kwargs = mock_explain.call_args
     assert kwargs["extra_reasons"] == []
+
+
+# --- LLM #3 wiring (Phase 3, docs/design/llm-chart-analyst-plan.md "오케스트레이터 통합") ---
+
+
+def test_pipeline_without_any_auxiliary_signal_behaves_identically_to_before(mocker):
+    # Extended regression lock: both ml_model and llm_client default to None and must
+    # not change call signatures for generate_explanation — mirrors
+    # test_pipeline_without_ml_model_behaves_identically_to_before, plus asserting
+    # analyze_chart is never invoked either.
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        side_effect=lambda candidate, sizing: _explanation(ticker=candidate.ticker),
+    )
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
+    mock_analyze = mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart")
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+    )
+
+    assert len(result.sent) == 1
+    assert result.sent[0].ticker == "005930"
+    assert result.errors == []
+    mock_send.assert_called_once()
+    mock_explain.assert_called_once_with(mocker.ANY, mocker.ANY)  # no extra_reasons kwarg at all
+    mock_predict.assert_not_called()
+    mock_analyze.assert_not_called()
+
+
+def test_pipeline_with_llm_client_only_passes_llm_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
+    fake_analysis = mocker.Mock()
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=fake_analysis)
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)", "(LLM 차트해석은 백테스트 미검증 정성 신호입니다)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), llm_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    assert result.errors == []
+    mock_predict.assert_not_called()  # ml_model is None -> ML code path untouched
+    mock_explain.assert_called_once()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+        "(LLM 차트해석은 백테스트 미검증 정성 신호입니다)",
+    ]
+    mock_send.assert_called_once()
+
+
+def test_pipeline_with_both_ml_and_llm_merges_reasons_in_order(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다", "(ML 신호는 백테스트 검증 전 참고용 보조 지표입니다)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)", "(LLM 차트해석은 백테스트 미검증 정성 신호입니다)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "(ML 신호는 백테스트 검증 전 참고용 보조 지표입니다)",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+        "(LLM 차트해석은 백테스트 미검증 정성 신호입니다)",
+    ]
+
+
+def test_llm_failure_still_sends_notification_and_records_error(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 응답 시간 초과(30.0s)"))
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), llm_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite LLM failure
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert result.errors[0][0] == "005930"
+    assert "LLM 차트분석 실패" in result.errors[0][1]
+    assert "LLM 응답 시간 초과(30.0s)" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+def test_llm_failure_does_not_suppress_ml_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 레이트리밋 초과"))
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+    )
+
+    assert len(result.errors) == 1
+    assert "LLM 차트분석 실패" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["ML 모델도 BUY 신호에 동의합니다"]
+
+
+def test_ml_failure_does_not_suppress_llm_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", side_effect=RuntimeError("모델 추론 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+    )
+
+    assert len(result.errors) == 1
+    assert "ML 예측 실패" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"]
+
+
+def test_both_failures_record_two_errors_and_still_send(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", side_effect=RuntimeError("모델 추론 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 연결 실패"))
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite both failures
+    mock_send.assert_called_once()
+    assert len(result.errors) == 2
+    tickers_with_errors = {ticker for ticker, _ in result.errors}
+    assert tickers_with_errors == {"005930"}
+    messages = [message for _, message in result.errors]
+    assert any("ML 예측 실패" in message and "모델 추론 실패" in message for message in messages)
+    assert any("LLM 차트분석 실패" in message and "LLM 연결 실패" in message for message in messages)
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
