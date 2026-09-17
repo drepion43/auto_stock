@@ -2,6 +2,10 @@
 
 `OPENAI_API_KEY`를 더미 값으로 monkeypatch하는 autouse 픽스처는 실수로도 실제 API 호출이
 발생하지 않도록 하는 안전장치다(모든 테스트가 이 conftest를 통해 이 픽스처를 자동 적용받는다).
+`load_dotenv` 자체도 모킹한다 — 그렇지 않으면 로컬 `.env`에 `OPENAI_API_KEY=`(빈 값이라도)가
+있을 때 `monkeypatch.delenv` 직후 `load_dotenv()`가 그 빈 값을 다시 주입해 "키 없으면
+KeyError" 테스트가 거짓으로 실패한다(코드 리뷰 MEDIUM — news_sentiment 리뷰에서 발견,
+동일 결함이 이 파일에도 있어 함께 수정).
 """
 
 import random
@@ -15,7 +19,8 @@ from auto_stock.llm_chart_analyst.schema import ChartPatternRead
 
 
 @pytest.fixture(autouse=True)
-def _dummy_openai_api_key(monkeypatch):
+def _dummy_openai_api_key(monkeypatch, mocker):
+    mocker.patch("auto_stock.llm_chart_analyst.credentials.load_dotenv")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-key-not-real")
 
 

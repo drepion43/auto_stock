@@ -1,3 +1,4 @@
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -27,23 +28,37 @@ class OHLCVCache:
     def __init__(self, db_path: str | Path):
         self._con = duckdb.connect(str(db_path))
         self._con.execute(_SCHEMA)
+        self._write_lock = threading.Lock()
+
+    def cursor(self) -> "OHLCVCache":
+        """스레드 전용 커넥션(DuckDB 공식 패턴: `Connection.cursor()`)으로 동작하는 새
+        인스턴스를 반환한다 — 같은 DB를 가리키는 별도 커넥션이지 새 DB가 아니다
+        (majestic-waddling-breeze.md "온디맨드 배치 스캔 트리거" 계획: 백그라운드 스레드가
+        이 메서드로 자기 전용 커넥션을 얻어 메인 스레드와 동시에 안전하게 읽고 쓴다).
+        `_write_lock`은 새로 만들지 않고 원본과 공유한다 — 그래야 원본 인스턴스와 이
+        클론이 같은 파일에 동시에 쓰는 걸 막을 수 있다."""
+        clone = object.__new__(OHLCVCache)
+        clone._con = self._con.cursor()
+        clone._write_lock = self._write_lock
+        return clone
 
     def put(self, records: list[OHLCVRecord]) -> None:
-        for r in records:
-            self._con.execute(
-                """
-                INSERT INTO ohlcv (ticker, market, date, open, high, low, close, volume, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
-                ON CONFLICT (ticker, market, date) DO UPDATE SET
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    volume = excluded.volume,
-                    updated_at = excluded.updated_at
-                """,
-                [r.ticker, r.market, r.date, r.open, r.high, r.low, r.close, r.volume],
-            )
+        with self._write_lock:
+            for r in records:
+                self._con.execute(
+                    """
+                    INSERT INTO ohlcv (ticker, market, date, open, high, low, close, volume, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+                    ON CONFLICT (ticker, market, date) DO UPDATE SET
+                        open = excluded.open,
+                        high = excluded.high,
+                        low = excluded.low,
+                        close = excluded.close,
+                        volume = excluded.volume,
+                        updated_at = excluded.updated_at
+                    """,
+                    [r.ticker, r.market, r.date, r.open, r.high, r.low, r.close, r.volume],
+                )
 
     def get(self, ticker: str, market: str, start: date, end: date) -> list[OHLCVRecord]:
         rows = self._con.execute(

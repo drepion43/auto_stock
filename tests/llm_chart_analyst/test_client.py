@@ -83,6 +83,10 @@ def test_openai_client_is_constructed_with_config_values(mocker):
             lambda: openai.InternalServerError("boom", response=_fake_response(500), body=None),
             "status=500",
         ),
+        (
+            lambda: openai.APIResponseValidationError(response=_fake_response(200), body=None),
+            "API 오류",
+        ),
         (lambda: pydantic.ValidationError.from_exception_data("ChartPatternRead", []), "스키마 검증"),
     ],
 )
@@ -133,6 +137,7 @@ def test_call_budget_blocks_calls_beyond_max_calls_per_run_without_touching_sdk(
         lambda: openai.RateLimitError("rate", response=_fake_response(429), body=None),
         lambda: openai.AuthenticationError("auth", response=_fake_response(401), body=None),
         lambda: openai.InternalServerError("boom", response=_fake_response(500), body=None),
+        lambda: openai.APIResponseValidationError(response=_fake_response(200), body=None),
     ],
 )
 def test_api_key_never_appears_in_error_messages(mocker, exc_factory):
@@ -145,6 +150,13 @@ def test_api_key_never_appears_in_error_messages(mocker, exc_factory):
         client.read_pattern("system", "user")
 
     assert SECRET_API_KEY not in str(exc_info.value)
+
+
+def test_llm_config_repr_does_not_expose_api_key():
+    config = _config()
+
+    assert SECRET_API_KEY not in repr(config)
+    assert SECRET_API_KEY not in str(config)
 
 
 def test_budget_exceeded_error_does_not_mention_api_key(mocker):

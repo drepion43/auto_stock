@@ -1,6 +1,6 @@
 import pytest
 
-from auto_stock.rule_engine.indicators import atr, ema, macd, rsi, sma
+from auto_stock.rule_engine.indicators import atr, ema, macd, rsi, sma, volume_ratio
 
 
 def test_sma_matches_hand_computed_values():
@@ -93,3 +93,22 @@ def test_atr_is_higher_for_wider_high_low_ranges():
     assert calm_atr[-1] is not None
     assert volatile_atr[-1] is not None
     assert volatile_atr[-1] > calm_atr[-1]
+
+
+def test_volume_ratio_matches_hand_computed_values():
+    volumes = [100, 100, 100, 100, 200]
+
+    result = volume_ratio(volumes, window=3)
+
+    assert result[:2] == [None, None]
+    assert result[2] == pytest.approx(1.0)  # avg(100,100,100)=100 -> 100/100
+    assert result[3] == pytest.approx(1.0)  # avg(100,100,100)=100 -> 100/100
+    assert result[4] == pytest.approx(1.5)  # avg(100,100,200)=133.33 -> 200/133.33
+
+
+def test_volume_ratio_is_none_when_mean_volume_is_zero():
+    volumes = [0, 0, 0, 5]
+
+    result = volume_ratio(volumes, window=3)
+
+    assert result[2] is None

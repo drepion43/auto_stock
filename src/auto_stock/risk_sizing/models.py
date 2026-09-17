@@ -23,5 +23,6 @@ class SizingSuggestion:
     suggested_allocation_pct: float | None
     stop_loss_price: float | None
     take_profit_price: float | None
+    reference_price: float | None  # 사이징 계산에 쓰인 최신 종가 — 실시간 시세도 지정가도 아님
     limit_check: str  # "PASS" | "EXCEEDS_MAX_POSITIONS" | "EXCEEDS_EXPOSURE_CAP" | "NOT_APPLICABLE"
     notes: list[str]

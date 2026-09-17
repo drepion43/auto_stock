@@ -55,6 +55,12 @@ class OpenAIChartClient:
             raise LLMChartAnalystError("LLM 인증 실패 — OPENAI_API_KEY 확인 필요") from exc
         except openai.APIStatusError as exc:
             raise LLMChartAnalystError(f"LLM API 오류(status={exc.status_code})") from exc
+        except openai.APIError as exc:
+            # Catch-all for openai.APIError siblings not explicitly named above
+            # (e.g. APIResponseValidationError) — keeps the "every SDK exception
+            # becomes LLMChartAnalystError" contract even if the SDK adds new
+            # exception subclasses.
+            raise LLMChartAnalystError(f"LLM API 오류: {type(exc).__name__}") from exc
         except pydantic.ValidationError as exc:
             raise LLMChartAnalystError("LLM 응답 스키마 검증 실패") from exc
 

@@ -1,8 +1,12 @@
 # auto_stock 코드베이스 리뷰 (현재까지 구현 현황)
 
-> 최초 작성 2026-08-27, 갱신 2026-08-28. 이 문서는 각 모듈이 "무엇을 담당하고 어떤 역할을 하는지"를 정리한 것이며, 설계 근거·의사결정 배경은 `docs/design/*.md`에 더 자세히 있다(이 문서는 그것들의 상위 요약). 코드가 구현/수정될 때마다 이 문서도 함께 갱신한다.
+> 최초 작성 2026-08-27, 갱신 2026-09-06. 이 문서는 각 모듈이 "무엇을 담당하고 어떤 역할을 하는지"를 정리한 것이며, 설계 근거·의사결정 배경은 `docs/design/*.md`에 더 자세히 있다(이 문서는 그것들의 상위 요약). 코드가 구현/수정될 때마다 이 문서도 함께 갱신한다.
 
-## 진행 중: LLM 차트분석 에이전트 (#3)
+## 완료: LLM 차트분석 에이전트 (#3, Phase 0~4 전체)
+
+> Phase 4(문서화 + `code-reviewer`/`security-reviewer` 리뷰) 완료. 발견된 MEDIUM 3건(중복 로직 통합, dataclass repr 시크릿 노출 방지, `APIResponseValidationError` 예외 매핑 추가) + LOW 2건(openai 버전 고정, 이 문서의 자기모순 서술 정정) 전부 TDD로 수정, 191개 테스트로 회귀 확인. 상세: `docs/design/llm-chart-analyst.md`. 남은 것은 `OPENAI_API_KEY` 발급 후 사용자의 실제 API 호출 검증뿐.
+
+### 이전 진행 기록 (Phase 0~3)
 
 `docs/design/llm-chart-analyst-plan.md`(OpenAI `gpt-5.6-luna` 기준) 승인 완료, **Phase 0(의존성 게이트) 완료**:
 - `pyproject.toml`에 `openai`(3.5.0 설치됨), `pydantic>=2` 추가
@@ -32,6 +36,18 @@
 - 계획과 다른 점 없음 — `docs/design/llm-chart-analyst-plan.md` "오케스트레이터 통합" 절의 코드 스케치와 4가지 핵심 포인트를 그대로 구현.
 - `OPENAI_API_KEY` 발급 전이라 **배선은 완료됐지만 실제 API 호출로 검증된 적은 아직 없다** — 발급 후 `scripts/verify_llm_chart_analyst.py`(실호출 모드)와 `scripts/run_recommendations_with_signals.py`로 사용자가 직접 1회 검증 필요.
 
+## 완료: 뉴스/공시 분석 에이전트 (#4, Phase 0~4 전체)
+
+> DART(전자공시) 공시 목록을 OpenAI `gpt-5.6-luna`로 해석해 시장 영향(호재/악재/중립)을 판단, `extra_reasons` 경유 보조 신호로 배선 완료. Phase 4(문서화 + `code-reviewer`/`security-reviewer` 리뷰)까지 끝났다. 리뷰에서 CRITICAL 1건(`DART_API_KEY`가 요청 실패 시 예외 메시지로 노출될 수 있었음 — `requests.exceptions.RequestException`을 잡아 `DartApiError`로 정제) + HIGH 1건(잘못된 키가 빈 corp_code 매핑을 7일간 에러 없이 캐싱해 신호를 무력화 — DART 응답의 `status` 필드 검증 추가) + MEDIUM 2건(캐시 쓰기 비원자적 → 임시파일+`os.replace()`, `rm`/`report_nm`의 JSON `null` 미방어 → `or ""`) 전부 TDD로 수정. LOW 3건(공시 필드 길이 상한 없음, zip 크기 상한 없음, 다중 프로세스 캐시 경합)은 실질 위험 낮음으로 판단해 보류. 상세: `docs/design/news-disclosure.md`. 남은 것은 `DART_API_KEY` 발급 후 사용자의 실제 API 호출 검증뿐.
+
+## 완료: 뉴스 감성분석 에이전트 (#4-뉴스, 국내 네이버 + 미국 GDELT 양쪽)
+
+> 실제 뉴스 기사(공시가 아님) — KRX는 네이버 뉴스 검색, NASDAQ은 GDELT — 를 OpenAI `gpt-5.6-luna`로 해석해 논조(긍정/부정/중립)를 판단, `extra_reasons` 경유 5번째 보조 신호로 배선 완료. 뉴스/공시(#4)와 달리 진짜 감성분석이라 필드명이 `sentiment`(공시의 `market_impact`와 의도적으로 구분). 티커→회사명 해석은 새 인프라를 만들지 않고 기존 DART/EDGAR 캐시를 확장 재사용(`resolve_corp_name`/`resolve_company_title`). 리뷰에서 MEDIUM 4건(이름 해석 실패가 뉴스 소스 실패로 오라벨링되던 버그, GDELT `TypeError` 미포착, 3개 모듈 conftest의 `load_dotenv` 미모킹으로 인한 거짓-실패 테스트, HTML 엔티티 이스케이프 태그 되살아남) + LOW 1건(GDELT 질의 따옴표 이스케이프) 전부 TDD로 수정. 상세: `docs/design/news-sentiment.md`. 남은 것은 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 및 네이버 이용약관·GDELT 응답 형식 라이브 재확인뿐.
+
+## 완료: 대화형 챗봇 에이전트 (Stage A~E, `src/auto_stock/chat_agent/`)
+
+> MVP-0+신호 소스 확장(#1~#4)이 전부 일방향 배치 파이프라인인 것과 별도 축으로, 사용자가 자유 질의하면 필요한 분석 도구만 스스로 골라 호출하고 종합 답변하는 대화형 에이전트를 구현했다. 메인 루프는 OpenAI Responses API의 네이티브 tool-calling을 수동 while 루프로 오케스트레이션(`chat_agent/loop.py`, LangGraph/`deepagents` 미도입) — 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브)만 `deepagents` 서브에이전트로 agent-as-tool 노출한다. 메인 tool은 총 9개(`resolve_ticker` + 6개 신호 분석 + 위 2개 서브에이전트). `code-reviewer`/`security-reviewer`/`risk-policy-guardian` 3중 병렬 리뷰에서 나온 HIGH 2건(`loop.py`의 무방비 API 호출 + 배치용 `max_calls_per_run` 재사용으로 인한 세션 잠김, 뉴스/공시 원문 프롬프트 인젝션 방어 부재)과 MEDIUM 2건(서브에이전트 `structured_response` 후처리가 try 밖에 있던 문제, `QueryBudget` 사전차감 추정치가 실제 재귀상한보다 작던 문제)을 전부 TDD로 수정, 회귀 없음(488개 테스트, 커버리지 98%). 리스크정책 리뷰는 위반 없음. 상세: `docs/design/chat-agent-plan.md`("Stage E 구현 결과" 섹션), `docs/design/chat-agent-architecture-review.md`, `docs/design/multi-asset-automation-roadmap.md`(향후 멀티에셋/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.
+
 ## 전체 그림
 
 ```
@@ -59,6 +75,10 @@
 | `models.py` | `OHLCVRecord(ticker, market, date, open, high, low, close, volume)` — 시스템 전체에서 쓰는 유일한 시세 데이터 형태. `market`이 `KRX`/`NASDAQ`이 아니거나 `high < low`면 생성 시점에 예외를 던져 잘못된 데이터가 시스템에 들어오는 걸 막는다. |
 | `sources/fdr_source.py` | `fetch_ohlcv(ticker, start, end, market)` — `FinanceDataReader`로 KRX/NASDAQ 시세를 동일한 방식으로 조회. |
 | `sources/pykrx_source.py` | `get_ticker_list`(KRX 전체 상장종목), `get_market_cap`(개별 종목 시가총액) — `pykrx`로 KRX 전용 데이터를 보완. **`load_dotenv()`를 각 함수 안에서 호출** — pykrx가 `KRX_ID`/`KRX_PW` 로그인을 요구하는데, import 시점의 최초 로그인은 항상 실패하지만(모듈 로드 시 `.env`가 아직 안 읽힘) 함수 호출 시점에 재로그인을 시도해 성공한다(이번 세션에서 고친 버그). |
+| `sources/dart_source.py` | `resolve_corp_code(ticker)` — DART 전용 식별자(`corp_code`)를 KRX 종목코드로 역조회, `corpCode.xml`(zip)을 로컬 캐시(`data/dart_corp_codes.json`, 7일 갱신)로 관리. `fetch_disclosures(corp_code, start, end)` — DART 공시검색(`list.json`) 호출, 공시 없으면 빈 리스트(에러 아님). `DartApiError` — DART 자체 오류 status와 `requests` 전송 실패(네트워크/HTTP 오류) 둘 다 이 예외로 통일, 원본 예외는 절대 노출하지 않음(크리덴셜이 URL 쿼리스트링에 담기므로 — 뉴스/공시 #4 보안 리뷰 CRITICAL). XML 파싱은 표준 `xml.etree` 대신 `defusedxml`(XXE 방어). |
+| `sources/edgar_source.py` | `resolve_cik(ticker)` — SEC 전용 식별자(CIK, 10자리 0-패딩)를 나스닥 종목코드로 역조회, `company_tickers.json`을 로컬 캐시(`data/edgar_cik_map.json`, 7일 갱신)로 관리. `fetch_filings(cik, start, end)` — SEC `submissions` API 호출(날짜 범위는 클라이언트 사이드 필터링), Form 3/4/5와 그 정정판(`"N/A"`)은 노이즈로 판단해 제외, 폼 코드를 한국어 라벨로 변환. `EdgarApiError` — DART와 동일 원칙으로 `requests` 예외/응답 파싱 실패 둘 다 원본을 노출하지 않고 타입명만 남김. API 키가 아니라 SEC 정책상 필수인 `SEC_EDGAR_USER_AGENT`(연락처 포함 식별 문자열, 비밀 아님)를 사용. `resolve_company_title(ticker)`(뉴스감성 #4-뉴스 확장분) — 기존 `company_tickers.json` 캐시의 `title` 필드를 재사용해 회사명 역조회, `resolve_cik`와 캐시 공유. |
+| `sources/naver_news_source.py` | `search_news(company_name, ticker, market, start, end)` — 네이버 뉴스 검색 API(`news.json`) 호출, `<b>` 태그·HTML 엔티티 정제(엔티티 언이스케이프를 태그 제거보다 먼저 해야 이스케이프된 가짜 태그가 되살아나지 않음), RFC 822 `pubDate`를 `email.utils.parsedate_to_datetime`으로 파싱. `NaverNewsApiError`. `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`(HTTP 헤더로 전달, URL 쿼리스트링 아님)가 필요. |
+| `sources/gdelt_source.py` | `search_articles(query, ticker, market, start, end)` — GDELT DOC 2.0 API(`mode=artlist`) 호출, `seendate`(`%Y%m%dT%H%M%SZ` 형식 — 문서·커뮤니티 자료 교차 확인, 이 세션에서 라이브 검증은 네트워크 제약으로 못 함) 파싱. `GdeltApiError`. API 키 불필요. |
 | `cache.py` | `OHLCVCache` — DuckDB(`data/ohlcv.duckdb`) 기반 로컬 캐시. `put`/`get`/`covers`(요청 구간을 캐시가 이미 포함하는지 최소/최대 날짜로 근사 판단). |
 | `service.py` | `get_ohlcv`(캐시 우선 조회, 미스 시 `fdr_source` 호출 후 캐시 적재), `get_universe`(KRX는 `pykrx_source`, NASDAQ은 FDR 상장목록), `refresh_recent`(폴링용 최근 N일 갱신). |
 | `scheduler.py` | `is_market_open`(시장별 정규장 시간 판단, 타임존 인지), `poll_market`/`register_polling_jobs` — APScheduler로 장중에만 주기적으로 시세를 갱신하는 인프라. **아직 실제로 실행 파이프라인에 연결되지는 않았다** — 정의만 돼 있고 어떤 스크립트도 호출하지 않음. |
@@ -108,7 +128,7 @@ PRD §6 리스크 정책을 코드화하되, **1차 목표 범위는 참고용 �
 | 파일 | 역할 |
 |---|---|
 | `models.py` | `PipelineResult(sent: list[Explanation], errors: list[tuple[str, str]])`. |
-| `pipeline.py` | `run_recommendation_pipeline(cache, tickers, market, account, credentials, lookback_days=120, ml_model=None, llm_client=None)` — 티커마다 `get_ohlcv → generate_candidates → suggest_position → (선택)ML예측/(선택)LLM차트분석 → generate_explanation → send_notification` 순으로 호출. 종목 단위로 예외를 격리(`errors`에 기록하고 다음 종목 계속). `ml_model`과 `llm_client`가 **둘 다** `None`(기본값)이면 두 보조신호 코드 경로를 전혀 타지 않아 ML/LLM 추가 전과 100% 동일하게 동작(2-위치인자 `generate_explanation` 호출 보존) — 회귀 테스트로 고정돼 있음. 둘 중 하나라도 켜지면 `extra_reasons`에 ML 근거 → LLM 근거 순서로 병합해 전달한다. ML/LLM 예측이 각각 실패해도 알림 발송은 막지 않고 `errors`에 독립적으로 기록(`_ml_reasons`/`_llm_reasons` 헬퍼가 절대 예외를 밖으로 던지지 않으며, 한쪽 실패가 다른 쪽 근거를 삼키지 않음). |
+| `pipeline.py` | `run_recommendation_pipeline(cache, tickers, market, account, credentials, lookback_days=120, ml_model=None, llm_client=None, news_client=None, sentiment_client=None)` — 티커마다 `get_ohlcv → generate_candidates → suggest_position → (선택)ML예측/(선택)LLM차트분석/(선택)뉴스공시분석/(선택)뉴스감성분석 → generate_explanation → send_notification` 순으로 호출. 종목 단위로 예외를 격리(`errors`에 기록하고 다음 종목 계속). `ml_model`/`llm_client`/`news_client`/`sentiment_client` **넷 다** `None`(기본값)이면 네 보조신호 코드 경로를 전혀 타지 않아 확장 전과 100% 동일하게 동작(2-위치인자 `generate_explanation` 호출 보존) — 회귀 테스트로 고정돼 있음. 하나라도 켜지면 `extra_reasons`에 ML 근거 → LLM차트 근거 → 뉴스공시 근거 → 뉴스감성 근거 순서로 병합해 전달한다. 네 신호원 각각 실패해도 알림 발송은 막지 않고 `errors`에 독립적으로 기록(`_ml_reasons`/`_llm_reasons`/`_news_reasons`/`_sentiment_reasons` 헬퍼가 절대 예외를 밖으로 던지지 않으며, 한쪽 실패가 다른 쪽 근거를 삼키지 않음). `_news_reasons`/`_sentiment_reasons`는 각각 외부 조회 단계를 체이닝하며 단계별 실패를 구분된 접두사로 스스로 기록한다(다른 두 헬퍼는 호출부에서 접두사를 붙임) — `_sentiment_reasons`는 이름 해석(DART/EDGAR)과 뉴스 조회(네이버/GDELT)가 서로 다른 시스템이라 반드시 별도 `try/except`로 분리해야 한다(코드 리뷰에서 하나로 묶여 있어 이름 해석 실패가 뉴스 소스 실패로 잘못 라벨링되던 버그를 발견·수정, `docs/design/news-sentiment.md` 참고). |
 
 ## `src/auto_stock/ml_predictor/` — ML 예측 모듈 (#2, 보조 신호)
 
@@ -126,9 +146,9 @@ PRD §6 리스크 정책을 코드화하되, **1차 목표 범위는 참고용 �
 
 **현재 한계**: 학습/추론 모두 `MARKET="KRX"`로 하드코딩돼 있어 **나스닥은 학습·추천 어디에도 포함되지 않는다**(사용자와 확인된 사항 — 확장하려면 시장별로 별도 모델을 만들어야 하고, `chronological_split`이 단일 거래캘린더를 전제하므로 KRX+NASDAQ을 하나로 풀링하려면 재검증이 필요). 실제 200종목·5년치 학습도 아직 실행 전(사용자 판단으로 보류 중) — 지금까지는 3~8종목짜리 스모크 테스트만 돌려봤고 그 산출물은 커밋하지 않음.
 
-## `src/auto_stock/llm_chart_analyst/` — LLM 차트분석 에이전트 (#3, 보조 신호, Phase 1~2 완료)
+## `src/auto_stock/llm_chart_analyst/` — LLM 차트분석 에이전트 (#3, 보조 신호, Phase 0~3 완료)
 
-OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입력해 차트 패턴을 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다(ML #2와 동일하게 자체 후보를 만들지도 알림을 필터링하지도 않음). 프롬프트에 티커·종목명·시장·실제 날짜·규칙엔진 action을 절대 넣지 않는 것이 이 모듈의 핵심 설계 결정(환각·동조 방어, PRD §10). Phase 3(오케스트레이터 배선, 실제 API 최초 호출)는 아직 미착수.
+OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입력해 차트 패턴을 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다(ML #2와 동일하게 자체 후보를 만들지도 알림을 필터링하지도 않음). 프롬프트에 티커·종목명·시장·실제 날짜·규칙엔진 action을 절대 넣지 않는 것이 이 모듈의 핵심 설계 결정(환각·동조 방어, PRD §10). 오케스트레이터 배선(Phase 3)까지 완료됐고, 실제 API 최초 호출만 `OPENAI_API_KEY` 발급 후 사용자 검증 대기 중이다.
 
 | 파일 | 역할 |
 |---|---|
@@ -142,6 +162,57 @@ OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입�
 
 **배선 완료, 실제 API 호출은 `OPENAI_API_KEY` 발급 후 사용자가 직접 검증 필요**: `orchestrator/pipeline.py`에 `llm_client` 파라미터로 연결 완료(Phase 3, 아래 orchestrator 표 참고). `OPENAI_API_KEY`는 아직 미발급이라 실제 API 호출은 한 번도 없었다 — 모든 테스트가 `openai.OpenAI`를 모킹하고, `scripts/verify_llm_chart_analyst.py`도 이번 태스크에서는 dry-run 모드로만 실행했다.
 
+## `src/auto_stock/news_disclosure/` — 뉴스/공시 분석 에이전트 (#4, 보조 신호, DART+EDGAR 양쪽 완료)
+
+공시 목록(보고서명·접수일자·비고) — KRX는 DART, NASDAQ은 SEC EDGAR — 을 OpenAI GPT(`gpt-5.6-luna`)에 입력해 시장 영향(호재/악재/중립)을 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다(ML #2·LLM차트 #3과 동일하게 자체 후보를 만들지도 알림을 필터링하지도 않음). `llm_chart_analyst/`와 구조적으로 동일한 패턴(Protocol, SDK 예외 통일, `analyze()`/`to_reasons()` 분리)을 따르되 코드는 공유하지 않는다(의도된 설계 — 근거는 `news-disclosure-plan.md` 핵심 설계 결정 7). 이 해석 계층 자체는 시장과 무관하게 완전히 동일한 코드가 재사용된다 — DART/EDGAR 분기는 데이터 수집 계층(`dart_source.py`/`edgar_source.py`)과 오케스트레이터(`_news_reasons`)에만 있다.
+
+| 파일 | 역할 |
+|---|---|
+| `models.py` | `DisclosureSummary`(ticker/market/as_of + 최근 N건 `items`), `DisclosureAnalysis`(LLM 판독 결과 + 감사용 `model` 필드), `LLMConfig`(`api_key`는 `field(repr=False)`), `DisclosureReader`(Protocol — `read_disclosures` 메서드 + `model` 속성). |
+| `schema.py` | `DisclosureRead` — `client.responses.parse(..., text_format=DisclosureRead)`가 검증하는 Pydantic 출력 스키마. `market_impact`(POSITIVE/NEGATIVE/NEUTRAL, `sentiment`가 아닌 이 이름을 쓴 이유는 공시가 뉴스와 달리 어조 없는 사실 통지이기 때문)/`confidence`(LOW/MEDIUM/HIGH)/`key_event`/`rationale`/`caveat`. |
+| `prompt.py` | `SYSTEM_PROMPT`, `render_disclosure_list`/`build_user_prompt(summary)`. **개별 공시의 접수일도 절대 날짜가 아니라 `as_of` 기준 `D-N` 상대 오프셋으로만 렌더링**(`llm_chart_analyst`가 봉 날짜 대신 t-N 오프셋을 쓴 것과 같은 환각 방어 원칙의 연장). ticker/market/실제 날짜/action 전부 미노출. |
+| `credentials.py` | `load_llm_config()` — `OPENAI_API_KEY`를 #3과 공유 재사용(신규 발급 불요), `NEWS_OPENAI_MODEL`로 모델 등급만 독립 재정의 가능. `DISCLOSURE_LOOKBACK_DAYS=90`, `MAX_DISCLOSURES_PER_QUERY=10`. |
+| `client.py` | `OpenAIDisclosureClient`, `NewsDisclosureError` — **`openai`를 import하는 유일한 파일**. 예외 매핑 순서·`APIError` catch-all은 `llm_chart_analyst/client.py`와 동일(Phase 2 구현 시점부터 반영, 별도 리뷰 수정 불요). |
+| `analyst.py` | `analyze(client, disclosures, ticker, market, as_of) -> DisclosureAnalysis \| None` — 공시가 비어 있으면 리더를 호출하지 않고 `None` 반환(API 호출 0). `action` 파라미터 없음(동조 방어). `to_reasons(analysis, action)` — 동의/상충/중립 문구 + `caveat`(있을 때만) + 항상 마지막의 `NEWS_DISCLAIMER`. |
+
+**오케스트레이터 배선 + DART/EDGAR 양쪽 리뷰까지 완료, 실제 API 호출은 `DART_API_KEY`/`SEC_EDGAR_USER_AGENT` 발급·설정 후 사용자가 직접 검증 필요**: `orchestrator/pipeline.py`에 `news_client` 파라미터로 연결 완료(위 orchestrator 표 참고), `_news_reasons`가 market(KRX/NASDAQ)에 따라 DART/EDGAR를 분기 호출한다. 둘 다 아직 미설정이라 실제 API 호출은 한 번도 없었다 — 모든 테스트가 `requests`/`openai.OpenAI`를 모킹한다. 리뷰 결과 상세는 위 "완료: 뉴스/공시 분석 에이전트" 섹션과 `docs/design/news-disclosure.md` 참고.
+
+## `src/auto_stock/news_sentiment/` — 뉴스 감성분석 에이전트 (#4-뉴스, 보조 신호, 네이버+GDELT 양쪽 완료)
+
+실제 뉴스 기사(제목·게재일·출처) — KRX는 네이버, NASDAQ은 GDELT — 를 OpenAI GPT(`gpt-5.6-luna`)에 입력해 논조(긍정/부정/중립)를 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다. `news_disclosure/`와 구조적으로 동일한 패턴을 따르되 코드는 공유하지 않는다. 공시(#4)와 달리 이 신호원은 **진짜 감성분석**이다 — 뉴스 기사는 논조·어조가 있으므로 필드명도 `market_impact`가 아닌 `sentiment`.
+
+| 파일 | 역할 |
+|---|---|
+| `models.py` | `NewsSummary`(ticker/market/as_of + 최근 N건 `items: list[NewsArticle]`), `NewsSentimentAnalysis`(LLM 판독 결과 + 감사용 `model` 필드), `LLMConfig`(`api_key`는 `field(repr=False)`), `NewsSentimentReader`(Protocol — `read_sentiment` 메서드 + `model` 속성). |
+| `schema.py` | `NewsSentimentRead` — `sentiment`(POSITIVE/NEGATIVE/NEUTRAL)/`confidence`(LOW/MEDIUM/HIGH)/`key_headline`/`rationale`/`caveat`. |
+| `prompt.py` | `SYSTEM_PROMPT`, `render_news_list`/`build_user_prompt(summary)`. 기사 게재일도 `as_of` 기준 `D-N` 상대 오프셋, URL은 프롬프트에 넣지 않음. ticker/market/실제 날짜/action 전부 미노출. |
+| `credentials.py` | `load_llm_config()` — `OPENAI_API_KEY`를 #3/#4와 공유 재사용, `NEWS_SENTIMENT_OPENAI_MODEL`로 모델 등급만 독립 재정의 가능. `NEWS_LOOKBACK_DAYS=14`(공시의 90일보다 짧음 — 뉴스는 더 빨리 stale해짐), `MAX_ARTICLES_PER_QUERY=10`. |
+| `client.py` | `OpenAINewsSentimentClient`, `NewsSentimentError` — **`openai`를 import하는 유일한 파일**. 예외 매핑은 `news_disclosure/client.py`와 완전히 동일. |
+| `analyst.py` | `analyze(client, articles, ticker, market, as_of) -> NewsSentimentAnalysis \| None` — 기사가 비어 있으면 리더를 호출하지 않고 `None` 반환(API 호출 0). `action` 파라미터 없음(동조 방어). `to_reasons(analysis, action)` — 동의/상충/중립 문구("긍정적"/"부정적"/"중립" — 공시의 "호재"/"악재"와 어휘 구분) + `caveat`(있을 때만) + 항상 마지막의 `NEWS_SENTIMENT_DISCLAIMER`. |
+
+**오케스트레이터 배선 + 네이버/GDELT 양쪽 리뷰까지 완료, 실제 API 호출은 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후 사용자가 직접 검증 필요**(GDELT는 크리덴셜 불필요): `orchestrator/pipeline.py`에 `sentiment_client` 파라미터로 연결 완료(위 orchestrator 표 참고), `_sentiment_reasons`가 market(KRX/NASDAQ)에 따라 티커→회사명 해석(DART/EDGAR 캐시 재사용) 후 네이버/GDELT를 분기 호출한다. `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`가 아직 미발급이라 실제 API 호출은 한 번도 없었다 — 모든 테스트가 `requests`/`openai.OpenAI`를 모킹한다. 리뷰 결과 상세는 위 "완료: 뉴스 감성분석 에이전트" 섹션과 `docs/design/news-sentiment.md` 참고.
+
+---
+
+## `src/auto_stock/chat_agent/` — 대화형 챗봇 에이전트 (Stage A~E 완료)
+
+MVP-0+신호 소스 확장(#1~#4)의 4개 분석 함수 + 신규 사이징 tool을 메인 대화 에이전트에게 노출하고, 관련기업 탐색·종목별 딥다이브는 `deepagents` 서브에이전트(agent-as-tool)로 위임한다.
+
+| 파일 | 역할 |
+|---|---|
+| `models.py` | `LLMConfig`(frozen), `QueryBudget`(의도적으로 mutable — 턴마다 새로 만드는 런타임 카운터, `try_consume_llm_call`/`try_consume_llm_calls`), `FunctionCall`/`ChatModelResponse`, `ChatAgentReader`(Protocol — `openai` 미의존 테스트용). |
+| `credentials.py` | `load_llm_config()`. `DEFAULT_MAX_CALLS_PER_RUN=500`(대화 세션 전체 안전밸브, 배치용과 다른 스코프), `MAX_LLM_CALLS_PER_QUERY=50`/`MAX_TICKERS_PER_QUERY=5`/`MAX_TOOL_ITERATIONS=5`(턴 단위 예산), `FIND_RELATED_LLM_CALL_ESTIMATE`/`STOCK_ANALYST_LLM_CALL_ESTIMATE`는 각각의 `recursion_limit`(6/8)과 항상 같도록 고정(사전차감이 실제 지출을 과소 계상하지 않도록). |
+| `client.py` | `OpenAIChatAgentClient`, `ChatAgentError` — `openai`를 import하는 유일한 파일. `responses.create(tools=..., tool_choice=..., previous_response_id=...)` 사용, 예외 매핑은 다른 3개 LLM 클라이언트와 동일 패턴. |
+| `tool_schemas.py` | 9개 tool의 JSON schema(`resolve_ticker`만 `query: str` 단일 파라미터, 나머지 8개는 `ticker`+`market`). |
+| `ticker_resolution.py` | `resolve_ticker(query) -> TickerResolution` — 직접 코드 단축 경로 + DART/EDGAR 이름 검색 폴백. |
+| `tools.py` | `ChatToolContext`(9개 tool이 공유하는 의존성 묶음, `account: AccountState` 포함) + 9개 `tool_*` 함수(`TOOL_DISPATCH`). `_bind_stock_analyst_tools`가 6개 신호 tool을 종목/시장에 클로저로 고정한 langchain `@tool`로 감싸 `stock_analyst`에 전달(순환 임포트 회피). |
+| `related_companies.py` | `find_related_companies` 서브에이전트 — `verify_companies_co_mentioned_in_news`(뉴스 공동언급만으로 검증, DART/EDGAR 본문 미사용)와 `run_find_related_companies`(예산 사전차감→`create_deep_agent().invoke()`→실패격리, 최대 4개사로 절단). |
+| `stock_analyst.py` | `stock_analyst(ticker)` 서브에이전트 — 6개 신호 중 필요한 것만 자율 선택, `run_stock_analyst`가 "서브에이전트 자율 조사 결과" 출처 라벨을 결정론적으로 부착. |
+| `prompt.py` | 메인 `SYSTEM_PROMPT` — `resolve_ticker` 선행 호출 강제, 관련기업→딥다이브 호출 순서, confirmed/inferred 라벨·출처 라벨·사이징 디스클레이머 표기 규칙, 도구 결과를 데이터로만 취급하는 프롬프트 인젝션 방어 지침. |
+| `loop.py` | `run_turn` — 수동 tool-calling 왕복 루프. `previous_response_id` 유무로 시스템 프롬프트를 최초 1회만 주입(멀티턴은 Responses API의 stateful 특성으로 해결). API 실패는 이번 턴을 되돌리는 방식으로 격리, 반복상한 소진 시 미해결 function_call이 매달린 응답 ID를 다음 턴에 넘기지 않는다. |
+
+`scripts/chat_cli.py`(아래 표)가 실제 실행 진입점이다. 리뷰/구현 결과 상세는 위 "완료: 대화형 챗봇 에이전트" 섹션 참고.
+
 ---
 
 ## `scripts/` — 실행 진입점
@@ -150,27 +221,32 @@ OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입�
 |---|---|
 | `run_recommendations.py` | MVP-0 end-to-end 실행(ML 없이). 예시 워치리스트(005930, 000660) 대상. |
 | `run_recommendations_with_ml.py` | 위와 동일 + `load_model("KRX")`로 ML 보조신호 활성화. 아티팩트 없으면 안내 후 종료. |
-| `run_recommendations_with_signals.py` | 위와 동일 + ML(`load_model`) **및** LLM(`load_llm_config`+`OpenAIChartClient`) 보조신호를 동시 활성화(Phase 3, 이번 태스크에 추가). 둘 중 하나라도 아티팩트/키가 없으면 안내 후 종료. **실제 OpenAI API를 호출한다(유료)** — 이번 태스크에서는 작성만 하고 실행하지 않았다. |
+| `run_recommendations_with_signals.py` | 위와 동일 + ML(`load_model`) **및** LLM차트(`load_llm_config`+`OpenAIChartClient`) **및** 뉴스공시(`news_disclosure.credentials.load_llm_config`+`OpenAIDisclosureClient`) **및** 뉴스감성(`news_sentiment.credentials.load_llm_config`+`OpenAINewsSentimentClient`) 보조신호를 동시 활성화. 넷 중 하나라도 아티팩트/키가 없으면 안내 후 종료. **실제 OpenAI API를 호출한다(유료)** — 작성만 하고 실행하지 않았다. |
 | `scan_nasdaq_top100_buy_only.py` | 나스닥 상위 100종목 BUY 신호만 스캔하는 변형 스크립트. |
 | `train_ml_model.py` | KRX 상위 200종목·5년치로 logreg/rf/dummy 평가 리포트 출력 후 logreg만 저장. `ML_TRAIN_UNIVERSE_SIZE`/`ML_TRAIN_LOOKBACK_YEARS` 환경변수로 스모크 테스트 규모 조정 가능. |
 | `verify_telegram.py` | 텔레그램 연동만 단독 확인(실제 메시지 1건 전송). |
 | `verify_pykrx.py` | pykrx 로그인·유니버스 조회·시가총액 조회 단독 확인(이번 세션에 추가). |
 | `verify_fdr_nasdaq.py` | FinanceDataReader의 나스닥 유니버스·OHLCV 조회 단독 확인(이번 세션에 추가). |
-| `verify_llm_chart_analyst.py` | LLM 차트분석(#3) 배선 단독 확인(Phase 3, 이번 태스크에 추가). `LLM_VERIFY_DRY_RUN=1`이면 API 호출 없이 프롬프트만 출력(비용 0), 기본값은 실제 1회 호출. |
+| `verify_llm_chart_analyst.py` | LLM 차트분석(#3) 배선 단독 확인(Phase 3). `LLM_VERIFY_DRY_RUN=1`이면 API 호출 없이 프롬프트만 출력(비용 0), 기본값은 실제 1회 호출. |
+| `verify_news_disclosure.py` | 뉴스/공시분석(#4) 배선 단독 확인, DART(KRX)/EDGAR(NASDAQ) 양쪽 지원. `NEWS_VERIFY_MARKET`(`KRX` 기본값 또는 `NASDAQ`)으로 대상 시장 선택, `NEWS_VERIFY_DRY_RUN=1`이면 해당 시장의 공시 소스만 실호출(무료)하고 OpenAI는 건너뛴 채 프롬프트만 출력, 기본값은 공시 소스+OpenAI 실제 1회 호출. |
+| `verify_news_sentiment.py` | 뉴스감성분석(#4-뉴스) 배선 단독 확인, 네이버(KRX)/GDELT(NASDAQ) 양쪽 지원. `NEWS_SENTIMENT_VERIFY_MARKET`(`KRX` 기본값 또는 `NASDAQ`)으로 대상 시장 선택, `NEWS_SENTIMENT_VERIFY_DRY_RUN=1`이면 해당 시장의 뉴스 소스만 실호출(무료)하고 OpenAI는 건너뛴 채 프롬프트만 출력, 기본값은 뉴스 소스+OpenAI 실제 1회 호출. |
+| `chat_cli.py` | 대화형 챗봇 에이전트 CLI 진입점(Stage C). ML 아티팩트/LLM 크리덴셜이 없어도 즉시 종료하지 않고 해당 tool만 `available=False`로 저하(배치 스크립트들과 다른 대화형 우아한 저하 원칙). `QueryBudget`은 매 턴 새로 생성. **실제 OpenAI API를 호출한다(유료)** — 작성만 하고 실행하지 않았다. |
 
 ## `tests/` — 테스트 구조
 
-총 188개, 전부 통과(커버리지 99%). `rule_engine`이 확립한 패턴을 전체가 따른다 — **순수 계산 함수는 수학적으로 자명한 극단 케이스로**, **의사결정/배선 로직은 계산 함수를 모킹해서** 독립적으로 검증. `ml_predictor` 쪽은 추가로 lookahead 방어(인과성 속성, embargo 갭, 전역 날짜 분할)를 자동 검증하는 테스트가 있고, 학습 로직은 실제 시장 데이터 대신 결정론적 합성 데이터셋(`conftest.py`)으로 검증해 단위테스트를 빠르고 재현 가능하게 유지한다. `llm_chart_analyst`(55개 신규)는 `conftest.py`의 autouse 픽스처로 `OPENAI_API_KEY`를 더미 값으로 monkeypatch해 실수로도 실제 API 호출이 불가능하게 하고, `client.py`는 `openai.OpenAI`를 완전히 모킹(`FakeChartPatternReader`는 `analyst.py` 테스트용으로 SDK 자체를 우회)한다.
+총 **488개**, 전부 통과(커버리지 98%). `rule_engine`이 확립한 패턴을 전체가 따른다 — **순수 계산 함수는 수학적으로 자명한 극단 케이스로**, **의사결정/배선 로직은 계산 함수를 모킹해서** 독립적으로 검증. `ml_predictor` 쪽은 추가로 lookahead 방어(인과성 속성, embargo 갭, 전역 날짜 분할)를 자동 검증하는 테스트가 있고, 학습 로직은 실제 시장 데이터 대신 결정론적 합성 데이터셋(`conftest.py`)으로 검증해 단위테스트를 빠르고 재현 가능하게 유지한다. `llm_chart_analyst`/`news_disclosure`/`news_sentiment`는 각자 `conftest.py`의 autouse 픽스처로 `OPENAI_API_KEY`를 더미 값으로 monkeypatch하고 **`load_dotenv` 자체도 모킹**한다(로컬 `.env`에 빈 `OPENAI_API_KEY=`가 있으면 `load_dotenv()`가 그 빈 값을 재주입해 "키 없으면 KeyError" 테스트가 거짓 실패하는 문제를 세 conftest 모두에서 발견·수정 — 뉴스감성 리뷰 MEDIUM), 실수로도 실제 API 호출이 불가능하게 하고, `client.py`는 `openai.OpenAI`를 완전히 모킹한다(`FakeChartPatternReader`/`FakeDisclosureReader`/`FakeNewsSentimentReader`는 각 `analyst.py` 테스트용으로 SDK 자체를 우회). `test_dart_source.py`/`test_edgar_source.py`/`test_naver_news_source.py`/`test_gdelt_source.py`는 `requests`를 완전히 모킹하고, 요청 실패 시 크리덴셜/원본 예외 텍스트가 예외 메시지에 노출되지 않는지 검증한다.
 
-디렉터리: `tests/data/`, `tests/rule_engine/`, `tests/risk_sizing/`, `tests/explainer/`, `tests/notifier/`, `tests/orchestrator/`, `tests/ml_predictor/`, `tests/llm_chart_analyst/` — `src/auto_stock/` 패키지 구조와 1:1 대응.
+디렉터리: `tests/data/`, `tests/rule_engine/`, `tests/risk_sizing/`, `tests/explainer/`, `tests/notifier/`, `tests/orchestrator/`, `tests/ml_predictor/`, `tests/llm_chart_analyst/`, `tests/news_disclosure/`, `tests/news_sentiment/`, `tests/chat_agent/` — `src/auto_stock/` 패키지 구조와 1:1 대응.
 
 ---
 
 ## 아직 안 된 것 (다음 후보)
 
 - 주문 실행 에이전트(#8, MVP-1) — 브로커 모의투자 연동, 승인→주문 흐름
-- LLM 차트분석(#3) — Phase 0~3(의존성/순수 계층/클라이언트·분석 계층/오케스트레이터 배선, 전부 모킹 기반) 완료. 실제 API 최초 호출은 `OPENAI_API_KEY` 발급 후 사용자가 직접 수행 필요(위 "진행 중" 참고). Phase 4(문서화 + `code-reviewer`/`security-reviewer` 리뷰)부터 남음.
-- 뉴스/공시 분석(#4) 신호원 — 아직 계획 전
+- LLM 차트분석(#3) — Phase 0~4(문서화 + `code-reviewer`/`security-reviewer` 리뷰까지) 전부 완료. 실제 API 최초 호출만 `OPENAI_API_KEY` 발급 후 사용자가 직접 수행 필요(위 "완료" 섹션 참고).
+- 뉴스/공시 분석(#4) — Phase 0~4(문서화 + `code-reviewer`/`security-reviewer` 리뷰까지) 전부 완료. 실제 API 최초 호출만 `DART_API_KEY`/`SEC_EDGAR_USER_AGENT` 발급 후 사용자가 직접 수행 필요(위 "완료" 섹션 참고).
+- 뉴스 감성분석(#4-뉴스) — 국내(네이버)+미국(GDELT) 양쪽 리뷰까지 전부 완료. 실제 API 최초 호출만 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후 사용자가 직접 수행 필요, 추가로 네이버 이용약관·GDELT 응답 형식 라이브 재확인도 필요(위 "완료" 섹션 참고).
 - ML 모듈의 나스닥 모델 확장(현재 `MARKET="KRX"` 하드코딩) — 실제 200종목 KRX 학습은 완료됨(`models/ml_predictor/KRX_h5_logreg.metadata.json`, AUC 0.528)
 - `scheduler.py`(장중 폴링)를 실제 실행 경로에 연결
 - 리스크 에이전트의 일일/월간 손실한도 자동중단(집행 로직, MVP-1과 함께)
+- 대화형 에이전트 챗봇(Stage A~E) — 구현 완료(위 "완료: 대화형 챗봇 에이전트" 섹션 참고). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴·`resolve_ticker` 동작)만 남음

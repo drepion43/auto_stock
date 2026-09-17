@@ -9,26 +9,19 @@
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.llm_chart_analyst.models import BarSummary, ChartSnapshot
 from auto_stock.ml_predictor.features import latest_feature_vector
+from auto_stock.rule_engine.indicators import volume_ratio
 
 RECENT_BARS = 30
 SNAPSHOT_BASE_INDEX = 100.0
 VOLUME_AVG_WINDOW = 20
 
 
-def _volume_ratios(volumes: list[int], window: int = VOLUME_AVG_WINDOW) -> list[float | None]:
-    """`ml_predictor.features._volume_ratio`와 동일한 후행(trailing) 윈도우 계산."""
-    n = len(volumes)
-    out: list[float | None] = [None] * n
-    for i in range(window - 1, n):
-        window_slice = volumes[i - window + 1 : i + 1]
-        mean_volume = sum(window_slice) / window
-        out[i] = None if mean_volume == 0 else volumes[i] / mean_volume
-    return out
-
-
 def build_snapshot(records: list[OHLCVRecord], recent_bars: int = RECENT_BARS) -> ChartSnapshot | None:
-    """워밍업(최장 SMA60) 미충족이거나 기준 종가(구간 첫 봉)가 0이면 None —
-    `latest_feature_vector`와 동일한 "0 나눗셈 대신 None" 관례."""
+    """워밍업(최장 SMA60) 미충족, 기준 종가(구간 첫 봉)가 0, 또는 거래량비 윈도우가
+    구간 내 일부라도 미충족이면 None — `latest_feature_vector`와 동일한
+    "정의 안 된 값을 지어내지 않는다" 관례. 실제 오케스트레이터 경로는 SMA60
+    워밍업이 거래량비 윈도우(20일)보다 항상 길어 이 조건에 걸리지 않지만,
+    `recent_bars`를 호출자가 크게 지정하는 경우를 위한 방어다."""
     vector = latest_feature_vector(records)
     if vector is None:
         return None
@@ -38,8 +31,10 @@ def build_snapshot(records: list[OHLCVRecord], recent_bars: int = RECENT_BARS) -
     if base_close == 0:
         return None
 
-    volume_ratios = _volume_ratios([r.volume for r in records])
+    volume_ratios = volume_ratio([r.volume for r in records], VOLUME_AVG_WINDOW)
     window_volume_ratios = volume_ratios[-len(window) :]
+    if any(r is None for r in window_volume_ratios):
+        return None
 
     bar_count = len(window)
     bars = [
@@ -49,9 +44,9 @@ def build_snapshot(records: list[OHLCVRecord], recent_bars: int = RECENT_BARS) -
             high=record.high / base_close * SNAPSHOT_BASE_INDEX,
             low=record.low / base_close * SNAPSHOT_BASE_INDEX,
             close=record.close / base_close * SNAPSHOT_BASE_INDEX,
-            volume_ratio=volume_ratio if volume_ratio is not None else 0.0,
+            volume_ratio=ratio,
         )
-        for position, (record, volume_ratio) in enumerate(zip(window, window_volume_ratios))
+        for position, (record, ratio) in enumerate(zip(window, window_volume_ratios))
     ]
 
     latest = records[-1]

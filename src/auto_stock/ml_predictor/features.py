@@ -7,7 +7,7 @@
 
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.models import FeatureVector
-from auto_stock.rule_engine.indicators import atr, macd, rsi, sma
+from auto_stock.rule_engine.indicators import atr, macd, rsi, sma, volume_ratio
 
 FEATURE_NAMES = [
     "return_1d",
@@ -33,16 +33,6 @@ def _returns(closes: list[float], k: int) -> list[float | None]:
     for i in range(k, n):
         prior = closes[i - k]
         out[i] = None if prior == 0 else closes[i] / prior - 1
-    return out
-
-
-def _volume_ratio(volumes: list[int], window: int) -> list[float | None]:
-    n = len(volumes)
-    out: list[float | None] = [None] * n
-    for i in range(window - 1, n):
-        window_slice = volumes[i - window + 1 : i + 1]
-        mean_volume = sum(window_slice) / window
-        out[i] = None if mean_volume == 0 else volumes[i] / mean_volume
     return out
 
 
@@ -76,7 +66,7 @@ def build_feature_vectors(records: list[OHLCVRecord]) -> list[FeatureVector | No
     sma_20 = sma(closes, window=20)
     sma_60 = sma(closes, window=60)
     atr_14 = atr(highs, lows, closes, period=14)
-    volume_ratio_20 = _volume_ratio(volumes, VOLUME_WINDOW)
+    volume_ratio_20 = volume_ratio(volumes, VOLUME_WINDOW)
     channel_position_20 = _channel_position(highs, lows, closes, CHANNEL_WINDOW)
 
     result: list[FeatureVector | None] = []

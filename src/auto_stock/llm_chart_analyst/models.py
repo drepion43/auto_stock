@@ -5,7 +5,7 @@
 도메인 로직(analyze/to_reasons)을 테스트할 수 있다 — 가짜 리더만 있으면 된다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
@@ -46,7 +46,7 @@ class ChartAnalysis:
 
 @dataclass(frozen=True, slots=True)
 class LLMConfig:
-    api_key: str
+    api_key: str = field(repr=False)  # never let dataclass repr/str echo the secret
     model: str
     max_tokens: int
     timeout_seconds: float

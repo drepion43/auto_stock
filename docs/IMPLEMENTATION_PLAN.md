@@ -103,7 +103,19 @@
 MVP가 end-to-end로 동작한 뒤, 아래 순서로 신호 소스를 추가해 추천 품질을 고도화한다. 추천 설명 생성기(#6)는 새 신호가 추가될 때마다 자동으로 더 풍부한 근거를 종합하도록 이미 설계되어 있으므로, 이 확장은 추천 설명 생성기의 재설계 없이 이뤄질 수 있어야 한다.
 
 1. **ML 예측 모듈 (#2)**: 구현 완료 — scikit-learn `LogisticRegression`(L2)로 확정, `explainer.generate_explanation`의 `extra_reasons` 확장 포인트를 경유한 보조 신호로 배선 완료(자체 후보 생성/필터링은 하지 않음). 상세 설계·lookahead 방어·스코프 경계는 `docs/design/ml-predictor.md` 참고. `get_universe("KRX")`가 의존하는 `pykrx` 로그인이 `.env` 미로드로 실패하던 문제는 `data/sources/pykrx_source.py`에 `load_dotenv()` 추가로 해결(검증 완료). **실제 200종목·5년치 전체 학습 실행은 사용자 판단으로 아직 보류 중.**
-2. **차트분석/예측 에이전트 — LLM (#3)**: 차트 데이터를 LLM에 입력해 패턴 해석
-3. **뉴스/공시 분석 에이전트 (#4)**: DART(1순위 확정) + 빅카인즈(유력 후보)로 감성·이벤트 추출 (PRD §7.2)
+2. **차트분석/예측 에이전트 — LLM (#3)**: 구현 완료(Phase 0~4 전체) — OpenAI `gpt-5.6-luna` 기반, `extra_reasons` 경유 보조 신호로 배선 완료. code-reviewer/security-reviewer 리뷰 반영 완료(191개 테스트). 실제 API 최초 호출만 `OPENAI_API_KEY` 발급 후 사용자 검증 대기. 상세: `docs/design/llm-chart-analyst-plan.md`, `docs/design/llm-chart-analyst.md`
+3. **뉴스/공시 분석 에이전트 (#4)**: 구현 완료(DART/KRX + EDGAR/NASDAQ 양쪽) — KRX는 DART, NASDAQ은 SEC EDGAR 공시를 OpenAI `gpt-5.6-luna`로 해석해 시장 영향(호재/악재/중립)을 판단, `extra_reasons` 경유 보조 신호로 배선 완료(해석 계층은 시장 무관 재사용). code-reviewer/security-reviewer 리뷰 반영 완료(284개 테스트). 실제 API 최초 호출만 `DART_API_KEY`/`SEC_EDGAR_USER_AGENT` 설정 후 사용자 검증 대기. 상세: `docs/design/news-disclosure-plan.md`, `docs/design/news-disclosure-nasdaq-plan.md`, `docs/design/news-disclosure.md`
+4. **뉴스 감성분석 에이전트 (#4-뉴스)**: 구현 완료(국내 네이버 + 미국 GDELT 양쪽) — KRX는 네이버 뉴스 검색, NASDAQ은 GDELT로 실제 뉴스 기사를 가져와 OpenAI `gpt-5.6-luna`로 논조(긍정/부정/중립)를 해석, `extra_reasons` 경유 5번째 보조 신호로 배선 완료(공시 해석과 달리 진짜 감성분석). 티커→회사명 해석은 기존 DART/EDGAR 캐시를 확장 재사용(`resolve_corp_name`/`resolve_company_title`). code-reviewer/security-reviewer 리뷰 반영 완료(367개 테스트). 실제 API 최초 호출만 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후 사용자 검증 대기 — 추가로 네이버 이용약관 재확인과 GDELT 응답 형식 라이브 검증도 사용자 액션으로 남아 있음(빅카인즈는 2025년 유료 전환 확인되어 채택하지 않음). 상세: `docs/design/news-sentiment-plan.md`, `docs/design/news-sentiment.md`
 
 각 확장 단계의 세부 설계(ML 알고리즘 선정, 뉴스-종목 매칭 파이프라인 등)는 착수 시점에 확정한다 — PRD §11 Open Questions에 관련 TBD 항목이 이미 기록되어 있다.
+
+## 대화형 에이전트 챗봇 (신호 소스 확장과 별도 축)
+
+MVP-0 + 신호 소스 확장(#2~#4)이 전부 **일방향 배치 파이프라인**(워치리스트 순회 → 텔레그램 푸시)인 것과 별도로, 사용자가 자유롭게 질의하면 관련 분석을 종합해 자연어로 답하는 **대화형 에이전트 챗봇**을 다음 지평으로 진행한다. 상세 로드맵·아키텍처 결정: `docs/design/chat-agent-plan.md`, `docs/design/chat-agent-architecture-review.md`.
+
+핵심 결정 요약:
+- 메인 대화 에이전트는 LangGraph/`deepagents`를 쓰지 않는 네이티브 tool-calling 루프
+- 기존 4개 분석 함수(#1~#4)를 배치 파이프라인과 동일하게 plain tool로 재사용
+- 예외적으로 `find_related_companies`(관련기업 탐색)와 `stock_analyst(ticker)`(종목별 딥다이브, 자율 추가조사 포함)만 `deepagents` 서브에이전트로 구현(agent-as-tool) — 실사용 근거 확인 후(로드맵 E단계) 착수
+
+**구현 상태(2026-09-06)**: A~E단계(관련기업 자율 딥다이브 + 6번째 매수/매도 사이징 tool 포함) 구현 완료, `scripts/chat_cli.py` CLI 진입점까지 배선(`src/auto_stock/chat_agent/`, 총 9개 tool). 3중 병렬 리뷰(code/security/risk-policy) 발견사항 전부 TDD로 수정 — 상세는 `chat-agent-plan.md`의 "Stage E 구현 결과" 섹션 참고. 실계좌 연결/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준은 `docs/design/multi-asset-automation-roadmap.md`에 별도 기록. 실제 API 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.

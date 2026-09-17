@@ -38,6 +38,22 @@ def atr(highs: list[float], lows: list[float], closes: list[float], period: int 
     return _to_list(series, len(closes))
 
 
+def volume_ratio(volumes: list[int], window: int = 20) -> list[float | None]:
+    """Latest volume divided by its trailing `window`-period average.
+
+    Hand-rolled rather than pandas-ta-backed (no direct pandas-ta equivalent for
+    "volume vs its own trailing average"). Shared by ml_predictor.features and
+    llm_chart_analyst.snapshot so the two auxiliary signals agree on this number
+    for the same date."""
+    n = len(volumes)
+    out: list[float | None] = [None] * n
+    for i in range(window - 1, n):
+        window_slice = volumes[i - window + 1 : i + 1]
+        mean_volume = sum(window_slice) / window
+        out[i] = None if mean_volume == 0 else volumes[i] / mean_volume
+    return out
+
+
 def macd(
     closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9
 ) -> tuple[list[float | None], list[float | None], list[float | None]]:

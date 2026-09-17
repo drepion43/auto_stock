@@ -13,6 +13,8 @@ venv/
 # local data cache / secrets
 data/*.duckdb
 data/*.duckdb.wal
+data/dart_corp_codes.json
+data/edgar_cik_map.json
 .env
 
 # ML model artifacts (metadata.json sidecars ARE committed — see docs/design/ml-predictor-plan.md)

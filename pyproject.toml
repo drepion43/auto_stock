@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "auto_stock"
 version = "0.1.0"
 description = "Stock recommendation and semi-automatic trading system"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "finance-datareader",
     "pykrx",
@@ -20,8 +20,11 @@ dependencies = [
     "joblib",
     "numpy",
     "tqdm",
-    "openai",
+    "openai>=3.5,<4",
+    "defusedxml",
     "pydantic>=2",
+    "deepagents>=0.7.13",
+    "langchain-openai>=1.6.0",
 ]
 
 [project.optional-dependencies]

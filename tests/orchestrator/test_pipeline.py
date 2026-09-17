@@ -36,7 +36,7 @@ def _sizing(ticker="005930", market="KRX"):
     return SizingSuggestion(
         ticker=ticker, market=market, action="BUY",
         suggested_quantity=10, suggested_allocation_pct=0.05,
-        stop_loss_price=95.0, take_profit_price=110.0,
+        stop_loss_price=95.0, take_profit_price=110.0, reference_price=100.0,
         limit_check="PASS", notes=[],
     )
 
@@ -233,6 +233,8 @@ def test_pipeline_without_any_auxiliary_signal_behaves_identically_to_before(moc
     mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
     mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
     mock_analyze = mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart")
+    mock_analyze_disclosures = mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures")
+    mock_analyze_sentiment = mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment")
 
     result = run_recommendation_pipeline(
         cache=mocker.Mock(), tickers=["005930"], market="KRX",
@@ -246,6 +248,8 @@ def test_pipeline_without_any_auxiliary_signal_behaves_identically_to_before(moc
     mock_explain.assert_called_once_with(mocker.ANY, mocker.ANY)  # no extra_reasons kwarg at all
     mock_predict.assert_not_called()
     mock_analyze.assert_not_called()
+    mock_analyze_disclosures.assert_not_called()
+    mock_analyze_sentiment.assert_not_called()
 
 
 def test_pipeline_with_llm_client_only_passes_llm_reasons(mocker):
@@ -404,5 +408,702 @@ def test_both_failures_record_two_errors_and_still_send(mocker):
     messages = [message for _, message in result.errors]
     assert any("ML 예측 실패" in message and "모델 추론 실패" in message for message in messages)
     assert any("LLM 차트분석 실패" in message and "LLM 연결 실패" in message for message in messages)
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+# --- 뉴스/공시 #4 wiring (Phase 3, docs/design/news-disclosure-phase3-plan.md) ---
+
+
+def test_pipeline_with_news_client_only_passes_news_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
+    mock_analyze_chart = mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_disclosure_reasons",
+        return_value=[
+            "공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)",
+            "(공시해석은 백테스트 미검증 정성 신호입니다)",
+        ],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    assert result.errors == []
+    mock_predict.assert_not_called()  # ml_model is None -> ML code path untouched
+    mock_analyze_chart.assert_not_called()  # llm_client is None -> LLM chart code path untouched
+    mock_explain.assert_called_once()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)",
+        "(공시해석은 백테스트 미검증 정성 신호입니다)",
+    ]
+    mock_send.assert_called_once()
+
+
+def test_pipeline_with_ml_llm_and_news_merges_reasons_in_order(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_disclosure_reasons",
+        return_value=["공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+        "공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)",
+    ]
+
+
+# --- EDGAR(나스닥) market 분기 (docs/design/news-disclosure-nasdaq-plan.md 핵심 설계 결정 4) ---
+
+
+def test_krx_ticker_uses_dart_not_edgar(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures", return_value=mocker.Mock())
+    mocker.patch("auto_stock.orchestrator.pipeline.to_disclosure_reasons", return_value=[])
+    mock_resolve_cik = mocker.patch("auto_stock.orchestrator.pipeline.resolve_cik")
+    mock_fetch_filings = mocker.patch("auto_stock.orchestrator.pipeline.fetch_filings")
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_resolve_cik.assert_not_called()
+    mock_fetch_filings.assert_not_called()
+
+
+def test_nasdaq_ticker_uses_edgar_not_dart(mocker):
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.get_ohlcv",
+        return_value=_records(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_candidates",
+        return_value=[_candidate(ticker="AAPL", market="NASDAQ")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.suggest_position",
+        return_value=_sizing(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        return_value=_explanation(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_resolve_corp_code = mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code")
+    mock_fetch_disclosures = mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_cik", return_value="0000320193")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_filings", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_disclosure_reasons",
+        return_value=["공시분석: 연차보고서(10-K) (호재) — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["AAPL"], market="NASDAQ",
+        account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_resolve_corp_code.assert_not_called()
+    mock_fetch_disclosures.assert_not_called()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["공시분석: 연차보고서(10-K) (호재) — BUY 신호에 동의 (신뢰도 보통)"]
+
+
+def test_nasdaq_ticker_with_unregistered_cik_skips_edgar_fetch(mocker):
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.get_ohlcv",
+        return_value=_records(ticker="XYZ", market="NASDAQ"),
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_candidates",
+        return_value=[_candidate(ticker="XYZ", market="NASDAQ")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.suggest_position",
+        return_value=_sizing(ticker="XYZ", market="NASDAQ"),
+    )
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        return_value=_explanation(ticker="XYZ", market="NASDAQ"),
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_cik", return_value=None)
+    mock_fetch_filings = mocker.patch("auto_stock.orchestrator.pipeline.fetch_filings")
+    mock_analyze_disclosures = mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures")
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["XYZ"], market="NASDAQ",
+        account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_fetch_filings.assert_not_called()
+    mock_analyze_disclosures.assert_not_called()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+def test_edgar_failure_does_not_suppress_ml_or_llm_reasons(mocker):
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.get_ohlcv",
+        return_value=_records(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_candidates",
+        return_value=[_candidate(ticker="AAPL", market="NASDAQ")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.suggest_position",
+        return_value=_sizing(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        return_value=_explanation(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_cik", return_value="0000320193")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.fetch_filings",
+        side_effect=RuntimeError("EDGAR 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["AAPL"], market="NASDAQ",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite EDGAR failure
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "EDGAR 조회 실패" in result.errors[0][1]
+    assert "EDGAR 요청 실패" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+    ]
+
+
+def test_dart_failure_does_not_suppress_ml_or_llm_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.fetch_disclosures",
+        side_effect=RuntimeError("DART 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite DART failure
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "DART 조회 실패" in result.errors[0][1]
+    assert "DART 요청 실패" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+    ]
+
+
+def test_news_llm_failure_does_not_suppress_ml_or_llm_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures", return_value=[mocker.Mock()])
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.analyze_disclosures",
+        side_effect=RuntimeError("LLM 레이트리밋 초과"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "LLM 공시해석 실패" in result.errors[0][1]
+    assert "LLM 레이트리밋 초과" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+    ]
+
+
+def test_all_three_signal_failures_record_three_errors_and_still_send(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", side_effect=RuntimeError("모델 추론 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 연결 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.fetch_disclosures",
+        side_effect=RuntimeError("DART 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite all three failures
+    mock_send.assert_called_once()
+    assert len(result.errors) == 3
+    tickers_with_errors = {ticker for ticker, _ in result.errors}
+    assert tickers_with_errors == {"005930"}
+    messages = [message for _, message in result.errors]
+    assert any("ML 예측 실패" in message and "모델 추론 실패" in message for message in messages)
+    assert any("LLM 차트분석 실패" in message and "LLM 연결 실패" in message for message in messages)
+    assert any("DART 조회 실패" in message and "DART 요청 실패" in message for message in messages)
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+# --- 뉴스 감성분석 #4-뉴스 wiring (docs/design/news-sentiment-plan.md) ---
+
+
+def test_pipeline_with_sentiment_client_only_passes_sentiment_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
+    mock_analyze_chart = mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart")
+    mock_analyze_disclosures = mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch("auto_stock.orchestrator.pipeline.search_news", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_sentiment_reasons",
+        return_value=[
+            "뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)",
+            "(뉴스 감성분석은 백테스트 미검증 정성 신호입니다)",
+        ],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    assert result.errors == []
+    mock_predict.assert_not_called()
+    mock_analyze_chart.assert_not_called()
+    mock_analyze_disclosures.assert_not_called()
+    mock_explain.assert_called_once()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)",
+        "(뉴스 감성분석은 백테스트 미검증 정성 신호입니다)",
+    ]
+    mock_send.assert_called_once()
+
+
+def test_pipeline_with_all_four_signals_merges_reasons_in_order(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_chart_reasons",
+        return_value=["LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch("auto_stock.orchestrator.pipeline.fetch_disclosures", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_disclosures", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_disclosure_reasons",
+        return_value=["공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch("auto_stock.orchestrator.pipeline.search_news", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_sentiment_reasons",
+        return_value=["뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+        news_client=mocker.Mock(), sentiment_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == [
+        "ML 모델도 BUY 신호에 동의합니다",
+        "LLM 차트분석: 삼중바닥 감지 — BUY 신호에 동의 (신뢰도 보통)",
+        "공시분석: 유상증자 결정 (호재) — BUY 신호에 동의 (신뢰도 보통)",
+        "뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)",
+    ]
+
+
+def test_krx_ticker_uses_naver_not_gdelt_for_sentiment(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch("auto_stock.orchestrator.pipeline.search_news", return_value=[])
+    mock_resolve_title = mocker.patch("auto_stock.orchestrator.pipeline.resolve_company_title")
+    mock_search_articles = mocker.patch("auto_stock.orchestrator.pipeline.search_articles")
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_resolve_title.assert_not_called()
+    mock_search_articles.assert_not_called()
+
+
+def test_nasdaq_ticker_uses_gdelt_not_naver_for_sentiment(mocker):
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.get_ohlcv",
+        return_value=_records(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_candidates",
+        return_value=[_candidate(ticker="AAPL", market="NASDAQ")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.suggest_position",
+        return_value=_sizing(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        return_value=_explanation(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_resolve_name = mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name")
+    mock_search_news = mocker.patch("auto_stock.orchestrator.pipeline.search_news")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_company_title", return_value="Apple Inc.")
+    mocker.patch("auto_stock.orchestrator.pipeline.search_articles", return_value=[mocker.Mock()])
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_sentiment_reasons",
+        return_value=["뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)"],
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["AAPL"], market="NASDAQ",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_resolve_name.assert_not_called()
+    mock_search_news.assert_not_called()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["뉴스감성: 신규 투자 발표 (긍정적) — BUY 신호에 동의 (신뢰도 보통)"]
+
+
+def test_krx_ticker_with_unresolved_corp_name_skips_naver_fetch(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value=None)
+    mock_search_news = mocker.patch("auto_stock.orchestrator.pipeline.search_news")
+    mock_analyze_sentiment = mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment")
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert result.errors == []
+    mock_search_news.assert_not_called()
+    mock_analyze_sentiment.assert_not_called()
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+def test_sentiment_failure_does_not_suppress_other_reasons(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.search_news",
+        side_effect=RuntimeError("네이버 API 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite sentiment failure
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "네이버뉴스 조회 실패" in result.errors[0][1]
+    assert "네이버 API 요청 실패" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["ML 모델도 BUY 신호에 동의합니다"]
+
+
+def test_sentiment_llm_failure_does_not_suppress_other_reasons(mocker):
+    """search_news/search_articles(1단계) 실패가 아니라 analyze_sentiment(2단계, LLM
+    해석) 실패 경로 — news_disclosure의 test_news_llm_failure_does_not_suppress_ml_or_llm_reasons와
+    대칭인 테스트."""
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", return_value=mocker.Mock())
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.to_reasons",
+        return_value=["ML 모델도 BUY 신호에 동의합니다"],
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch("auto_stock.orchestrator.pipeline.search_news", return_value=[mocker.Mock()])
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.analyze_sentiment",
+        side_effect=RuntimeError("LLM 레이트리밋 초과"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "LLM 뉴스감성 해석 실패" in result.errors[0][1]
+    assert "LLM 레이트리밋 초과" in result.errors[0][1]
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == ["ML 모델도 BUY 신호에 동의합니다"]
+
+
+def test_all_four_signal_failures_record_four_errors_and_still_send(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mocker.patch("auto_stock.orchestrator.pipeline.predict", side_effect=RuntimeError("모델 추론 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 연결 실패"))
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_code", return_value="00126380")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.fetch_disclosures",
+        side_effect=RuntimeError("DART 요청 실패"),
+    )
+    mocker.patch("auto_stock.orchestrator.pipeline.resolve_corp_name", return_value="삼성전자")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.search_news",
+        side_effect=RuntimeError("네이버 API 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(),
+        ml_model=mocker.Mock(), llm_client=mocker.Mock(),
+        news_client=mocker.Mock(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1  # notification still sent despite all four failures
+    mock_send.assert_called_once()
+    assert len(result.errors) == 4
+    tickers_with_errors = {ticker for ticker, _ in result.errors}
+    assert tickers_with_errors == {"005930"}
+    messages = [message for _, message in result.errors]
+    assert any("ML 예측 실패" in message and "모델 추론 실패" in message for message in messages)
+    assert any("LLM 차트분석 실패" in message and "LLM 연결 실패" in message for message in messages)
+    assert any("DART 조회 실패" in message and "DART 요청 실패" in message for message in messages)
+    assert any("네이버뉴스 조회 실패" in message and "네이버 API 요청 실패" in message for message in messages)
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+# --- 코드 리뷰 MEDIUM 수정 회귀: 이름 해석(DART/EDGAR) 실패가 뉴스 소스(네이버/GDELT)
+# 실패로 잘못 라벨링되던 문제 — 두 단계는 서로 다른 시스템을 호출하므로 에러 라벨도
+# 각자의 실제 실패 지점을 가리켜야 한다. ---
+
+
+def test_krx_name_resolution_failure_is_labeled_dart_not_naver(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.get_ohlcv", return_value=_records())
+    mocker.patch("auto_stock.orchestrator.pipeline.generate_candidates", return_value=[_candidate()])
+    mocker.patch("auto_stock.orchestrator.pipeline.suggest_position", return_value=_sizing())
+    mock_explain = mocker.patch("auto_stock.orchestrator.pipeline.generate_explanation", return_value=_explanation())
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_search_news = mocker.patch("auto_stock.orchestrator.pipeline.search_news")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.resolve_corp_name",
+        side_effect=RuntimeError("DART API 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "DART 조회 실패" in result.errors[0][1]
+    assert "네이버뉴스" not in result.errors[0][1]
+    mock_search_news.assert_not_called()  # 이름 해석 실패 시 뉴스 소스는 아예 호출되지 않음
+    _, kwargs = mock_explain.call_args
+    assert kwargs["extra_reasons"] == []
+
+
+def test_nasdaq_name_resolution_failure_is_labeled_edgar_not_gdelt(mocker):
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.get_ohlcv",
+        return_value=_records(ticker="AAPL", market="NASDAQ"),
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_candidates",
+        return_value=[_candidate(ticker="AAPL", market="NASDAQ")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.suggest_position",
+        return_value=_sizing(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_explain = mocker.patch(
+        "auto_stock.orchestrator.pipeline.generate_explanation",
+        return_value=_explanation(ticker="AAPL", market="NASDAQ"),
+    )
+    mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
+    mock_search_articles = mocker.patch("auto_stock.orchestrator.pipeline.search_articles")
+    mocker.patch(
+        "auto_stock.orchestrator.pipeline.resolve_company_title",
+        side_effect=RuntimeError("EDGAR API 요청 실패"),
+    )
+
+    result = run_recommendation_pipeline(
+        cache=mocker.Mock(), tickers=["AAPL"], market="NASDAQ",
+        account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
+    )
+
+    assert len(result.sent) == 1
+    mock_send.assert_called_once()
+    assert len(result.errors) == 1
+    assert "EDGAR 조회 실패" in result.errors[0][1]
+    assert "GDELT" not in result.errors[0][1]
+    mock_search_articles.assert_not_called()
     _, kwargs = mock_explain.call_args
     assert kwargs["extra_reasons"] == []

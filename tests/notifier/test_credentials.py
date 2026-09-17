@@ -21,6 +21,16 @@ def test_loads_credentials_from_env(monkeypatch):
     assert credentials.chat_id == "999"
 
 
+def test_credentials_repr_does_not_expose_bot_token(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC-secret-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "999")
+
+    credentials = load_telegram_credentials()
+
+    assert "123:ABC-secret-token" not in repr(credentials)
+    assert "123:ABC-secret-token" not in str(credentials)
+
+
 def test_raises_when_bot_token_missing(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "999")

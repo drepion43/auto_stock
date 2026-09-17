@@ -15,6 +15,7 @@ def _sizing(
     suggested_allocation_pct=None,
     stop_loss_price=None,
     take_profit_price=None,
+    reference_price=None,
     limit_check="NOT_APPLICABLE",
     notes=None,
 ):
@@ -22,6 +23,7 @@ def _sizing(
         ticker=ticker, market=market, action=action,
         suggested_quantity=suggested_quantity, suggested_allocation_pct=suggested_allocation_pct,
         stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
+        reference_price=reference_price,
         limit_check=limit_check, notes=notes or [],
     )
 

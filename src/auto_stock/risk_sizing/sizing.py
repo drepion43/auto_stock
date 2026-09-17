@@ -31,6 +31,7 @@ def _not_applicable(candidate: Candidate, reason: str) -> SizingSuggestion:
         suggested_allocation_pct=None,
         stop_loss_price=None,
         take_profit_price=None,
+        reference_price=None,
         limit_check="NOT_APPLICABLE",
         notes=[reason],
     )
@@ -80,6 +81,7 @@ def suggest_position(
         suggested_allocation_pct=allocation_pct,
         stop_loss_price=stop_loss_price,
         take_profit_price=take_profit_price,
+        reference_price=close,
         limit_check=limit_check,
         notes=notes,
     )

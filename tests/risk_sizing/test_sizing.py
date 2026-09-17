@@ -64,6 +64,7 @@ def test_stop_loss_and_take_profit_computed_from_atr(mocker):
 
     assert result.stop_loss_price == pytest.approx(100.0 - STOP_LOSS_ATR_MULT * 2.0)
     assert result.take_profit_price == pytest.approx(100.0 + TAKE_PROFIT_ATR_MULT * 2.0)
+    assert result.reference_price == pytest.approx(100.0)
 
 
 def test_exceeds_max_positions_when_new_ticker_and_already_at_cap(mocker):
@@ -106,6 +107,7 @@ def test_sell_candidate_produces_no_sizing():
     assert result.suggested_allocation_pct is None
     assert result.stop_loss_price is None
     assert result.take_profit_price is None
+    assert result.reference_price is None
     assert result.limit_check == "NOT_APPLICABLE"
     assert result.notes
 
@@ -118,6 +120,7 @@ def test_missing_atr_produces_no_sizing(mocker):
 
     assert result.suggested_quantity is None
     assert result.suggested_allocation_pct is None
+    assert result.reference_price is None
     assert result.limit_check == "NOT_APPLICABLE"
     assert result.notes
 
@@ -132,6 +135,7 @@ def test_non_positive_close_produces_no_sizing(mocker):
     assert result.suggested_allocation_pct is None
     assert result.stop_loss_price is None
     assert result.take_profit_price is None
+    assert result.reference_price is None
     assert result.limit_check == "NOT_APPLICABLE"
     assert result.notes
 
