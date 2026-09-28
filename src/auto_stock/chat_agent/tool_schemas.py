@@ -1,6 +1,6 @@
-"""메인 대화 에이전트에게 노출하는 10개 도구의 OpenAI Responses API 함수콜링 스키마.
-(resolve_ticker 1개 + plain function 7개 + deepagents 서브에이전트를 감싼
-agent-as-tool 2개 — find_related_companies/stock_analyst.)
+"""메인 대화 에이전트에게 노출하는 11개 도구의 OpenAI Responses API 함수콜링 스키마.
+(resolve_ticker 1개 + plain function 8개(get_price_data 포함) + deepagents
+서브에이전트를 감싼 agent-as-tool 2개 — find_related_companies/stock_analyst.)
 
 `chat.completions`의 `{"function": {...}}` 중첩 형태가 아니라 Responses API 고유의
 평평한 형태(`type`/`name`/`description`/`parameters`/`strict`가 최상위 키)를 쓴다
@@ -11,7 +11,7 @@ resolve_ticker만 `query` 단일 파라미터를 받고, get_market_scan_recomme
 `market` 단일 파라미터를 받는다(특정 종목을 지정하지 않는 전체 스캔형 질의 전용이라
 ticker는 없지만, 배치 스캔 캐시가 market별로 분리되어 있어 어느 시장을 볼지는 여전히
 필요하다 — 2026-09-09부로 NASDAQ도 지원하면서 KRX 하드코딩을 걷어내고 추가함), 나머지
-8개는 `ticker`+`market`을 받는다 — 사용자가 대화 중 언급한 종목명/코드 문자열을
+9개는 `ticker`+`market`을 받는다 — 사용자가 대화 중 언급한 종목명/코드 문자열을
 모델이 직접 ticker/market으로 추측하게 하지 않고(환각 방지), 반드시 이 도구를 거쳐
 확정된 값만 쓰게 한다(사용자 승인 설계 — ticker_resolution.py를 별도 전처리 단계가
 아니라 다른 도구들과 동일한 tool-calling 루프 안의 도구로 노출).
@@ -138,6 +138,16 @@ TOOL_SCHEMAS = [
         "**실시간 시세가 아니라 최근 종가 기준**이다 — 답변에서 이 점을 함께 밝혀라. **참고용 "
         "제안이며 실제 주문 실행이 아니고 투자 조언도 아니다** — 반드시 이 사실을 답변에 "
         "포함하라. 매매 후보가 없으면 suggestion이 null이다.",
+        _TICKER_DESC,
+    ),
+    _ticker_market_schema(
+        "get_price_data",
+        "규칙엔진 신호 유무와 무관하게 캐시된 최신 일봉(OHLCV) 한 건을 그대로 조회한다 — "
+        "단순히 '지금 얼마야', '현재가 알려줘' 같은 가격 자체를 묻는 질의에 쓴다. "
+        "analyze_rule_engine/analyze_position_sizing은 매매 후보가 없으면 가격을 함께 "
+        "반환하지 않으므로(candidate/suggestion이 null), 가격만 필요할 때는 이 도구를 "
+        "대신 호출하라. **실시간 시세가 아니라 최근 종가 기준**이다 — 답변에서 이 점을 "
+        "함께 밝혀라. 캐시에 데이터가 전혀 없으면 latest가 null이다.",
         _TICKER_DESC,
     ),
     _ticker_market_schema(

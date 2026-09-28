@@ -3,6 +3,8 @@
 `_llm_reasons`/`_news_reasons`/`_sentiment_reasons`와 동일한 실패격리 패턴을 재사용하므로,
 사용 지점(auto_stock.chat_agent.tools.*)에서 데이터 수집/해석 함수를 모킹해 테스트한다."""
 
+from datetime import date
+
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.tools import (
     TOOL_DISPATCH,
@@ -15,9 +17,11 @@ from auto_stock.chat_agent.tools import (
     tool_analyze_rule_engine,
     tool_find_related_companies,
     tool_get_market_scan_recommendations,
+    tool_get_price_data,
     tool_resolve_ticker,
     tool_stock_analyst,
 )
+from auto_stock.data.models import OHLCVRecord
 from auto_stock.llm_chart_analyst.models import ChartAnalysis
 from auto_stock.news_disclosure.models import DisclosureAnalysis
 from auto_stock.news_sentiment.models import NewsSentimentAnalysis
@@ -366,6 +370,54 @@ def test_tool_analyze_position_sizing_does_not_consume_llm_budget(mocker):
     tool_analyze_position_sizing(_context(budget=budget), "005930", "KRX")
 
     assert budget.llm_calls_made == 0
+
+
+# --- get_price_data ---
+
+
+def test_tool_get_price_data_returns_latest_record_regardless_of_rule_engine_signal(mocker):
+    """실사용 중 발견된 버그(2026-09-26) — SK하이닉스처럼 규칙엔진 신호가 없는 종목을
+    물으면 analyze_position_sizing/analyze_rule_engine 어느 쪽도 가격을 반환하지 않아
+    챗봇이 "종가 기준 가격도 제공되지 않았습니다"라고 답했다. get_price_data는 규칙엔진
+    후보 유무와 무관하게 캐시된 최신 OHLCV 한 건을 그대로 반환한다."""
+    records = [
+        OHLCVRecord(
+            ticker="000660", market="KRX", date=date(2026, 9, 23),
+            open=1_899_000.0, high=1_900_000.0, low=1_836_000.0, close=1_863_000.0, volume=2_886_116,
+        )
+    ]
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=records)
+
+    result = tool_get_price_data(_context(), "000660", "KRX")
+
+    assert result == {
+        "available": True,
+        "latest": {
+            "date": "2026-09-23",
+            "open": 1_899_000.0,
+            "high": 1_900_000.0,
+            "low": 1_836_000.0,
+            "close": 1_863_000.0,
+            "volume": 2_886_116,
+        },
+    }
+
+
+def test_tool_get_price_data_returns_none_when_no_records_cached(mocker):
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=[])
+
+    result = tool_get_price_data(_context(), "000660", "KRX")
+
+    assert result == {"available": True, "latest": None}
+
+
+def test_tool_get_price_data_isolates_ohlcv_fetch_failure(mocker):
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", side_effect=RuntimeError("network down"))
+
+    result = tool_get_price_data(_context(), "000660", "KRX")
+
+    assert result["available"] is False
+    assert "network down" in result["error"]
 
 
 # --- find_related_companies ---

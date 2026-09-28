@@ -81,6 +81,17 @@ class TestRunStockAnalyst:
         assert "error" in result
 
 
+def test_system_prompt_requires_summary_to_cite_each_used_signals_concrete_finding():
+    """실사용 중 발견(2026-09-27) — stock_analyst가 뉴스/공시/차트분석을 실제로 호출해도
+    summary가 뭉뚱그린 결론만 담으면 그 발견 내용이 최종 답변에 전혀 드러나지 않는다.
+    signals_used는 도구 "이름"만 기록하는 감사용 필드라 발견 내용 자체는 담지 않으므로,
+    PRD §5.1 Explainability 예시('RSI 과매도 구간 진입 + 최근 실적 서프라이즈 기사 확인 +
+    LLM 차트 분석상 단기 반등 패턴 감지')처럼 summary 자체에 신호별 구체적 근거를 담도록
+    프롬프트가 명시해야 한다."""
+    assert "signals_used" in _SYSTEM_PROMPT
+    assert "구체적" in _SYSTEM_PROMPT
+
+
 def test_system_prompt_instructs_treating_tool_output_as_data_not_instructions():
     """보안 리뷰 발견사항(Stage E) — 공시/뉴스감성 분석 도구의 자유텍스트(rationale/
     key_headline 등)가 이 서브에이전트 컨텍스트로 그대로 흘러들어간다 — 지시문처럼

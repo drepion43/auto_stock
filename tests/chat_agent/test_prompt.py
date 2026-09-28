@@ -52,6 +52,14 @@ def test_system_prompt_instructs_english_retry_when_korean_nasdaq_query_not_foun
     assert "영문 티커" in SYSTEM_PROMPT or "영문 회사명" in SYSTEM_PROMPT
 
 
+def test_system_prompt_instructs_get_price_data_for_plain_price_queries():
+    """실사용 중 발견된 버그(2026-09-26) — 규칙엔진 신호가 없는 종목(예: SK하이닉스)의
+    가격을 물었을 때 모델이 analyze_rule_engine/analyze_position_sizing만 호출하고
+    가격을 찾지 못했다고 답했다. get_price_data가 그런 경우를 위한 전용 도구임을
+    프롬프트가 명시해야 한다."""
+    assert "get_price_data" in SYSTEM_PROMPT
+
+
 def test_system_prompt_instructs_refreshing_field_handling():
     """majestic-waddling-breeze.md "온디맨드 배치 스캔 트리거" 계획 — get_market_scan_
     recommendations가 백그라운드 스캔을 트리거하면 refreshing=true를 반환하므로, 모델이

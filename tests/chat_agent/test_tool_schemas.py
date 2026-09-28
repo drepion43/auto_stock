@@ -12,6 +12,7 @@ EXPECTED_TOOL_NAMES = {
     "analyze_disclosures",
     "analyze_news_sentiment",
     "analyze_position_sizing",
+    "get_price_data",
     "find_related_companies",
     "stock_analyst",
     "get_market_scan_recommendations",

@@ -263,6 +263,33 @@ def tool_analyze_position_sizing(context: ChatToolContext, ticker: str, market: 
     }
 
 
+def tool_get_price_data(context: ChatToolContext, ticker: str, market: str) -> dict:
+    """실사용 중 발견된 버그(2026-09-26) — 규칙엔진 후보가 없는 종목(예: 당시 활성 매매
+    신호가 없던 SK하이닉스)을 물으면 analyze_rule_engine/analyze_position_sizing 둘 다
+    candidate/suggestion이 null이 되어 가격 자체를 아예 반환하지 못했다(OHLCV 조회 자체는
+    정상이었는데도). 이 도구는 규칙엔진 신호 유무와 무관하게 캐시된 최신 OHLCV 한 건을
+    그대로 반환한다 — chat-agent-plan.md Stage E에서 미리 남겨뒀던 `get_price_data` TBD
+    항목."""
+    try:
+        records = _fetch_records(context, ticker, market)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+    if not records:
+        return {"available": True, "latest": None}
+    latest = records[-1]
+    return {
+        "available": True,
+        "latest": {
+            "date": latest.date.isoformat(),
+            "open": latest.open,
+            "high": latest.high,
+            "low": latest.low,
+            "close": latest.close,
+            "volume": latest.volume,
+        },
+    }
+
+
 def tool_resolve_ticker(context: ChatToolContext, query: str) -> dict:
     """모델이 대화 중 스스로 호출해 종목명/코드를 (ticker, market)으로 확정하는 9번째
     도구. LLM에게 티커/시장을 직접 판단하게 하지 않고(환각 방지) 반드시 이 도구를
@@ -374,6 +401,7 @@ TOOL_DISPATCH = {
     "analyze_disclosures": tool_analyze_disclosures,
     "analyze_news_sentiment": tool_analyze_news_sentiment,
     "analyze_position_sizing": tool_analyze_position_sizing,
+    "get_price_data": tool_get_price_data,
     "find_related_companies": tool_find_related_companies,
     "stock_analyst": tool_stock_analyst,
     "get_market_scan_recommendations": tool_get_market_scan_recommendations,
