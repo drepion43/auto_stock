@@ -121,6 +121,81 @@ def test_put_universe_replaces_previous_list(cache):
     assert tickers == ["000660", "005380"]
 
 
+def _recommendation(ticker="005930", market="KRX", action="BUY", rank=1, summary="RSI 과매도 + ML 상승확률 70%"):
+    return {"ticker": ticker, "market": market, "action": action, "rank": rank, "summary": summary}
+
+
+def test_get_latest_recommendations_returns_none_and_empty_when_never_run(cache):
+    """recommendation-synthesis-plan.md §6 — scan_key는 전체시장이면 market 값 그대로,
+    섹터면 합성키("SECTOR:로봇:KRX")를 재사용한다. 여기선 market 값으로만 검증."""
+    scanned_at, recommendations = cache.get_latest_recommendations("KRX")
+
+    assert scanned_at is None
+    assert recommendations == []
+
+
+def test_put_recommendations_then_get_latest_round_trips(cache):
+    cache.put_recommendations(
+        "KRX", [_recommendation(ticker="005930", rank=1), _recommendation(ticker="000660", rank=2)]
+    )
+
+    scanned_at, recommendations = cache.get_latest_recommendations("KRX")
+
+    assert isinstance(scanned_at, datetime)
+    assert [r["ticker"] for r in recommendations] == ["005930", "000660"]
+
+
+def test_put_recommendations_orders_by_rank(cache):
+    cache.put_recommendations(
+        "KRX", [_recommendation(ticker="000660", rank=2), _recommendation(ticker="005930", rank=1)]
+    )
+
+    _, recommendations = cache.get_latest_recommendations("KRX")
+
+    assert [r["ticker"] for r in recommendations] == ["005930", "000660"]
+
+
+def test_put_recommendations_replaces_previous_batch_entirely(cache):
+    cache.put_recommendations("KRX", [_recommendation(ticker="005930", rank=1)])
+    cache.put_recommendations("KRX", [_recommendation(ticker="000660", rank=1)])
+
+    _, recommendations = cache.get_latest_recommendations("KRX")
+
+    assert [r["ticker"] for r in recommendations] == ["000660"]
+
+
+def test_put_recommendations_with_empty_list_still_records_scanned_at(cache):
+    cache.put_recommendations("KRX", [])
+
+    scanned_at, recommendations = cache.get_latest_recommendations("KRX")
+
+    assert isinstance(scanned_at, datetime)
+    assert recommendations == []
+
+
+def test_put_recommendations_scopes_by_scan_key(cache):
+    """섹터 합성키("SECTOR:로봇:KRX")와 일반 market 키("KRX")가 서로 침범하지 않아야
+    한다 — recommendation-synthesis-plan.md §6."""
+    cache.put_recommendations("KRX", [_recommendation(ticker="005930")])
+    cache.put_recommendations("SECTOR:로봇:KRX", [_recommendation(ticker="277810")])
+
+    _, krx = cache.get_latest_recommendations("KRX")
+    _, sector = cache.get_latest_recommendations("SECTOR:로봇:KRX")
+
+    assert [r["ticker"] for r in krx] == ["005930"]
+    assert [r["ticker"] for r in sector] == ["277810"]
+
+
+def test_recommendation_cache_cursor_shares_underlying_database(cache):
+    thread_local = cache.cursor()
+
+    thread_local.put_recommendations("KRX", [_recommendation(ticker="005930")])
+
+    scanned_at, recommendations = cache.get_latest_recommendations("KRX")
+    assert scanned_at is not None
+    assert [r["ticker"] for r in recommendations] == ["005930"]
+
+
 def test_scan_cache_cursor_shares_underlying_database(cache):
     """majestic-waddling-breeze.md "온디맨드 배치 스캔 트리거" 계획 — 백그라운드 스레드가
     cursor()로 쓴 스캔 결과를 원본 인스턴스가 바로 읽을 수 있어야 한다."""

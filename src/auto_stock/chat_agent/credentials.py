@@ -41,6 +41,10 @@ MAX_TICKERS_PER_QUERY = 5  # 한 턴에 해석할 수 있는 최대 티커 수(�
 # 그대로 참조하므로(과소 사전차감 방지, 아래 설명) 먼저 정의한다.
 FIND_RELATED_RECURSION_LIMIT = 6
 STOCK_ANALYST_RECURSION_LIMIT = 8
+# recommendation-synthesis-plan.md §5 2차(LLM 제안+뉴스검증) 섹터/테마 종목 탐색 —
+# find_related_companies와 동일한 "제안 → verify_companies_co_mentioned_in_news로
+# 검증" 루프 복잡도라 같은 값을 쓴다.
+SECTOR_THEME_RECURSION_LIMIT = 6
 
 # find_related_companies/stock_analyst는 deepagents 서브에이전트라 내부 실제 LLM 호출
 # 횟수를 QueryBudget이 정확히 셀 수 없다(deepagents 내부 루프가 우리 QueryBudget 객체를
@@ -51,6 +55,11 @@ STOCK_ANALYST_RECURSION_LIMIT = 8
 # 있었다). 재귀상한과 동일하게 맞춰 "과소 사전차감"을 구조적으로 불가능하게 한다.
 FIND_RELATED_LLM_CALL_ESTIMATE = FIND_RELATED_RECURSION_LIMIT
 STOCK_ANALYST_LLM_CALL_ESTIMATE = STOCK_ANALYST_RECURSION_LIMIT
+SECTOR_THEME_LLM_CALL_ESTIMATE = SECTOR_THEME_RECURSION_LIMIT
+
+# 섹터/테마 탐색이 한 번에 제안할 수 있는 종목 수 상한 — 숏리스트 캡(20, orchestrator/
+# recommendation_coordinator.py)과 같은 자릿수로 맞춰 비용을 통제한다.
+MAX_SECTOR_THEME_TICKERS = 20
 
 # Stage E(관련기업 자율 딥다이브) 반영 — 자기 자신 포함 최대 5개사를 stock_analyst로
 # 딥다이브 + find_related_companies 1회를 감당해야 하는 최악의 경우를 커버해야 한다.

@@ -45,7 +45,7 @@ def _context(**overrides) -> ChatToolContext:
         account=AccountState(equity=1.0, held_tickers=frozenset(), total_exposure_pct=0.0),
         agent_model="gpt-5.6-luna",
         scan_cache=object(),
-        scan_coordinator=object(),
+        recommendation_coordinator=object(),
     )
     values.update(overrides)
     return ChatToolContext(**values)

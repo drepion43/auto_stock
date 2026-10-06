@@ -7,6 +7,8 @@ from auto_stock.chat_agent.credentials import (
     MAX_LLM_CALLS_PER_QUERY,
     MAX_TICKERS_PER_QUERY,
     MAX_TOOL_ITERATIONS,
+    SECTOR_THEME_LLM_CALL_ESTIMATE,
+    SECTOR_THEME_RECURSION_LIMIT,
     STOCK_ANALYST_LLM_CALL_ESTIMATE,
     STOCK_ANALYST_RECURSION_LIMIT,
     load_llm_config,
@@ -78,8 +80,10 @@ def test_llm_call_estimates_cover_real_recursion_limit_worst_case():
     한다(과소 사전차감 금지) — 그래야 예산이 실제 최악의 지출을 항상 커버한다."""
     assert FIND_RELATED_LLM_CALL_ESTIMATE >= FIND_RELATED_RECURSION_LIMIT
     assert STOCK_ANALYST_LLM_CALL_ESTIMATE >= STOCK_ANALYST_RECURSION_LIMIT
+    assert SECTOR_THEME_LLM_CALL_ESTIMATE >= SECTOR_THEME_RECURSION_LIMIT
 
 
 def test_subagent_recursion_limits_are_positive_and_bounded():
     assert 0 < FIND_RELATED_RECURSION_LIMIT <= 20
     assert 0 < STOCK_ANALYST_RECURSION_LIMIT <= 20
+    assert 0 < SECTOR_THEME_RECURSION_LIMIT <= 20

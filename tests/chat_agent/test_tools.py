@@ -44,7 +44,7 @@ def _context(**overrides) -> ChatToolContext:
         account=_account(),
         agent_model="gpt-5.6-luna",
         scan_cache=object(),
-        scan_coordinator=object(),
+        recommendation_coordinator=object(),
     )
     values.update(overrides)
     return ChatToolContext(**values)
@@ -579,71 +579,71 @@ def test_tool_resolve_ticker_does_not_consume_llm_budget(mocker):
 # --- get_market_scan_recommendations ---
 
 
-def test_tool_get_market_scan_recommendations_returns_cached_candidates(mocker):
+def test_tool_get_market_scan_recommendations_returns_cached_recommendations(mocker):
     scanned_at = mocker.Mock()
     scanned_at.isoformat.return_value = "2026-09-07T09:00:00"
-    from auto_stock.explainer.models import Explanation
 
     scan_cache = mocker.Mock()
-    scan_cache.get_latest.return_value = (
+    scan_cache.get_latest_recommendations.return_value = (
         scanned_at,
-        [Explanation(ticker="005930", market="KRX", action="BUY", summary="RSI 과매도")],
+        [{"ticker": "005930", "market": "KRX", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}],
     )
-    scan_coordinator = mocker.Mock()
-    scan_coordinator.is_in_progress.return_value = False
+    recommendation_coordinator = mocker.Mock()
+    recommendation_coordinator.is_in_progress.return_value = False
 
     result = tool_get_market_scan_recommendations(
-        _context(scan_cache=scan_cache, scan_coordinator=scan_coordinator), "KRX"
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KRX"
     )
 
     assert result == {
         "available": True,
         "scanned_at": "2026-09-07T09:00:00",
         "refreshing": False,
-        "candidates": [{"ticker": "005930", "market": "KRX", "action": "BUY", "summary": "RSI 과매도"}],
+        "recommendations": [
+            {"ticker": "005930", "market": "KRX", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}
+        ],
     }
-    scan_cache.get_latest.assert_called_once_with("KRX")
-    scan_coordinator.ensure_fresh.assert_called_once_with("KRX")
+    scan_cache.get_latest_recommendations.assert_called_once_with("KRX")
+    recommendation_coordinator.ensure_fresh.assert_called_once_with("KRX")
 
 
-def test_tool_get_market_scan_recommendations_handles_never_scanned(mocker):
+def test_tool_get_market_scan_recommendations_handles_never_run(mocker):
     scan_cache = mocker.Mock()
-    scan_cache.get_latest.return_value = (None, [])
-    scan_coordinator = mocker.Mock()
-    scan_coordinator.is_in_progress.return_value = True  # 방금 ensure_fresh가 트리거함
+    scan_cache.get_latest_recommendations.return_value = (None, [])
+    recommendation_coordinator = mocker.Mock()
+    recommendation_coordinator.is_in_progress.return_value = True  # 방금 ensure_fresh가 트리거함
 
     result = tool_get_market_scan_recommendations(
-        _context(scan_cache=scan_cache, scan_coordinator=scan_coordinator), "KRX"
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KRX"
     )
 
-    assert result == {"available": True, "scanned_at": None, "refreshing": True, "candidates": []}
+    assert result == {"available": True, "scanned_at": None, "refreshing": True, "recommendations": []}
 
 
 def test_tool_get_market_scan_recommendations_forwards_nasdaq_market(mocker):
     scanned_at = mocker.Mock()
     scanned_at.isoformat.return_value = "2026-09-09T21:00:00"
-    from auto_stock.explainer.models import Explanation
 
     scan_cache = mocker.Mock()
-    scan_cache.get_latest.return_value = (
+    scan_cache.get_latest_recommendations.return_value = (
         scanned_at,
-        [Explanation(ticker="AAPL", market="NASDAQ", action="BUY", summary="상승 추세")],
+        [{"ticker": "AAPL", "market": "NASDAQ", "action": "BUY", "rank": 1, "summary": "상승 추세"}],
     )
-    scan_coordinator = mocker.Mock()
-    scan_coordinator.is_in_progress.return_value = False
+    recommendation_coordinator = mocker.Mock()
+    recommendation_coordinator.is_in_progress.return_value = False
 
     result = tool_get_market_scan_recommendations(
-        _context(scan_cache=scan_cache, scan_coordinator=scan_coordinator), "NASDAQ"
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "NASDAQ"
     )
 
     assert result == {
         "available": True,
         "scanned_at": "2026-09-09T21:00:00",
         "refreshing": False,
-        "candidates": [{"ticker": "AAPL", "market": "NASDAQ", "action": "BUY", "summary": "상승 추세"}],
+        "recommendations": [{"ticker": "AAPL", "market": "NASDAQ", "action": "BUY", "rank": 1, "summary": "상승 추세"}],
     }
-    scan_cache.get_latest.assert_called_once_with("NASDAQ")
-    scan_coordinator.ensure_fresh.assert_called_once_with("NASDAQ")
+    scan_cache.get_latest_recommendations.assert_called_once_with("NASDAQ")
+    recommendation_coordinator.ensure_fresh.assert_called_once_with("NASDAQ")
 
 
 # --- TOOL_DISPATCH ---

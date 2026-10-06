@@ -19,11 +19,19 @@ from langchain_core.tools import tool as langchain_tool
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.related_companies import run_find_related_companies
 from auto_stock.chat_agent.stock_analyst import run_stock_analyst
+from typing import TYPE_CHECKING
+
 from auto_stock.chat_agent.ticker_resolution import resolve_ticker
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.scan_cache import MarketScanCache
-from auto_stock.orchestrator.scan_coordinator import ScanCoordinator
 from auto_stock.data.service import get_ohlcv
+
+if TYPE_CHECKING:
+    # recommendation_coordinator.py가 이미 이 모듈의 ChatToolContext/_bind_stock_analyst_tools를
+    # import하므로(재사용 목적), 여기서 되돌아가는 top-level import는 순환이 된다
+    # (stock_analyst.py가 이미 겪은 것과 동일한 문제, 그 모듈 docstring 참고) — 타입힌트
+    # 전용으로만 쓰고 런타임에는 로드하지 않는다.
+    from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoordinator
 from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_code, resolve_corp_name
 from auto_stock.data.sources.edgar_source import fetch_filings, resolve_cik, resolve_company_title
 from auto_stock.data.sources.gdelt_source import search_articles
@@ -64,7 +72,7 @@ class ChatToolContext:
         account: AccountState,
         agent_model: str,
         scan_cache: MarketScanCache,
-        scan_coordinator: ScanCoordinator,
+        recommendation_coordinator: "RecommendationCoordinator",
     ) -> None:
         self.cache = cache
         self.ml_models = ml_models
@@ -74,7 +82,7 @@ class ChatToolContext:
         self.budget = budget
         self.account = account
         self.scan_cache = scan_cache
-        self.scan_coordinator = scan_coordinator
+        self.recommendation_coordinator = recommendation_coordinator
         # find_related_companies/stock_analyst가 deepagents create_deep_agent(model=...)에
         # 넘길 메인 대화 에이전트 자신의 모델 문자열. llm_client 등 다른 신호원 클라이언트의
         # 모델과는 독립적이다(각자 다른 등급일 수 있음) — chat_agent 자신의 LLMConfig.model.
@@ -371,25 +379,27 @@ def tool_stock_analyst(context: ChatToolContext, ticker: str, market: str) -> di
 
 def tool_get_market_scan_recommendations(context: ChatToolContext, market: str) -> dict:
     """전체 스캔형 질의("추천해줄만한 주식 있어?") 전용 10번째 도구 — 종목을 지정하지
-    않으므로 ticker는 없지만, `orchestrator.scan_coordinator.ScanCoordinator`가 온디맨드로
-    적재하는 market별 배치 스캔 캐시(`data/scan_cache.py`)를 읽으므로 market은 받는다
-    (2026-09-09부로 NASDAQ 지원 추가 — 이전에는 "KRX"로 하드코딩되어 있었다). LLM
-    미사용, QueryBudget 소비 없음. `ensure_fresh`를 먼저 호출해 캐시가 stale하면
-    백그라운드 스캔을 자가치유 트리거하고(majestic-waddling-breeze.md "온디맨드 배치
-    스캔 트리거" 계획 — OS 스케줄러 제거), `is_in_progress`로 그 트리거가 지금 이
-    호출부터 진행 중인지를 `refreshing`에 반영한다. 스캔이 한 번도 실행된 적 없어도
-    에러가 아니라 정상 상태다(candidates가 빈 배열, scanned_at이 None) — 모델이 그
-    상태를 그대로 안내하면 된다."""
-    context.scan_coordinator.ensure_fresh(market)
-    scanned_at, explanations = context.scan_cache.get_latest(market)
+    않으므로 ticker는 없지만, `orchestrator.recommendation_coordinator.RecommendationCoordinator`가
+    온디맨드로 적재하는 market별 추천 캐시(`data/scan_cache.py`의 `recommendation_cache`)를
+    읽으므로 market은 받는다. 규칙엔진/ML(①숏리스트) + 차트/공시/뉴스감성(②심층분석,
+    `stock_analyst` 재사용) + LLM 종합(③, `recommendation_synthesis`)까지 전부 거친
+    순위(rank)·근거(summary) 포함 결과다(recommendation-synthesis-plan.md) — 예전엔
+    규칙엔진 신호만 쓰는 무료 경로(`scan_market`/`ScanCoordinator`)였으나 2026-10-05
+    교체됨. `scan_market` 자체는 폐기되지 않았고 `scripts/run_market_scan.py`의
+    수동/오프라인 경로로 남아 있다. LLM 미사용, QueryBudget 소비 없음(이 도구 자신은
+    — 백그라운드로 트리거되는 파이프라인은 별도의 배치 전용 QueryBudget을 쓴다).
+    `ensure_fresh`를 먼저 호출해 캐시가 stale하면 백그라운드 파이프라인을 자가치유
+    트리거하고, `is_in_progress`로 그 트리거가 지금 이 호출부터 진행 중인지를
+    `refreshing`에 반영한다. 파이프라인이 한 번도 실행된 적 없어도 에러가 아니라
+    정상 상태다(recommendations가 빈 배열, scanned_at이 None) — 모델이 그 상태를
+    그대로 안내하면 된다."""
+    context.recommendation_coordinator.ensure_fresh(market)
+    scanned_at, recommendations = context.scan_cache.get_latest_recommendations(market)
     return {
         "available": True,
         "scanned_at": scanned_at.isoformat() if scanned_at is not None else None,
-        "refreshing": context.scan_coordinator.is_in_progress(market),
-        "candidates": [
-            {"ticker": e.ticker, "market": e.market, "action": e.action, "summary": e.summary}
-            for e in explanations
-        ],
+        "refreshing": context.recommendation_coordinator.is_in_progress(market),
+        "recommendations": recommendations,
     }
 
 

@@ -67,7 +67,7 @@ from auto_stock.news_sentiment.client import OpenAINewsSentimentClient
 from auto_stock.news_sentiment.credentials import (
     load_llm_config as load_sentiment_llm_config,
 )
-from auto_stock.orchestrator.scan_coordinator import ScanCoordinator
+from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoordinator
 from auto_stock.risk_sizing.models import AccountState
 
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
@@ -154,15 +154,20 @@ def main() -> None:
         held_tickers=frozenset(),
         total_exposure_pct=0.0,
     )
-    scan_coordinator = ScanCoordinator(
+    recommendation_coordinator = RecommendationCoordinator(
         cache=cache,
         scan_cache=scan_cache,
+        ml_models=ml_models,
+        llm_client=llm_client,
+        news_client=news_client,
+        sentiment_client=sentiment_client,
         account=account,
-        stale_after=timedelta(hours=int(os.environ.get("MARKET_SCAN_STALE_HOURS", 12))),
+        agent_model=agent_config.model,
+        stale_after=timedelta(hours=int(os.environ.get("RECOMMENDATION_STALE_HOURS", 24))),
         universe_size=int(os.environ.get("MARKET_SCAN_UNIVERSE_SIZE", 200)),
     )
     for market in _MARKETS:
-        scan_coordinator.ensure_fresh(market)
+        recommendation_coordinator.ensure_fresh(market)
 
     print("auto_stock 대화형 리서치 챗봇 — 종료하려면 'exit' 입력")
     previous_response_id: str | None = None
@@ -186,7 +191,7 @@ def main() -> None:
             account=account,
             agent_model=agent_config.model,
             scan_cache=scan_cache,
-            scan_coordinator=scan_coordinator,
+            recommendation_coordinator=recommendation_coordinator,
         )
         text, previous_response_id = run_turn(
             reader,

@@ -13,6 +13,7 @@ dataclass(`LLMConfig` 포함)는 불변 도메인 데이터를 표현하지만, 
 대화 루프 로직을 테스트할 수 있다 — 가짜 리더만 있으면 된다.
 """
 
+import threading
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -31,24 +32,32 @@ class LLMConfig:
 class QueryBudget:
     max_llm_calls: int
     llm_calls_made: int = 0
+    # recommendation-synthesis-plan.md §3 — run_deep_scan이 ThreadPoolExecutor로 여러
+    # 종목의 run_stock_analyst를 동시에 호출하면서 같은 budget 인스턴스를 공유한다(이전엔
+    # 항상 대화 1턴 안에서 단일 스레드로만 쓰였다). 락 없는 check-then-increment는
+    # 레이스 컨디션으로 과소비될 수 있어 내부 전용 락을 추가한다 — repr/비교에서는
+    # 제외(Lock은 비교 불가능하고 디버그 출력에도 의미 없음).
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def try_consume_llm_call(self) -> bool:
         """예산이 남아 있으면 1건 소비하고 True, 없으면 False(호출부는 이걸 도구 결과의
         `available=False` 사유로 그대로 반영한다 — raise하지 않음)."""
-        if self.llm_calls_made >= self.max_llm_calls:
-            return False
-        self.llm_calls_made += 1
-        return True
+        with self._lock:
+            if self.llm_calls_made >= self.max_llm_calls:
+                return False
+            self.llm_calls_made += 1
+            return True
 
     def try_consume_llm_calls(self, n: int) -> bool:
         """deepagents 서브에이전트(find_related_companies/stock_analyst) 호출 전 보수적
         추정치를 한 번에 선차감하기 위한 원자적(all-or-nothing) 벌크 소비. 서브에이전트
         내부의 실제 LLM 호출수는 QueryBudget이 직접 셀 수 없으므로(내부 루프가 이 객체를
         모름) 이 근사 방식을 쓴다 — 부분 소비 후 실패는 절대 없다."""
-        if self.llm_calls_made + n > self.max_llm_calls:
-            return False
-        self.llm_calls_made += n
-        return True
+        with self._lock:
+            if self.llm_calls_made + n > self.max_llm_calls:
+                return False
+            self.llm_calls_made += n
+            return True
 
 
 @dataclass(frozen=True, slots=True)

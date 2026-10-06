@@ -28,6 +28,23 @@ CREATE TABLE IF NOT EXISTS universe_cache (
     fetched_at TIMESTAMP NOT NULL
 );
 """
+_RECOMMENDATION_TABLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS recommendation_cache (
+    scan_key VARCHAR NOT NULL,
+    ticker VARCHAR NOT NULL,
+    market VARCHAR NOT NULL,
+    action VARCHAR NOT NULL,
+    rank INTEGER NOT NULL,
+    summary VARCHAR NOT NULL,
+    PRIMARY KEY (scan_key, ticker)
+);
+"""
+_RECOMMENDATION_META_TABLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS recommendation_cache_meta (
+    scan_key VARCHAR PRIMARY KEY,
+    scanned_at TIMESTAMP NOT NULL
+);
+"""
 
 
 class MarketScanCache:
@@ -46,6 +63,8 @@ class MarketScanCache:
         self._con.execute(_SCAN_TABLE_SCHEMA)
         self._con.execute(_META_TABLE_SCHEMA)
         self._con.execute(_UNIVERSE_TABLE_SCHEMA)
+        self._con.execute(_RECOMMENDATION_TABLE_SCHEMA)
+        self._con.execute(_RECOMMENDATION_META_TABLE_SCHEMA)
         self._write_lock = threading.Lock()
 
     def cursor(self) -> "MarketScanCache":
@@ -134,3 +153,57 @@ class MarketScanCache:
             Explanation(ticker=row[0], market=row[1], action=row[2], summary=row[3]) for row in rows
         ]
         return meta_row[0], explanations
+
+    def put_recommendations(self, scan_key: str, recommendations: list[dict]) -> datetime:
+        """recommendation-synthesis-plan.md §6 — `scan_key`는 전체시장이면 market 값
+        그대로("KRX"/"NASDAQ"), 섹터면 합성키("SECTOR:로봇:KRX")를 그대로 재사용한다
+        (별도 컬럼 신설 대신 `market` 컬럼과 동일한 합성키 전략, 마이그레이션 최소화).
+        `put_scan`과 동일하게 DELETE/INSERT×N/meta upsert를 하나의 트랜잭션+락으로
+        묶어 "scanned_at과 candidates 불일치" 버그를 재발시키지 않는다."""
+        scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        with self._write_lock:
+            self._con.execute("BEGIN TRANSACTION")
+            try:
+                self._con.execute("DELETE FROM recommendation_cache WHERE scan_key = ?", [scan_key])
+                for r in recommendations:
+                    self._con.execute(
+                        """
+                        INSERT INTO recommendation_cache
+                            (scan_key, ticker, market, action, rank, summary)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        [scan_key, r["ticker"], r["market"], r["action"], r["rank"], r["summary"]],
+                    )
+                self._con.execute(
+                    """
+                    INSERT INTO recommendation_cache_meta (scan_key, scanned_at) VALUES (?, ?)
+                    ON CONFLICT (scan_key) DO UPDATE SET scanned_at = excluded.scanned_at
+                    """,
+                    [scan_key, scanned_at],
+                )
+            except Exception:
+                self._con.execute("ROLLBACK")
+                raise
+            else:
+                self._con.execute("COMMIT")
+        return scanned_at
+
+    def get_latest_recommendations(self, scan_key: str) -> tuple[datetime | None, list[dict]]:
+        meta_row = self._con.execute(
+            "SELECT scanned_at FROM recommendation_cache_meta WHERE scan_key = ?", [scan_key]
+        ).fetchone()
+        if meta_row is None:
+            return None, []
+
+        rows = self._con.execute(
+            """
+            SELECT ticker, market, action, rank, summary FROM recommendation_cache
+            WHERE scan_key = ? ORDER BY rank
+            """,
+            [scan_key],
+        ).fetchall()
+        recommendations = [
+            {"ticker": row[0], "market": row[1], "action": row[2], "rank": row[3], "summary": row[4]}
+            for row in rows
+        ]
+        return meta_row[0], recommendations
