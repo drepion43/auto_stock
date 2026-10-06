@@ -646,6 +646,34 @@ def test_tool_get_market_scan_recommendations_forwards_nasdaq_market(mocker):
     recommendation_coordinator.ensure_fresh.assert_called_once_with("NASDAQ")
 
 
+def test_tool_get_sector_recommendations_uses_sector_scan_key(mocker):
+    from auto_stock.chat_agent.tools import tool_get_sector_recommendations
+
+    scanned_at = mocker.Mock()
+    scanned_at.isoformat.return_value = "2026-10-07T09:00:00"
+    scan_cache = mocker.Mock()
+    scan_cache.get_latest_recommendations.return_value = (
+        scanned_at,
+        [{"ticker": "277810", "market": "KRX", "action": "BUY", "rank": 1, "summary": "근거"}],
+    )
+    recommendation_coordinator = mocker.Mock()
+    recommendation_coordinator.is_sector_in_progress.return_value = False
+
+    result = tool_get_sector_recommendations(
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator),
+        "로봇", "KRX",
+    )
+
+    assert result == {
+        "available": True,
+        "scanned_at": "2026-10-07T09:00:00",
+        "refreshing": False,
+        "recommendations": [{"ticker": "277810", "market": "KRX", "action": "BUY", "rank": 1, "summary": "근거"}],
+    }
+    scan_cache.get_latest_recommendations.assert_called_once_with("SECTOR:로봇:KRX")
+    recommendation_coordinator.ensure_fresh_sector.assert_called_once_with("로봇", "KRX")
+
+
 # --- TOOL_DISPATCH ---
 
 

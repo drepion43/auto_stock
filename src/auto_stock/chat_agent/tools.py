@@ -403,6 +403,26 @@ def tool_get_market_scan_recommendations(context: ChatToolContext, market: str) 
     }
 
 
+def tool_get_sector_recommendations(context: ChatToolContext, query: str, market: str) -> dict:
+    """섹터/테마형 질의("로봇섹터 추천해줄만한 거 있어?") 전용 신규 도구 —
+    `get_market_scan_recommendations`와 동일한 "백그라운드 트리거+캐시 조회" 셰이프를
+    `RecommendationCoordinator`의 섹터 경로(`ensure_fresh_sector`/`is_sector_in_progress`,
+    `recommendation-synthesis-plan.md` §5/§6)로 그대로 재사용한다. `scan_key` 포맷
+    ("SECTOR:{query}:{market}")은 `recommendation_coordinator._sector_scan_key`와 반드시
+    동일해야 하지만, 그 모듈을 여기서 import하면 순환참조가 된다(그 모듈이 이미 이
+    `tools.py`를 import함) — 그래서 같은 리터럴 포맷을 여기 그대로 둔다(두 쪽 다 바꿀 때
+    같이 바꿔야 함, 테스트로 고정)."""
+    context.recommendation_coordinator.ensure_fresh_sector(query, market)
+    scan_key = f"SECTOR:{query}:{market}"
+    scanned_at, recommendations = context.scan_cache.get_latest_recommendations(scan_key)
+    return {
+        "available": True,
+        "scanned_at": scanned_at.isoformat() if scanned_at is not None else None,
+        "refreshing": context.recommendation_coordinator.is_sector_in_progress(query, market),
+        "recommendations": recommendations,
+    }
+
+
 TOOL_DISPATCH = {
     "resolve_ticker": tool_resolve_ticker,
     "analyze_rule_engine": tool_analyze_rule_engine,
@@ -415,4 +435,5 @@ TOOL_DISPATCH = {
     "find_related_companies": tool_find_related_companies,
     "stock_analyst": tool_stock_analyst,
     "get_market_scan_recommendations": tool_get_market_scan_recommendations,
+    "get_sector_recommendations": tool_get_sector_recommendations,
 }

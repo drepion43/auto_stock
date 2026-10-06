@@ -40,10 +40,12 @@ def account():
 
 
 def _coordinator(cache, scan_cache, account, **overrides):
+    import unittest.mock as _mock
+
     defaults = dict(
         ml_models={"KRX": None, "NASDAQ": None}, llm_client=None, news_client=None,
         sentiment_client=None, account=account, agent_model="gpt-5.6-luna",
-        stale_after=timedelta(hours=24), universe_size=200,
+        reader=_mock.Mock(), stale_after=timedelta(hours=24), universe_size=200,
     )
     defaults.update(overrides)
     return RecommendationCoordinator(cache=cache, scan_cache=scan_cache, **defaults)
@@ -218,6 +220,95 @@ def test_background_failure_is_swallowed_and_leaves_market_retriable(mocker, cac
     retry_thread = coordinator.ensure_fresh("KRX")
     assert retry_thread is not None
     retry_thread.join(timeout=5)
+
+
+def test_ensure_fresh_sector_runs_resolution_then_deep_scan_and_persists_under_sector_scan_key(
+    mocker, cache, scan_cache, account
+):
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.resolve_sector_tickers",
+        return_value={
+            "available": True, "source": "llm_theme_search", "matched_name": None,
+            "tickers": [{"ticker": "277810", "market": "KRX", "name": "레인보우로보틱스", "confidence": "confirmed"}],
+            "provenance": "서브에이전트 자율 조사 결과",
+        },
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_deep_scan",
+        return_value=[_judgment("277810")],
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_recommendation_synthesis",
+        return_value={"available": True, "recommendations": [_recommendation("277810")], "provenance": "x"},
+    )
+    coordinator = _coordinator(cache, scan_cache, account)
+
+    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    assert thread is not None
+    thread.join(timeout=5)
+
+    scanned_at, recommendations = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+    assert scanned_at is not None
+    assert [r["ticker"] for r in recommendations] == ["277810"]
+
+    _, cached_tickers, cached_confidence = scan_cache.get_cached_sector_tickers("로봇", "KRX")
+    assert cached_tickers == ["277810"]
+    assert cached_confidence == ["confirmed"]
+
+
+def test_ensure_fresh_sector_skips_shortlist_stage(mocker, cache, scan_cache, account):
+    """§5 — 섹터 경로는 ①숏리스트를 생략하고 바로 run_deep_scan에 전달한다."""
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.resolve_sector_tickers",
+        return_value={
+            "available": True, "tickers": [{"ticker": "277810", "market": "KRX", "confidence": "confirmed"}],
+        },
+    )
+    mock_deep_scan = mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_deep_scan", return_value=[]
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_recommendation_synthesis",
+        return_value={"available": True, "recommendations": [], "provenance": "x"},
+    )
+    coordinator = _coordinator(cache, scan_cache, account)
+
+    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    thread.join(timeout=5)
+
+    passed_shortlist = mock_deep_scan.call_args.kwargs["shortlist"]
+    assert [e.ticker for e in passed_shortlist] == ["277810"]
+    assert passed_shortlist[0].rule_candidate is None
+    assert passed_shortlist[0].ml_prediction is None
+
+
+def test_sector_resolution_failure_is_swallowed_and_leaves_retriable(mocker, cache, scan_cache, account, capsys):
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.resolve_sector_tickers",
+        return_value={"available": False, "error": "예산 부족"},
+    )
+    coordinator = _coordinator(cache, scan_cache, account)
+
+    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    thread.join(timeout=5)
+
+    assert coordinator.is_sector_in_progress("로봇", "KRX") is False
+    assert "SECTOR:로봇:KRX" in capsys.readouterr().err
+    scanned_at, _ = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+    assert scanned_at is None  # 캐시 안 적재 -> 재시도 가능
+
+
+def test_sector_and_market_scan_keys_do_not_collide(mocker, cache, scan_cache, account):
+    """market="KRX" 전체 유니버스 캐시와 "SECTOR:로봇:KRX" 섹터 캐시가 같은 테이블을
+    쓰므로 서로 침범하지 않는지 확인한다(recommendation-synthesis-plan.md §6)."""
+    scan_cache.put_recommendations("KRX", [_recommendation("005930")])
+    scan_cache.put_recommendations("SECTOR:로봇:KRX", [_recommendation("277810")])
+
+    _, market_wide = scan_cache.get_latest_recommendations("KRX")
+    _, sector = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+
+    assert [r["ticker"] for r in market_wide] == ["005930"]
+    assert [r["ticker"] for r in sector] == ["277810"]
 
 
 def test_run_uses_thread_local_cursor_connections(mocker, cache, scan_cache, account):

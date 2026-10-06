@@ -16,9 +16,12 @@ EXPECTED_TOOL_NAMES = {
     "find_related_companies",
     "stock_analyst",
     "get_market_scan_recommendations",
+    "get_sector_recommendations",
 }
 
-_TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {"resolve_ticker", "get_market_scan_recommendations"}
+_TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {
+    "resolve_ticker", "get_market_scan_recommendations", "get_sector_recommendations",
+}
 
 
 def test_tool_schemas_cover_exactly_the_ten_analysis_capabilities():

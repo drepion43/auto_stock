@@ -56,6 +56,24 @@ def _no_params_schema(name: str, description: str) -> dict:
     }
 
 
+def _query_market_schema(name: str, description: str, query_description: str) -> dict:
+    return {
+        "type": "function",
+        "name": name,
+        "strict": True,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": query_description},
+                "market": _MARKET_PROPERTY,
+            },
+            "required": ["query", "market"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _market_only_schema(name: str, description: str) -> dict:
     return {
         "type": "function",
@@ -186,5 +204,18 @@ TOOL_SCHEMAS = [
         "recommendations는 이전 스냅샷(최초 조회라면 빈 값)이니 '지금 갱신 중입니다, 잠시 "
         "후 다시 물어봐 주세요'를 답변에 포함하라. 사용자가 시장을 명시하지 않았으면 KRX를 "
         "기본으로 조회하라.",
+    ),
+    _query_market_schema(
+        "get_sector_recommendations",
+        "섹터/업종/테마를 지정해 추천을 묻는 질의('로봇섹터 추천해줄만한 거 있어?', '반도체 "
+        "관련 추천해줄 거 있어?' 등)에 쓴다 — get_market_scan_recommendations와 달리 query로 "
+        "섹터/테마명을 받는다. query가 공식 업종명과 명확히 일치하면 결정론적으로 그 업종 "
+        "구성종목을, 아니면 LLM이 제안+뉴스검증한 종목을 대상으로 규칙엔진·ML예측·차트분석·"
+        "공시·뉴스감성을 종합해 상위 종목을 순위(rank)·근거(summary)와 함께 반환한다. 반환 "
+        "형태(scanned_at/recommendations/refreshing)는 get_market_scan_recommendations와 "
+        "동일하게 해석하라 — 실시간이 아니라 스냅샷이며 scanned_at을 반드시 함께 밝혀라. "
+        "NASDAQ 종목의 섹터 질의는 공식 업종 매칭이 불가능해 항상 LLM 제안+뉴스검증 경로로만 "
+        "처리된다.",
+        "섹터/업종/테마명(예: '로봇', '반도체', '2차전지')",
     ),
 ]

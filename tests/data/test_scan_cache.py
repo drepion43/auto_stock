@@ -196,6 +196,56 @@ def test_recommendation_cache_cursor_shares_underlying_database(cache):
     assert [r["ticker"] for r in recommendations] == ["005930"]
 
 
+def test_get_cached_sector_tickers_returns_none_and_empty_when_never_resolved(cache):
+    fetched_at, tickers, confidence = cache.get_cached_sector_tickers("로봇", "KRX")
+
+    assert fetched_at is None
+    assert tickers == []
+    assert confidence == []
+
+
+def test_put_sector_tickers_then_get_cached_round_trips(cache):
+    cache.put_sector_tickers("로봇", "KRX", ["277810", "108490"], ["confirmed", "inferred"])
+
+    fetched_at, tickers, confidence = cache.get_cached_sector_tickers("로봇", "KRX")
+
+    assert isinstance(fetched_at, datetime)
+    assert tickers == ["277810", "108490"]
+    assert confidence == ["confirmed", "inferred"]
+
+
+def test_put_sector_tickers_scopes_by_query_and_market(cache):
+    """같은 질의 문자열이라도 market이 다르면 별개로 캐싱돼야 한다."""
+    cache.put_sector_tickers("로봇", "KRX", ["277810"], ["confirmed"])
+    cache.put_sector_tickers("반도체", "KRX", ["005930"], ["confirmed"])
+
+    _, robot_tickers, _ = cache.get_cached_sector_tickers("로봇", "KRX")
+    _, semi_tickers, _ = cache.get_cached_sector_tickers("반도체", "KRX")
+
+    assert robot_tickers == ["277810"]
+    assert semi_tickers == ["005930"]
+
+
+def test_put_sector_tickers_replaces_previous_result(cache):
+    cache.put_sector_tickers("로봇", "KRX", ["277810"], ["confirmed"])
+    cache.put_sector_tickers("로봇", "KRX", ["108490", "277810"], ["inferred", "confirmed"])
+
+    _, tickers, confidence = cache.get_cached_sector_tickers("로봇", "KRX")
+
+    assert tickers == ["108490", "277810"]
+    assert confidence == ["inferred", "confirmed"]
+
+
+def test_sector_cache_cursor_shares_underlying_database(cache):
+    thread_local = cache.cursor()
+
+    thread_local.put_sector_tickers("로봇", "KRX", ["277810"], ["confirmed"])
+
+    fetched_at, tickers, _ = cache.get_cached_sector_tickers("로봇", "KRX")
+    assert fetched_at is not None
+    assert tickers == ["277810"]
+
+
 def test_scan_cache_cursor_shares_underlying_database(cache):
     """majestic-waddling-breeze.md "온디맨드 배치 스캔 트리거" 계획 — 백그라운드 스레드가
     cursor()로 쓴 스캔 결과를 원본 인스턴스가 바로 읽을 수 있어야 한다."""

@@ -163,6 +163,7 @@ def main() -> None:
         sentiment_client=sentiment_client,
         account=account,
         agent_model=agent_config.model,
+        reader=reader,
         stale_after=timedelta(hours=int(os.environ.get("RECOMMENDATION_STALE_HOURS", 24))),
         universe_size=int(os.environ.get("MARKET_SCAN_UNIVERSE_SIZE", 200)),
     )

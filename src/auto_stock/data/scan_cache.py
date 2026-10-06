@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS recommendation_cache_meta (
     scanned_at TIMESTAMP NOT NULL
 );
 """
+_SECTOR_TABLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sector_cache (
+    sector_query VARCHAR NOT NULL,
+    market VARCHAR NOT NULL,
+    tickers VARCHAR[] NOT NULL,
+    confidence_labels VARCHAR[] NOT NULL,
+    fetched_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (sector_query, market)
+);
+"""
 
 
 class MarketScanCache:
@@ -65,6 +75,7 @@ class MarketScanCache:
         self._con.execute(_UNIVERSE_TABLE_SCHEMA)
         self._con.execute(_RECOMMENDATION_TABLE_SCHEMA)
         self._con.execute(_RECOMMENDATION_META_TABLE_SCHEMA)
+        self._con.execute(_SECTOR_TABLE_SCHEMA)
         self._write_lock = threading.Lock()
 
     def cursor(self) -> "MarketScanCache":
@@ -207,3 +218,37 @@ class MarketScanCache:
             for row in rows
         ]
         return meta_row[0], recommendations
+
+    def put_sector_tickers(
+        self, sector_query: str, market: str, tickers: list[str], confidence_labels: list[str]
+    ) -> datetime:
+        """recommendation-synthesis-plan.md §6 — 섹터/테마 해석 결과(종목 리스트 +
+        종목별 confirmed/inferred 레이블)를 캐싱한다. 재해석(1차 LLM 분류 또는 2차
+        LLM 제안+뉴스검증)을 매 질의마다 다시 돌리지 않기 위함 — `universe_cache`와
+        동일한 단일 행 upsert 패턴(배치 적재가 아니라 트랜잭션 불필요)."""
+        fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        with self._write_lock:
+            self._con.execute(
+                """
+                INSERT INTO sector_cache (sector_query, market, tickers, confidence_labels, fetched_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (sector_query, market) DO UPDATE SET
+                    tickers = excluded.tickers,
+                    confidence_labels = excluded.confidence_labels,
+                    fetched_at = excluded.fetched_at
+                """,
+                [sector_query, market, tickers, confidence_labels, fetched_at],
+            )
+        return fetched_at
+
+    def get_cached_sector_tickers(
+        self, sector_query: str, market: str
+    ) -> tuple[datetime | None, list[str], list[str]]:
+        row = self._con.execute(
+            "SELECT fetched_at, tickers, confidence_labels FROM sector_cache "
+            "WHERE sector_query = ? AND market = ?",
+            [sector_query, market],
+        ).fetchone()
+        if row is None:
+            return None, [], []
+        return row[0], list(row[1]), list(row[2])
