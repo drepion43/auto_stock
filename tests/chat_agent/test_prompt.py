@@ -24,6 +24,13 @@ def test_system_prompt_requires_provenance_label():
     assert "서브에이전트 자율 조사 결과" in SYSTEM_PROMPT
 
 
+def test_system_prompt_instructs_etf_composition_tool_and_its_provenance():
+    """docs/design/etf-composition-analysis.md §D — ETF 질의는 analyze_etf_composition으로,
+    인용 시 'ETF 구성종목 집계 분석' 출처와 '상위 구성종목만 분석' 사실을 밝혀야 한다."""
+    assert "analyze_etf_composition" in SYSTEM_PROMPT
+    assert "ETF 구성종목 집계 분석" in SYSTEM_PROMPT
+
+
 def test_system_prompt_requires_sizing_disclaimer():
     assert "투자 조언" in SYSTEM_PROMPT
 

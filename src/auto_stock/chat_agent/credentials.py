@@ -45,6 +45,9 @@ STOCK_ANALYST_RECURSION_LIMIT = 8
 # find_related_companies와 동일한 "제안 → verify_companies_co_mentioned_in_news로
 # 검증" 루프 복잡도라 같은 값을 쓴다.
 SECTOR_THEME_RECURSION_LIMIT = 6
+# docs/design/etf-composition-analysis.md §C — "여러 종목 신호를 비교·종합"하는 복잡도가
+# recommendation_synthesis와 비슷하다고 보고 같은 값(6)을 쓴다. 재조사 tool은 없다.
+ETF_COMPOSITION_RECURSION_LIMIT = 6
 
 # find_related_companies/stock_analyst는 deepagents 서브에이전트라 내부 실제 LLM 호출
 # 횟수를 QueryBudget이 정확히 셀 수 없다(deepagents 내부 루프가 우리 QueryBudget 객체를
@@ -56,6 +59,13 @@ SECTOR_THEME_RECURSION_LIMIT = 6
 FIND_RELATED_LLM_CALL_ESTIMATE = FIND_RELATED_RECURSION_LIMIT
 STOCK_ANALYST_LLM_CALL_ESTIMATE = STOCK_ANALYST_RECURSION_LIMIT
 SECTOR_THEME_LLM_CALL_ESTIMATE = SECTOR_THEME_RECURSION_LIMIT
+ETF_COMPOSITION_LLM_CALL_ESTIMATE = ETF_COMPOSITION_RECURSION_LIMIT
+
+# analyze_etf_composition이 구성종목별 공시/뉴스감성 조회를 병렬로 돌릴 때의 동시성 —
+# orchestrator/deep_scan.py와 같은 ThreadPoolExecutor 패턴. 구성종목 1개당 LLM 호출은
+# 최대 2건(공시 1 + 뉴스감성 1)이라 예산 상한 계산에도 쓴다.
+ETF_HOLDING_MAX_WORKERS = 4
+ETF_HOLDING_LLM_CALLS_PER_HOLDING = 2
 
 # 섹터/테마 탐색이 한 번에 제안할 수 있는 종목 수 상한 — 숏리스트 캡(20, orchestrator/
 # recommendation_coordinator.py)과 같은 자릿수로 맞춰 비용을 통제한다.

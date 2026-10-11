@@ -218,4 +218,14 @@ TOOL_SCHEMAS = [
         "처리된다.",
         "섹터/업종/테마명(예: '로봇', '반도체', '2차전지')",
     ),
+    _ticker_market_schema(
+        "analyze_etf_composition",
+        "ETF를 지정한 질의('KODEX 200 왜 올랐어?', '이 ETF 어때?' 등)에 쓴다. ETF 자체에는 "
+        "공시/뉴스가 거의 없으므로, 비중 상위 구성종목(최대 10개)의 공시·뉴스감성을 모아 "
+        "'ETF가 왜 움직였는지'를 종합한다. **국내(KRX) ETF만 지원**한다 — 미국 ETF(SPY/QQQ "
+        "등)는 available=false다. holdings가 null이면 ETF가 아니거나 구성종목 데이터가 없다는 "
+        "뜻이다. 결과의 provenance는 'ETF 구성종목 집계 분석'이며, 반환된 holdings(분석한 "
+        "구성종목·비중)만 분석했다는 점과 함께 답변에서 반드시 밝혀라.",
+        _TICKER_DESC,
+    ),
 ]

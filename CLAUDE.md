@@ -4,11 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository is still **unbootstrapped** at the code level: no source code, no manifest (package.json/requirements.txt/etc.), no README, and no git repository exist yet. (The previously-vendored `.claude/skills/gstack/` third-party tool is no longer present on disk.)
+**Code exists (updated 2026-10-11)**: Python 3.12 package under `src/auto_stock/` (setuptools src layout, `pyproject.toml`, `uv.lock`, git repo on `master`), ~650 pytest tests under `tests/`. Run fast tests with `.venv/Scripts/python -m pytest -q -m "not slow"` (`slow` = model-fitting smoke tests). LLM provider is OpenAI (`openai`, `langchain-openai`, `deepagents`). Chat entry point: `scripts/chat_cli.py`. Note: `docs/` is gitignored (`.gitignore` `docs/*`), so design docs are local-only and ripgrep-based search skips them.
 
-**Planning is complete**, however. `docs/PRD.md` defines the product: a Python system that recommends and semi-automatically executes stock trades (코스피/코스닥 + 나스닥), gated by a confirmed risk policy (§6) and a paper-trading-first broker strategy (§7). Read `docs/PRD.md` before writing any code — it is the source of truth for scope, architecture, risk limits, and broker roles. Remaining open items are tracked in its §11.
+`docs/PRD.md` defines the product: a Python system that recommends and semi-automatically executes stock trades (코스피/코스닥 + 나스닥), gated by a confirmed risk policy (§6) and a paper-trading-first broker strategy (§7). Read `docs/PRD.md` before writing any code — it is the source of truth for scope, architecture, risk limits, and broker roles. Remaining open items are tracked in its §11.
 
-**Architecture update (2026-08-29, subagent count updated 2026-10-05)**: PRD §4's original all-`deepagents` proposal has been refined — see `docs/design/chat-agent-plan.md` and `docs/design/chat-agent-architecture-review.md`. Most modules (rule engine #1, risk sizing #5, ML predictor #2, LLM chart analyst #3, news/disclosure #4, and the main conversational agent) are plain functions / native tool-calling, not `deepagents` subagents. `deepagents` is scoped to three subagents: `find_related_companies` and `stock_analyst(ticker)` (both exposed to the main agent as agent-as-tool, implemented), plus `recommendation_synthesis` (invoked by a background batch coordinator, not the main agent — see `docs/design/recommendation-synthesis-plan.md`, design stage, not yet implemented).
+**Architecture update (2026-08-29, subagent count updated 2026-10-11)**: PRD §4's original all-`deepagents` proposal has been refined — see `docs/design/chat-agent-plan.md` and `docs/design/chat-agent-architecture-review.md`. Most modules (rule engine #1, risk sizing #5, ML predictor #2, LLM chart analyst #3, news/disclosure #4, and the main conversational agent) are plain functions / native tool-calling, not `deepagents` subagents. `deepagents` is scoped to four subagents, all implemented:
+- `find_related_companies` and `stock_analyst(ticker)` — exposed to the main agent as agent-as-tool.
+- `recommendation_synthesis` — invoked by the background batch coordinator (`orchestrator/recommendation_coordinator.py`), not the main agent; see `docs/design/recommendation-synthesis-plan.md`.
+- `etf_composition` (`chat_agent/etf_composition.py`, 2026-10-11) — synthesis-only, no tools; called from the plain tool `analyze_etf_composition` after it collects disclosure/news signals for an ETF's top holdings (domestic ETFs only); see `docs/design/etf-composition-analysis.md`.
+
+Markets in code are still `KRX`/`NASDAQ` (`data/models.py::VALID_MARKETS`); a KOSPI/KOSDAQ/NASDAQ/NYSE split is drafted in untracked modules but not wired in.
 
 **Current priority (2026-10-05)**: MVP-1 (semi-automated order execution) and everything after it are excluded from current work — the user confirmed the near-term goal is finishing the stock-recommendation chatbot only. See the dated decision update in `docs/PRD.md` §9. Do not start broker integration, order execution, or execution-side risk enforcement unless the user explicitly reverses this.
 
@@ -25,6 +30,6 @@ Key facts from the PRD that code MUST respect:
 
 ## Next steps
 
-- Confirm the language/stack setup and initialize a proper manifest before writing code (PRD already fixes Python + LangChain `deepagents`).
-- Run `git init` if no `.git` directory exists yet.
-- Re-run `/init` once real code exists so this file can be filled in with actual build/test/lint commands and conventions.
+- Unfinished, uncommitted work (as of 2026-10-11): KOSPI/KOSDAQ/NASDAQ/NYSE market split (`data/market_routing.py`, `orchestrator/market_buckets.py` drafted; `VALID_MARKETS` not yet changed), `rule_engine/technical_context.py` (needs `adx` etc. in `indicators.py`), `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools).
+- ETF composition analysis is wired but not yet tried in a real LLM conversation (`scripts/chat_cli.py`).
+- `docs/_review_parts/*.md` partly describe planned (not implemented) state — each file has a dated correction note at the top of the affected section.

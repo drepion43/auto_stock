@@ -674,6 +674,171 @@ def test_tool_get_sector_recommendations_uses_sector_scan_key(mocker):
     recommendation_coordinator.ensure_fresh_sector.assert_called_once_with("로봇", "KRX")
 
 
+# --- analyze_etf_composition ---
+
+
+def _patch_etf_signals(mocker, names: dict[str, str | None]):
+    """구성종목 이름 역조회 + 기존 공시/뉴스감성 도구를 모킹한다 — ETF 경로는 새 분석
+    로직 없이 이 두 도구를 그대로 재호출하는지만 검증하면 된다."""
+    mocker.patch("auto_stock.chat_agent.tools.resolve_corp_name", side_effect=lambda t: names[t])
+    mock_disclosures = mocker.patch(
+        "auto_stock.chat_agent.tools.tool_analyze_disclosures",
+        side_effect=lambda ctx, t, m: {"available": True, "analysis": {"key_event": f"{t}-공시"}},
+    )
+    mock_sentiment = mocker.patch(
+        "auto_stock.chat_agent.tools.tool_analyze_news_sentiment",
+        side_effect=lambda ctx, t, m: {"available": True, "analysis": {"sentiment": "POSITIVE"}},
+    )
+    return mock_disclosures, mock_sentiment
+
+
+def test_tool_analyze_etf_composition_unsupported_for_nasdaq(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mock_holdings = mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings")
+
+    result = tool_analyze_etf_composition(_context(), "QQQ", "NASDAQ")
+
+    assert result["available"] is False
+    mock_holdings.assert_not_called()
+
+
+def test_tool_analyze_etf_composition_isolates_holdings_fetch_failure(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_etf_holdings", side_effect=RuntimeError("krx down")
+    )
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KRX")
+
+    assert result["available"] is False
+    assert "krx down" in result["error"]
+
+
+def test_tool_analyze_etf_composition_no_holdings_is_not_an_error(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings", return_value=[])
+    mock_synth = mocker.patch("auto_stock.chat_agent.tools.run_etf_composition_synthesis")
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "005930", "KRX")
+
+    assert result == {"available": True, "holdings": None}
+    mock_synth.assert_not_called()
+
+
+def test_tool_analyze_etf_composition_delegates_to_existing_tools_then_synthesizes(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_etf_holdings",
+        return_value=[("005930", 25.0), ("CASH00", 3.0), ("000660", 15.0)],
+    )
+    mock_disclosures, mock_sentiment = _patch_etf_signals(
+        mocker, {"005930": "삼성전자", "CASH00": None, "000660": "SK하이닉스"}
+    )
+    mock_synth = mocker.patch(
+        "auto_stock.chat_agent.tools.run_etf_composition_synthesis",
+        return_value={"available": True, "summary": "반도체 강세", "outlook": "UP", "provenance": "ETF 구성종목 집계 분석"},
+    )
+    context = _context(budget=QueryBudget(max_llm_calls=50))
+
+    result = tool_analyze_etf_composition(context, "069500", "KRX")
+
+    # 이름을 확인할 수 없는 항목(현금/선물 등)은 공시·뉴스 신호가 없으므로 건너뛴다
+    assert {c.args[1] for c in mock_disclosures.call_args_list} == {"005930", "000660"}
+    assert {c.args[1] for c in mock_sentiment.call_args_list} == {"005930", "000660"}
+    budget, model, etf_ticker, payload = mock_synth.call_args.args
+    assert (budget, model, etf_ticker) == (context.budget, "gpt-5.6-luna", "069500")
+    assert [p["ticker"] for p in payload] == ["005930", "000660"]  # 비중 순서 유지
+    assert payload[0]["disclosure"] == {"key_event": "005930-공시"}
+    assert result == {
+        "available": True,
+        "summary": "반도체 강세",
+        "outlook": "UP",
+        "provenance": "ETF 구성종목 집계 분석",
+        "holdings": [
+            {"ticker": "005930", "name": "삼성전자", "weight_pct": 25.0},
+            {"ticker": "000660", "name": "SK하이닉스", "weight_pct": 15.0},
+        ],
+    }
+
+
+def test_tool_analyze_etf_composition_caps_holdings_to_leave_budget_for_synthesis(mocker):
+    """구성종목당 LLM 최대 2건(공시+뉴스) — 남은 예산에서 종합 단계(6건)를 먼저 떼어두고
+    나머지로 감당 가능한 수만큼만 분석해야, 신호만 다 모으고 종합은 예산 부족으로 실패하는
+    낭비가 없다. 예산 10 → (10-6)//2 = 2개."""
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_etf_holdings",
+        return_value=[("005930", 25.0), ("000660", 15.0), ("373220", 5.0)],
+    )
+    mock_disclosures, _ = _patch_etf_signals(
+        mocker, {"005930": "삼성전자", "000660": "SK하이닉스", "373220": "LG에너지솔루션"}
+    )
+    mocker.patch(
+        "auto_stock.chat_agent.tools.run_etf_composition_synthesis",
+        return_value={"available": True, "summary": "s", "outlook": "NEUTRAL", "provenance": "p"},
+    )
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KRX")
+
+    assert {c.args[1] for c in mock_disclosures.call_args_list} == {"005930", "000660"}
+    assert [h["ticker"] for h in result["holdings"]] == ["005930", "000660"]
+
+
+def test_tool_analyze_etf_composition_non_stock_rows_do_not_consume_holding_slots(mocker):
+    """현금/채권 등 이름 없는 행이 상위 N개 자리를 차지해 실제 분석 종목이 줄면 안 된다 —
+    이름 필터링 후에 N개로 자른다(코드 리뷰 발견사항)."""
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_etf_holdings",
+        return_value=[("CASH00", 40.0), ("BOND00", 30.0), ("005930", 20.0), ("000660", 10.0)],
+    )
+    _patch_etf_signals(
+        mocker, {"CASH00": None, "BOND00": None, "005930": "삼성전자", "000660": "SK하이닉스"}
+    )
+    mocker.patch(
+        "auto_stock.chat_agent.tools.run_etf_composition_synthesis",
+        return_value={"available": True, "summary": "s", "outlook": "NEUTRAL", "provenance": "p"},
+    )
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KRX")
+
+    assert [h["ticker"] for h in result["holdings"]] == ["005930", "000660"]
+
+
+def test_tool_analyze_etf_composition_unavailable_when_budget_cannot_cover_synthesis(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mock_holdings = mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings")
+    budget = QueryBudget(max_llm_calls=50)
+    budget.llm_calls_made = 45
+
+    result = tool_analyze_etf_composition(_context(budget=budget), "069500", "KRX")
+
+    assert result["available"] is False
+    mock_holdings.assert_not_called()
+
+
+def test_tool_analyze_etf_composition_passes_through_synthesis_failure(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings", return_value=[("005930", 25.0)])
+    _patch_etf_signals(mocker, {"005930": "삼성전자"})
+    mocker.patch(
+        "auto_stock.chat_agent.tools.run_etf_composition_synthesis",
+        return_value={"available": False, "error": "ETF 구성종목 종합 실패: boom"},
+    )
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KRX")
+
+    assert result == {"available": False, "error": "ETF 구성종목 종합 실패: boom"}
+
+
 # --- TOOL_DISPATCH ---
 
 

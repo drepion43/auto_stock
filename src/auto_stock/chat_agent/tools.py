@@ -12,10 +12,17 @@
 news-sentiment.md 참고).
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from langchain_core.tools import tool as langchain_tool
 
+from auto_stock.chat_agent.credentials import (
+    ETF_COMPOSITION_LLM_CALL_ESTIMATE,
+    ETF_HOLDING_LLM_CALLS_PER_HOLDING,
+    ETF_HOLDING_MAX_WORKERS,
+)
+from auto_stock.chat_agent.etf_composition import _holding_to_payload, run_etf_composition_synthesis
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.related_companies import run_find_related_companies
 from auto_stock.chat_agent.stock_analyst import run_stock_analyst
@@ -34,6 +41,8 @@ if TYPE_CHECKING:
     from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoordinator
 from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_code, resolve_corp_name
 from auto_stock.data.sources.edgar_source import fetch_filings, resolve_cik, resolve_company_title
+from auto_stock.data.sources.etf_source import DEFAULT_TOP_N as ETF_DEFAULT_TOP_N
+from auto_stock.data.sources.etf_source import fetch_etf_holdings
 from auto_stock.data.sources.gdelt_source import search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
@@ -423,6 +432,63 @@ def tool_get_sector_recommendations(context: ChatToolContext, query: str, market
     }
 
 
+_ETF_HOLDING_CANDIDATE_POOL = 50  # 이름 필터링 전 후보 수 — 분석 대상(최대 10)보다 넉넉히
+
+
+def _affordable_etf_holdings(budget: QueryBudget) -> int:
+    """남은 턴 예산에서 종합 단계 몫(`ETF_COMPOSITION_LLM_CALL_ESTIMATE`)을 먼저 떼어두고,
+    나머지로 감당 가능한 구성종목 수(종목당 공시+뉴스 최대 2건). 이렇게 해야 신호만 모으고
+    종합은 예산 부족으로 실패하는 낭비가 생기지 않는다."""
+    remaining = budget.max_llm_calls - budget.llm_calls_made - ETF_COMPOSITION_LLM_CALL_ESTIMATE
+    return max(0, min(ETF_DEFAULT_TOP_N, remaining // ETF_HOLDING_LLM_CALLS_PER_HOLDING))
+
+
+def _collect_holding_signals(context: ChatToolContext, holding: tuple[str, float, str]) -> dict:
+    ticker, weight, name = holding
+    disclosure = tool_analyze_disclosures(context, ticker, "KRX")
+    sentiment = tool_analyze_news_sentiment(context, ticker, "KRX")
+    return _holding_to_payload(ticker, weight, name, disclosure, sentiment)
+
+
+def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: str) -> dict:
+    """ETF 질의("이 ETF 왜 올랐어?") 전용 — docs/design/etf-composition-analysis.md §B.
+    비중 상위 구성종목마다 **이미 있는** `tool_analyze_disclosures`/
+    `tool_analyze_news_sentiment`를 그대로 재호출해(새 분석 로직 없음) 신호를 모은 뒤
+    `run_etf_composition_synthesis`에 종합을 위임한다. 국내 ETF 전용(미국 ETF holdings는
+    범위 밖). 구성종목 신호 조회는 `orchestrator/deep_scan.py`와 같은 ThreadPoolExecutor
+    패턴으로 병렬화한다 — `QueryBudget`은 내부 락으로 스레드 안전하고, `.map()`이 입력
+    (비중) 순서를 보존한다. 이름을 확인할 수 없는 항목(현금/선물 등 비상장 구성요소)은
+    공시·뉴스 신호가 존재할 수 없으므로 건너뛴다."""
+    if market != "KRX":
+        return {"available": False, "error": f"ETF 구성종목 분석은 국내(KRX) ETF만 지원합니다: {market}"}
+
+    top_n = _affordable_etf_holdings(context.budget)
+    if top_n == 0:
+        return {"available": False, "error": "이번 대화 턴의 LLM 호출 예산을 모두 사용했습니다"}
+
+    try:
+        # 현금/채권 등 이름 없는 행이 상위 N개 자리를 차지하지 않도록 넉넉히 받아
+        # 이름 필터링 후에 N개로 자른다(이름 역조회는 DART 로컬 캐시라 저렴하다).
+        holdings = fetch_etf_holdings(ticker, top_n=_ETF_HOLDING_CANDIDATE_POOL)
+        named = [(code, weight, resolve_corp_name(code)) for code, weight in holdings]
+    except Exception as exc:
+        return {"available": False, "error": f"ETF 구성종목 조회 실패: {exc}"}
+    named = [holding for holding in named if holding[2] is not None][:top_n]
+    if not named:
+        return {"available": True, "holdings": None}  # ETF가 아니거나 holdings 데이터 없음
+
+    with ThreadPoolExecutor(max_workers=ETF_HOLDING_MAX_WORKERS) as executor:
+        payload = list(executor.map(lambda h: _collect_holding_signals(context, h), named))
+
+    result = run_etf_composition_synthesis(context.budget, context.agent_model, ticker, payload)
+    if not result["available"]:
+        return result
+    return {
+        **result,
+        "holdings": [{"ticker": code, "name": name, "weight_pct": weight} for code, weight, name in named],
+    }
+
+
 TOOL_DISPATCH = {
     "resolve_ticker": tool_resolve_ticker,
     "analyze_rule_engine": tool_analyze_rule_engine,
@@ -436,4 +502,5 @@ TOOL_DISPATCH = {
     "stock_analyst": tool_stock_analyst,
     "get_market_scan_recommendations": tool_get_market_scan_recommendations,
     "get_sector_recommendations": tool_get_sector_recommendations,
+    "analyze_etf_composition": tool_analyze_etf_composition,
 }

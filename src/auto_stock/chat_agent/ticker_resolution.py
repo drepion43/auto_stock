@@ -19,12 +19,17 @@ shortcut을 시도하고, 그다음 한글 별칭 표(`_NASDAQ_KOREAN_ALIASES`)�
 후보를 나열해 사용자에게 되묻는다.
 """
 
+import logging
 from dataclasses import dataclass
+from functools import lru_cache
 
 from auto_stock.data.sources.dart_source import resolve_corp_name
 from auto_stock.data.sources.dart_source import resolve_ticker_by_name as resolve_dart_ticker_by_name
 from auto_stock.data.sources.edgar_source import resolve_company_title
 from auto_stock.data.sources.edgar_source import resolve_ticker_by_name as resolve_edgar_ticker_by_name
+from auto_stock.data.sources.etf_source import fetch_etf_listing
+
+logger = logging.getLogger(__name__)
 
 _KRX_CODE_LENGTH = 6
 _NASDAQ_SYMBOL_MAX_LENGTH = 5
@@ -100,10 +105,47 @@ class TickerResolution:
         return len(self.matches) == 0
 
 
+@lru_cache(maxsize=1)
+def _etf_listing() -> tuple[tuple[str, str], ...]:
+    """국내 ETF `(코드, 이름)` 목록 — DART `corpCode.xml`은 상장"법인" 전용이라 ETF(펀드)가
+    없어서 쓰는 보조 경로(docs/design/etf-composition-analysis.md §D). `resolve_ticker`는
+    매 턴 호출되므로 FDR 조회는 프로세스 수명 동안 1회만 한다(ETF 상장은 드물게 바뀜).
+    조회 실패는 캐시되지 않는다 — 호출부는 `_etf_listing_or_empty`를 거친다."""
+    return tuple(fetch_etf_listing())
+
+
+def _etf_listing_or_empty() -> tuple[tuple[str, str], ...]:
+    """ETF 목록은 보조 경로일 뿐이다 — FDR 장애가 ETF와 무관한 질의(예: DART에 없는
+    나스닥 회사명 → EDGAR 매치)까지 실패시키면 안 되므로, 실패 시 경고만 남기고 "ETF 매치
+    없음"으로 취급한다(코드 리뷰 발견사항). 실패는 캐시되지 않으므로 다음 턴에 재시도된다."""
+    try:
+        return _etf_listing()
+    except Exception:
+        logger.warning("ETF 목록 조회 실패 — ETF 폴백 없이 진행", exc_info=True)
+        return ()
+
+
+def _match_etf_by_name(query: str) -> list[TickerMatch]:
+    """`dart_source.resolve_ticker_by_name`과 동일 규칙: 대소문자 무시 완전일치가 있으면
+    그것만, 없으면 부분문자열 포함으로 폴백한다."""
+    listing = _etf_listing_or_empty()
+    query_casefold = query.casefold()
+    exact = [(t, n) for t, n in listing if n.casefold() == query_casefold]
+    found = exact or [(t, n) for t, n in listing if query_casefold in n.casefold()]
+    return [TickerMatch(ticker=t, market="KRX", name=n) for t, n in found]
+
+
+def _match_etf_by_code(code: str) -> TickerMatch | None:
+    name = dict(_etf_listing_or_empty()).get(code)
+    return TickerMatch(ticker=code, market="KRX", name=name) if name is not None else None
+
+
 def _try_direct_code_match(query: str) -> TickerMatch | None:
     if query.isdigit() and len(query) == _KRX_CODE_LENGTH:
         name = resolve_corp_name(query)
-        return TickerMatch(ticker=query, market="KRX", name=name) if name is not None else None
+        if name is None:
+            return _match_etf_by_code(query)
+        return TickerMatch(ticker=query, market="KRX", name=name)
 
     if query.isascii() and query.isalpha() and len(query) <= _NASDAQ_SYMBOL_MAX_LENGTH:
         upper = query.upper()
@@ -134,6 +176,10 @@ def resolve_ticker(query: str) -> TickerResolution:
         TickerMatch(ticker=ticker, market="KRX", name=name)
         for ticker, name in resolve_dart_ticker_by_name(query)
     ]
+    if not matches:
+        # DART 매치가 있을 때는 ETF를 섞지 않는다 — "삼성전자" 질의에 "KODEX 삼성전자채권
+        # 혼합" 등이 끼어들어 이미 확정되던 일반 종목 질의를 모호하게 만들지 않기 위함.
+        matches = _match_etf_by_name(query)
     matches += [
         TickerMatch(ticker=ticker, market="NASDAQ", name=name)
         for ticker, name in resolve_edgar_ticker_by_name(query)

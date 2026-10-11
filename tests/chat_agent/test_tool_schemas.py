@@ -17,6 +17,7 @@ EXPECTED_TOOL_NAMES = {
     "stock_analyst",
     "get_market_scan_recommendations",
     "get_sector_recommendations",
+    "analyze_etf_composition",
 }
 
 _TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {
