@@ -281,6 +281,13 @@ def _summary(runs: list[RunRecord]) -> list[str]:
     return lines
 
 
+def _write_results(out: Path, cap: _CallCap, runs: list[RunRecord]) -> None:
+    out.write_text(
+        json.dumps({"llm_calls_used": cap.used, "runs": [asdict(r) for r in runs]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="main loop legacy vs deep eval")
     parser.add_argument("--queries", default=",".join(QUERIES))
@@ -294,6 +301,9 @@ def main() -> None:
     verify_exposure()
     cap = _CallCap(args.max_llm_calls)
     runs: list[RunRecord] = []
+    out_dir = Path("data/eval")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"main_agent_eval_{datetime.now():%Y%m%d_%H%M%S}.json"
     for query in args.queries.split(","):
         for repeat in range(1, args.repeats + 1):
             for loop in args.loops.split(","):
@@ -313,15 +323,10 @@ def main() -> None:
                     for patch in patches:
                         patch.stop()
                 runs.append(run)
+                # 회차마다 저장 — 중간에 중단(상한 조정·순서 변경)해도 끝난 회차의 상세 결과가 남는다.
+                _write_results(out, cap, runs)
                 print(f"[{cap.used}/{cap.cap}] {query} {loop} #{repeat}: rules={run.rules} skipped={run.skipped_reason}", flush=True)
 
-    out_dir = Path("data/eval")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"main_agent_eval_{datetime.now():%Y%m%d_%H%M%S}.json"
-    out.write_text(
-        json.dumps({"llm_calls_used": cap.used, "runs": [asdict(r) for r in runs]}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
     print("\n".join(["", "=== summary (first turn averages) ===", *_summary(runs), f"results: {out}"]))
 
 
