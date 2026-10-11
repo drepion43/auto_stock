@@ -71,3 +71,9 @@ CRITICAL/HIGH 없음. MEDIUM 4건 + LOW 2건(코드 리뷰), 별도 LOW 2건(보
 - `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후: `scripts/verify_news_sentiment.py` dry-run(비용 0) → 실호출(소액) 순서로 KRX 검증
 - 위 GDELT 검증과 함께: NASDAQ 모드도 동일하게 검증
 - `scripts/run_recommendations_with_signals.py`로 ML+LLM차트+공시+뉴스감성 4개 블록이 텔레그램에 함께 뜨는지 육안 확인
+
+## 갱신 (2026-10-12) — GDELT 요청 제한·검색어
+
+- **검색어**: NASDAQ 경로의 GDELT 질의는 이제 `gdelt_source.company_phrase(name)`로 만든다 — 따옴표 제거(위 리뷰 5번 방어 유지)에 더해 SEC 법인 접미사를 떼어 뉴스 표기와 맞춘다(14일 실측 "NVIDIA CORP" 27건 vs "NVIDIA" 50건 이상).
+- **요청 제한**: GDELT는 HTTP 429("5초에 1회")를 돌려준다. 프로세스 전체 요청 간격 조절(5.5초) + 429 시 15초 지연 후 1회 재시도를 넣었지만, 실측상 이 IP에는 더 엄격해 여전히 실패할 수 있다.
+- **영향**: 미국 종목 분석에서 "뉴스 감성 확인하지 못함"이 잦고, 뉴스가 필요한 질의는 느려질 수 있다. 현황·선택지(캐시, 대체 소스 등)·결정 대기 항목은 `us-news-source-reliability.md`.

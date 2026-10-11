@@ -66,4 +66,4 @@
 - `tests/chat_agent/test_ticker_resolution.py`에 ETF 폴백 경로 테스트 추가(코드/이름 매칭, DART 매치 시 ETF 미조회, 부분일치 모호 처리, 목록 1회 조회, **목록 조회 실패해도 EDGAR 매치 유지·코드는 not found**). 테스트 중 실제 FDR 호출을 막는 autouse fixture가 있다.
 - `tests/chat_agent/test_prompt.py`에 `analyze_etf_composition`·"ETF 구성종목 집계 분석" 문구 존재 확인 추가.
 
-**라이브 검증 (2026-10-11)**: 프로젝트 `.venv`(실제 pandas-ta 포함)에서 전체 테스트 통과, 그리고 라이브 호출로 확인 — `fetch_etf_holdings("069500")`이 KRX 로그인(`.env`의 `KRX_ID`/`KRX_PW`) 후 실제 비중을 반환, ETF가 아닌 코드는 빈 리스트, `fetch_etf_listing()`은 1,172개 반환. 위 §A의 날짜/비중 컬럼 문제는 이 검증에서 발견해 수정했다. 아직 미검증: LLM을 실제로 태운 end-to-end 대화(`scripts/chat_cli.py`에서 "KODEX 200 왜 올랐어?").
+**라이브 검증 (2026-10-11)**: 프로젝트 `.venv`(실제 pandas-ta 포함)에서 전체 테스트 통과, 그리고 라이브 호출로 확인 — `fetch_etf_holdings("069500")`이 KRX 로그인(`.env`의 `KRX_ID`/`KRX_PW`) 후 실제 비중을 반환, ETF가 아닌 코드는 빈 리스트, `fetch_etf_listing()`은 1,172개 반환. 위 §A의 날짜/비중 컬럼 문제는 이 검증에서 발견해 수정했다. LLM end-to-end도 확인됨(2026-10-11, 메인 루프 eval Q6 "KODEX 200 왜 올랐어?"): 구·신 루프 각 3회 모두 `analyze_etf_composition`을 호출했고 "ETF 구성종목 집계 분석" 출처를 표기했다(회당 LLM 호출 약 29회).

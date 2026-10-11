@@ -119,3 +119,5 @@ MVP-0 + 신호 소스 확장(#2~#4)이 전부 **일방향 배치 파이프라인
 - 예외적으로 `find_related_companies`(관련기업 탐색)와 `stock_analyst(ticker)`(종목별 딥다이브, 자율 추가조사 포함)만 `deepagents` 서브에이전트로 구현(agent-as-tool) — 실사용 근거 확인 후(로드맵 E단계) 착수
 
 **구현 상태(2026-09-06)**: A~E단계(관련기업 자율 딥다이브 + 6번째 매수/매도 사이징 tool 포함) 구현 완료, `scripts/chat_cli.py` CLI 진입점까지 배선(`src/auto_stock/chat_agent/`, 총 9개 tool). 3중 병렬 리뷰(code/security/risk-policy) 발견사항 전부 TDD로 수정 — 상세는 `chat-agent-plan.md`의 "Stage E 구현 결과" 섹션 참고. 실계좌 연결/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준은 `docs/design/multi-asset-automation-roadmap.md`에 별도 기록. 실제 API 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.
+
+**갱신 (2026-10-12)**: 위 "메인 대화 에이전트는 LangGraph/`deepagents`를 쓰지 않는 네이티브 tool-calling 루프" 방침은 번복됐다 — 메인 루프는 `create_deep_agent` 기반이 기본이고(구 루프는 롤백용, 2주 후 제거), 도구는 `tool_registry.py` 단일 레지스트리에서 정의한다. deepagents 서브에이전트는 이제 4개(관련기업 탐색, 종목 딥다이브, 추천 종합, ETF 구성종목 종합). 상세: `docs/design/main-agent-migration-plan.md`.

@@ -115,7 +115,7 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 ---
 
-> **구조 변경 (2026-10-11, 브랜치 `feat/main-agent-registry`)**: 도구 정의는 `tool_registry.py`의 `TOOL_SPECS` 한 곳으로 모였다(`tool_schemas.py`는 재export만, `tools.py`의 `TOOL_DISPATCH`/`_bind_stock_analyst_tools`는 하위 호환 별칭). 또 `CHAT_AGENT_LOOP=deep`일 때만 쓰는 deepagents 메인 루프(`deep_loop.py` + `agent_middleware.py`)가 추가됐다. 아래 본문은 구 루프 기준 서술이며, 새 구조는 `docs/design/main-agent-migration-plan.md` §0·§4.0·§4.1을 참고.
+> **구조 변경 (2026-10-11, 브랜치 `feat/main-agent-registry`)**: 도구 정의는 `tool_registry.py`의 `TOOL_SPECS` 한 곳으로 모였다(`tool_schemas.py`는 재export만, `tools.py`의 `TOOL_DISPATCH`/`_bind_stock_analyst_tools`는 하위 호환 별칭). 또 deepagents 메인 루프(`deep_loop.py` + `agent_middleware.py`)가 추가됐고 2026-10-12부터 기본값이다(롤백: `CHAT_AGENT_LOOP=legacy`, 구 루프는 2026-10-26 이후 제거 예정). 아래 본문은 구 루프 기준 서술이며, 새 구조는 `docs/design/main-agent-migration-plan.md` §0·§4.0·§4.1을 참고.
 
 ## `tool_schemas.py` — OpenAI Responses API 함수콜링 스키마
 
@@ -281,6 +281,8 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 **`tool_analyze_news_sentiment(context, ticker, market)`** (tools.py:195-239)
 `tool_analyze_disclosures`와 동형 구조이되 한 단계가 더 있다 — 이름 해석(`resolve_corp_name`/`resolve_company_title`)이 **공시 조회가 아니라 뉴스 조회**를 위한 전처리라는 점이 다르다. 이름 해석 실패 시 에러 라벨은 일부러 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 쓴다(tools.py:206) — 뉴스 소스 자체는 네이버/GDELT(`SENTIMENT_SOURCE_LABELS`)이지만, 이름 해석은 DART/EDGAR 캐시가 하는 일이므로 실패 원인을 정확히 그 시스템 이름으로 라벨링해야 한다는 설계다. 미국(NASDAQ/NYSE) 종목의 경우 회사명에 포함된 `"` 문자를 제거(`safe_name = name.replace('"', "")`)한 뒤 `f'"{safe_name}"'`로 감싸 GDELT 질의 구문을 깨지 않게 한다.
 
+> **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase()`로 만든다(따옴표 제거 + SEC 법인 접미사 제거, 예: "NVIDIA CORP" → "NVIDIA"). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
+
 **`tool_analyze_technical_context(context, ticker, market)`** (신규, 2026-10)
 `_fetch_records`로 OHLCV 조회 → `rule_engine.technical_context.build_technical_context(records)` 호출 → 13개 필드(ADX/+DI/-DI, 볼린저밴드 %B·밴드폭, 스토캐스틱 %K/%D, OBV 추세, Aroon 3종, Squeeze, RSI 다이버전스)를 그대로 JSON으로 변환. `tech is None`(워밍업 미충족)이면 `{"available": True, "context": None}`. 순수 계산이라 LLM 미사용, budget 비소비.
 
@@ -309,6 +311,8 @@ docstring에 실사용 중 발견된 버그 사례가 적혀 있다(2026-09-26):
 `_STOCK_ANALYST_TOOL_SPECS`에는 넣지 않았다 — 종목 1개 딥다이브의 보조 신호가 아니라 별도 질의 유형이라 메인 챗봇이 직접 호출하는 독립 tool이다.
 
 ### `_STOCK_ANALYST_TOOL_SPECS` / `_bind_stock_analyst_tools` / `tool_stock_analyst` — tools.py:339-377
+
+> **갱신 (2026-10-11~12)**: 바인딩은 `tool_registry.bind_stock_analyst_tools`로 옮겨졌다(`ToolSpec.subagent_description`이 있는 6개 도구, `tools._bind_stock_analyst_tools`는 하위 호환 별칭). 또 LangGraph가 서브에이전트의 tool_call도 병렬 실행해 공유 DuckDB 연결에서 무작위 오류가 났기 때문에, 바인딩 1회 안에서는 도구 실행을 Lock으로 직렬화한다(커밋 `04ad247`). 아래 코드는 이전 구현 기준이다.
 
 **순환 임포트를 피하는 바인딩 메커니즘**이 이 섹션의 핵심이다. `stock_analyst.py`는 `tools.py`를 import하지 않는다(반대 방향 — `tools.py`가 `stock_analyst.run_stock_analyst`를 `TOOL_DISPATCH` 등록을 위해 import해야 하므로, 거꾸로 import하면 순환이 생긴다). 그래서 `_bind_stock_analyst_tools(context, ticker, market)`가 여기서 **8개**(2026-10 작업으로 `analyze_technical_context`/`analyze_supply_demand` 2개 추가 — 과거 6개) `tool_analyze_*` 함수(`_STOCK_ANALYST_TOOL_SPECS`에 이름+설명 나열)를 **종목/시장에 클로저로 고정한, 인자 없는 langchain `@tool`**로 감싸 `run_stock_analyst`에 전달한다. **`analyze_etf_composition`은 이 목록에 포함되지 않는다** — ETF 분석은 종목 1개 전용 `stock_analyst`의 보조 신호가 아니라 별도 질의 유형(ETF 티커 자체를 분석)이므로, 메인 챗봇이 직접 호출하는 독립 tool로 둔다(`find_related_companies`처럼 메인 루프 전용, `etf_composition.py` 절 참고):
 
@@ -346,6 +350,8 @@ VIX/다우존스/나스닥종합/S&P500/러셀2000 같은 지수 자체 시세�
 ### `verify_companies_co_mentioned_in_news(company_a, company_b, market)` — langchain `@tool` (related_companies.py:45-68)
 
 두 회사명이 최근 뉴스에서 공동 언급된 적이 있는지 사실 확인만 하는 도구(서브에이전트에게 confidence 판단을 맡기고, 이 도구 자체는 판단하지 않는다). 분기 로직이 `market == "KRX"`/`market == "NASDAQ"`(2-way 리터럴 비교)에서 `market in KRX_MARKETS`/`market in US_MARKETS`(멤버십 체크, `data/market_routing.py`에서 import, related_companies.py:26,56,58)로 바뀌었다 — `market in KRX_MARKETS`면 `search_news(f"{company_a} {company_b}", ...)`(네이버 뉴스), `market in US_MARKETS`면 `search_articles(f'"{safe_a}" "{safe_b}"', ...)`(GDELT, 따옴표 이스케이프 처리). 이 함수는 `tool_find_related_companies`(위 참고, 여전히 리터럴 비교라 버그 가능성 있음)와 달리 market 세분화를 올바르게 반영한 사례다. 지원하지 않는 시장이거나 조회 자체가 예외를 던지면 `{"co_mentioned": False, "error": ...}` — 이 도구도 raise하지 않는다. 기사가 있으면 `{"co_mentioned": True, "headline": ..., "url": ...}`(첫 번째 기사만).
+
+> **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase()`로 만든다(따옴표 제거 + SEC 법인 접미사 제거, 예: "NVIDIA CORP" → "NVIDIA"). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
 
 **관계 검증은 뉴스 공동언급으로만 한다**(설계 확정 사항, 모듈 docstring:5-7) — DART/EDGAR는 공시 제목/날짜 메타데이터만 수집되어 있고 본문은 수집하지 않으므로, 공시 본문 기반 검증은 이 프로젝트의 데이터 계층으로는 애초에 불가능하다.
 
@@ -507,7 +513,8 @@ else:
 
 ## 신규 참여자를 위한 체크리스트
 
-- **신규 분석 도구를 추가하려면**: ① `tool_schemas.py`에 스키마 추가(헬퍼 재사용), ② `tools.py`에 `tool_<이름>` 함수 추가(실패격리 원칙 준수, raise 금지) + `TOOL_DISPATCH`에 등록, ③ LLM을 쓴다면 `context.budget.try_consume_llm_call()` 체크를 OHLCV/메타데이터 조회 성공 이후·실제 LLM 호출 이전에 넣을 것, ④ `_STOCK_ANALYST_TOOL_SPECS`에도 추가해 `stock_analyst` 서브에이전트가 쓸 수 있게 할지 결정(ETF처럼 "종목 1개 전용 딥다이브의 보조 신호가 아닌" 별도 질의 유형이면 추가하지 않는 게 맞다 — `analyze_etf_composition`이 그 선례), ⑤ `prompt.py`의 SYSTEM_PROMPT에 호출 조건/답변 표기 규칙 추가.
+- **신규 분석 도구를 추가하려면 (2026-10-11 이후)**: `tool_registry.py`의 `TOOL_SPECS`에 `ToolSpec` 1개(이름, 설명, `tool_args.py`의 인자 모델, `tools.py` 함수 이름, stock_analyst에 줄 거면 `subagent_description`) + `tools.py`에 `tool_<이름>` 구현 함수만 추가하면 스키마·디스패치·바인딩·LangChain 도구가 자동 파생된다. `prompt.py`의 호출 안내만 손으로 추가한다(테스트가 "모든 도구 이름이 프롬프트에 언급되는지" 확인). 골든 픽스처(`tests/chat_agent/fixtures/`)가 깨지면 의도한 변경인지 확인 후 갱신한다.
+- **(레지스트리 도입 전 절차, 참고용) 신규 분석 도구를 추가하려면**: ① `tool_schemas.py`에 스키마 추가(헬퍼 재사용), ② `tools.py`에 `tool_<이름>` 함수 추가(실패격리 원칙 준수, raise 금지) + `TOOL_DISPATCH`에 등록, ③ LLM을 쓴다면 `context.budget.try_consume_llm_call()` 체크를 OHLCV/메타데이터 조회 성공 이후·실제 LLM 호출 이전에 넣을 것, ④ `_STOCK_ANALYST_TOOL_SPECS`에도 추가해 `stock_analyst` 서브에이전트가 쓸 수 있게 할지 결정(ETF처럼 "종목 1개 전용 딥다이브의 보조 신호가 아닌" 별도 질의 유형이면 추가하지 않는 게 맞다 — `analyze_etf_composition`이 그 선례), ⑤ `prompt.py`의 SYSTEM_PROMPT에 호출 조건/답변 표기 규칙 추가.
 - **멀티턴 버그를 조사하려면**: `loop.py`의 `previous_response_id` 전파 지점(정상 종료/API 실패/반복상한 3가지 반환 경로 각각 다른 ID를 반환함)을 먼저 확인하라 — 서버 쪽 상태(OpenAI Responses API)에 의존하므로 로컬 재현이 어려울 수 있다.
 - **예산 소진이 의심되면**: `credentials.py`의 `*_RECURSION_LIMIT`과 `*_LLM_CALL_ESTIMATE` 쌍이 여전히 "estimate ≥ recursion_limit" 불변식을 지키는지 먼저 확인하라(`ETF_COMPOSITION_*`도 동일 규칙 적용 대상).
 - **`stock_analyst`/`find_related_companies`/`etf_composition`을 수정하려면**: 세 파일 모두 `create_deep_agent(...).invoke(...)` 호출과 `structured_response` 필드 접근까지 **하나의 try 블록**에 있어야 한다는 계약을 깨지 않도록 주의하라(과거 버그: `find_related_companies`에서 후처리가 try 밖에 있었음).

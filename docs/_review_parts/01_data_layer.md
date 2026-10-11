@@ -396,6 +396,12 @@ DART의 `resolve_ticker_by_name`과 동일한 매칭 규칙(완전일치 우선,
 
 **엣지케이스(네이버와 대칭적인 버그 수정)**: `seendate`가 JSON `null`이면 `datetime.strptime`은 `ValueError`가 아니라 **`TypeError`**를 던진다. `naver_news_source.py`의 `pubDate` 파싱(동일 클래스 실패지만 거기선 `parsedate_to_datetime`이라 다른 예외 타입)과 대칭을 맞추기 위해 `TypeError`도 명시적으로 잡는다 — 코드 리뷰 MEDIUM으로 지적되어 수정된 사항(`gdelt_source.py:72-75`).
 
+> **갱신 (2026-10-12, 라이브 실측 반영)**
+> - **라이브 검증 완료**: 실제 호출에서 기사 50건이 `_SEENDATE_FORMAT`으로 정상 파싱됐다 — 위 "검증 미완료 사항"의 `seendate` 형식 가정은 맞았다.
+> - **요청 제한**: GDELT는 과다 요청 시 HTTP 429("Please limit requests to one every 5 seconds")를 돌려준다. `search_articles`는 이제 내부 `_get`을 거쳐 프로세스 전체 요청을 5.5초 간격으로 직렬화하고(스레드 공유 잠금, `_next_allowed_at`), 429를 받으면 다음 허용 시각을 15초 뒤로 미룬 다음 1회 재시도한다. 그래도 실패하면 기존처럼 `GdeltApiError`. 실측상 이 IP에는 공지보다 엄격해 재시도 후에도 실패하는 경우가 있다.
+> - **`company_phrase(name)`(신규)**: 회사명 → 정확구문 검색어. 따옴표 제거 + 끝의 SEC 법인 접미사 제거. GDELT 호출부 4곳이 모두 쓴다.
+> - 현황·선택지·결정 대기 항목: `docs/design/us-news-source-reliability.md`.
+
 `source`는 `item.get("domain") or ""`로 채워진다(네이버의 `urlparse` 추출과 달리 API가 직접 도메인 필드를 제공).
 
 ---

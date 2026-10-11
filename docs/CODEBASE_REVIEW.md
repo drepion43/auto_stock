@@ -48,6 +48,8 @@
 
 > MVP-0+신호 소스 확장(#1~#4)이 전부 일방향 배치 파이프라인인 것과 별도 축으로, 사용자가 자유 질의하면 필요한 분석 도구만 스스로 골라 호출하고 종합 답변하는 대화형 에이전트를 구현했다. 메인 루프는 OpenAI Responses API의 네이티브 tool-calling을 수동 while 루프로 오케스트레이션(`chat_agent/loop.py`, LangGraph/`deepagents` 미도입) — 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브)만 `deepagents` 서브에이전트로 agent-as-tool 노출한다. 메인 tool은 총 9개(`resolve_ticker` + 6개 신호 분석 + 위 2개 서브에이전트). `code-reviewer`/`security-reviewer`/`risk-policy-guardian` 3중 병렬 리뷰에서 나온 HIGH 2건(`loop.py`의 무방비 API 호출 + 배치용 `max_calls_per_run` 재사용으로 인한 세션 잠김, 뉴스/공시 원문 프롬프트 인젝션 방어 부재)과 MEDIUM 2건(서브에이전트 `structured_response` 후처리가 try 밖에 있던 문제, `QueryBudget` 사전차감 추정치가 실제 재귀상한보다 작던 문제)을 전부 TDD로 수정, 회귀 없음(488개 테스트, 커버리지 98%). 리스크정책 리뷰는 위반 없음. 상세: `docs/design/chat-agent-plan.md`("Stage E 구현 결과" 섹션), `docs/design/chat-agent-architecture-review.md`, `docs/design/multi-asset-automation-roadmap.md`(향후 멀티에셋/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.
 
+> **갱신 (2026-10-12)**: 메인 루프는 deepagents `create_deep_agent` 기반(`chat_agent/deep_loop.py` + `agent_middleware.py`)이 기본이 됐다(구 수동 루프 `loop.py`는 `CHAT_AGENT_LOOP=legacy` 롤백용, 2026-10-26 이후 제거 예정). 도구는 `chat_agent/tool_registry.py`의 `TOOL_SPECS` 한 곳에서 정의한다. deepagents 서브에이전트는 4개(find_related_companies, stock_analyst, recommendation_synthesis, etf_composition). 상세: `docs/design/main-agent-migration-plan.md`.
+
 ## 전체 그림
 
 ```

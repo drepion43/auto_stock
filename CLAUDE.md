@@ -33,5 +33,7 @@ Key facts from the PRD that code MUST respect:
 ## Next steps
 
 - Unfinished, uncommitted work (as of 2026-10-11): KOSPI/KOSDAQ/NASDAQ/NYSE market split (`data/market_routing.py`, `orchestrator/market_buckets.py` drafted; `VALID_MARKETS` not yet changed), `rule_engine/technical_context.py` (needs `adx` etc. in `indicators.py`), `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools).
-- ETF composition analysis is wired but not yet tried in a real LLM conversation (`scripts/chat_cli.py`).
+- Main-loop trial: the deepagents loop is the default since 2026-10-12; remove legacy `loop.py`, its tests and the `CHAT_AGENT_LOOP` flag after ~2026-10-26 (decision D12). Still open from the plan: global concurrent-batch cap (second half of D17).
+- US news (GDELT) is heavily rate-limited (HTTP 429) and slow; throttling/retry and legal-suffix-free queries were added but it remains unreliable — options and pending decisions in `docs/design/us-news-source-reliability.md`.
+- Rotate the Naver Open API client secret: a real client ID was committed in `.env.example` in history (commit f788c18, now blanked).
 - `docs/_review_parts/*.md` partly describe planned (not implemented) state — each file has a dated correction note at the top of the affected section.

@@ -1,5 +1,7 @@
 # 검토 보고서 — 대화형 에이전트 챗봇 아키텍처 (deepagents 도입 범위)
 
+> **후속 결정 (2026-10-11~12)**: 이 보고서가 내린 "메인 대화 에이전트는 네이티브 tool-calling 루프 유지" 결론은 사용자의 범용성 확장 결정으로 **번복**됐다 — 메인 루프는 이제 `create_deep_agent` 기반(`chat_agent/deep_loop.py`)이 기본이다. 번복 근거·계획·eval 결과는 `main-agent-migration-plan.md`. 아래 본문은 당시 판단 기록으로 그대로 둔다.
+
 > 보고일: 2026-08-29
 > 보고 대상 문서: `docs/design/chat-agent-plan.md`, `docs/design/news-disclosure-plan.md`
 > 검토 방식: 4개 역할(사실·정합성 / 시니어 엔지니어 / 보안·리스크 / 일관성 검토자) 병렬 검토 후 종합

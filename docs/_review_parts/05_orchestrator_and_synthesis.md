@@ -103,6 +103,8 @@ class PipelineResult:
   1. 시장 미지원이면 스킵.
   2. 이름 해석: `market in KRX_MARKETS`면 `resolve_corp_name`(DART 캐시 재사용), 아니면(NASDAQ/NYSE) `resolve_company_title`(EDGAR 캐시 재사용) — **공시용 캐시 인프라를 그대로 재사용**, 새 인프라를 만들지 않음. `None`이면(해석 실패) 조용히 스킵.
   3. 뉴스 조회: KOSPI/KOSDAQ은 `search_news(name, ...)`, NASDAQ/NYSE는 `search_articles(f'"{safe_name}"', ...)`(정확 구문 검색을 위해 회사명을 따옴표로 감싼다 — `safe_name = name.replace('"', "")`로 회사명 자체에 든 따옴표를 먼저 제거해 GDELT 질의 문법이 깨지는 것을 방지, 코드리뷰 LOW 수정).
+
+     > **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase(name)`로 만든다 — 따옴표 제거에 더해 SEC 법인 접미사(Corp, Inc, Co, Ltd 등)를 떼어 뉴스 표기와 맞춘다("NVIDIA CORP" 27건 → "NVIDIA" 50건 이상, 14일 실측). `safe_name`은 없어졌다. 상세: `docs/design/us-news-source-reliability.md`.
   4. `analyze_sentiment` → `to_sentiment_reasons`.
 - **에러 처리**: **이름 해석 / 뉴스 조회 / LLM 해석 세 단계가 각각 분리된 `try/except`**. 이름 해석 실패는 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 재사용한 라벨로("DART 조회 실패: ..."), 뉴스 조회 실패는 `SENTIMENT_SOURCE_LABELS`(네이버뉴스/GDELT)로, LLM 해석 실패는 `"LLM 뉴스감성 해석 실패: ..."`로 각각 구분해서 반환한다. **왜 분리했는지**: 하나로 묶으면 DART/EDGAR 호출 실패가 "네이버뉴스/GDELT 조회 실패"로 잘못 라벨링되는 버그가 실제로 있었고(코드리뷰 MEDIUM으로 발견·수정), 그 재발을 막기 위해 구조적으로 분리됐다.
 - **NYSE 추가로 인한 변화**: 과거엔 `market == "KRX"`/`else`(2-way)였던 분기가 `market in KRX_MARKETS`/`else`(사실상 4-way 중 국내/미국 2분류)로 바뀌었을 뿐, DART/EDGAR/네이버/GDELT 호출 코드 자체는 수정되지 않았다 — NYSE는 그냥 "미국 쪽" 분기를 그대로 탄다.

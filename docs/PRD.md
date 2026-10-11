@@ -70,6 +70,8 @@ Python + LangChain `deepagents`(LangGraph 기반) 위에서 역할별 서브에�
 
 > **아키텍처 구체화 (2026-08-29)**: 실제 구현 과정에서 위 표의 "전체를 deepagents 서브에이전트로 구성"하는 원안은 "필요한 지점에만 프레임워크를 쓴다"로 구체화됐다. 규칙엔진(#1)·리스크·사이징(#5)·ML예측(#2)·LLM차트분석(#3)·뉴스/공시분석(#4), 그리고 향후 대화형 챗봇의 메인 에이전트까지 모두 자율 판단이 필요 없는 plain 모듈/네이티브 tool-calling으로 구현(또는 구현 예정)한다. `deepagents`가 실제로 쓰이는 곳은 "관련기업 탐색"과 "종목별 딥다이브"(자율 추가조사가 필요한 경우) 두 지점뿐이다. 상세: `docs/design/chat-agent-plan.md`, `docs/design/chat-agent-architecture-review.md`.
 
+> **아키텍처 갱신 (2026-10-12)**: 메인 대화 에이전트도 `deepagents`(`create_deep_agent`) 기반으로 전환됐다 — 도구를 계속 붙여 범용성을 높이겠다는 사용자 결정(2026-10-11)에 따른 선제 전환이며, eval 통과 후 기본값이 됐다. 각 분석 모듈(#1~#5)은 여전히 일반 함수이고, deepagents 서브에이전트는 4개다. 상세: `docs/design/main-agent-migration-plan.md`.
+
 ## 5. 추천 로직 설계 방향
 
 - **규칙 기반 계층**: 이동평균/RSI/MACD 등 전통적 기술적 지표로 1차 후보군 필터링

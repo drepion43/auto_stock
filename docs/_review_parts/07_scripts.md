@@ -279,6 +279,8 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 **주의사항(docstring에 명시)**: GDELT의 `seendate` 필드 형식은 네트워크 제약으로 라이브 검증이 안 된 상태다 — NASDAQ/NYSE 모드를 처음 실행하기 전에 `gdelt_source.py`의 `_SEENDATE_FORMAT` 가정이 맞는지 먼저 짚어보라는 경고가 있다(`verify_news_sentiment.py:21-23`).
 
+> **갱신 (2026-10-12)**: `seendate` 형식은 라이브 호출로 확인됐다. 검색어는 이제 `company_phrase(name)`(법인 접미사 제거)로 만든다. GDELT 요청 제한(HTTP 429) 때문에 NASDAQ/NYSE 모드는 실패하거나 수십 초 걸릴 수 있다 — `docs/design/us-news-source-reliability.md`.
+
 > **market 세분화(2026-10)**: `_SAMPLE_TICKERS`가 `{"KRX": "005930", "NASDAQ": "AAPL"}`(2개)에서 `{"KOSPI": "005930", "KOSDAQ": "247540", "NASDAQ": "AAPL", "NYSE": "JPM"}`(4개 시장)로 확장됐다(`verify_news_sentiment.py:51`). `NEWS_SENTIMENT_VERIFY_MARKET` 기본값이 `"KRX"`에서 `"KOSPI"`로 바뀌었다(`verify_news_sentiment.py:55`). 분기 로직이 `data/market_routing.py`의 `KRX_MARKETS`/`SENTIMENT_SOURCE_LABELS`를 쓰도록 바뀌었다(`verify_news_sentiment.py:37,64,82`). 모듈 docstring도 "네이버(KRX)와 GDELT(NASDAQ)"에서 "네이버(코스피/코스닥)와 GDELT(나스닥/NYSE)"로 갱신됐다(`verify_news_sentiment.py:1-2,12-15`).
 
 ---
@@ -315,6 +317,8 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 ## 14. `chat_cli.py` — CLI 진입점만 (내부 로직은 `chat_agent/` 모듈 리뷰 참고)
 
 **목적**: 대화형 챗봇 에이전트의 터미널 진입점. `src/auto_stock/chat_agent/loop.py::run_turn`을 stdin 루프로 감싼다(`chat_cli.py:1-5`).
+
+> **갱신 (2026-10-12)**: 기본 메인 루프가 deepagents 기반 `chat_agent/deep_loop.py::run_turn_deep`으로 바뀌었다. 시작 시 트레이싱 차단 검사(`check_tracing_allowed`)와 노출 도구 검사(`verify_exposure`, fail-closed)를 통과해야 deep으로 실행되고, 실패하면 경고 후 구 루프로 실행한다. `CHAT_AGENT_LOOP=legacy`면 처음부터 구 루프(`loop.run_turn`). 시작 메시지에 `(루프: deep|legacy)`가 표시되고, 출력 형식은 두 루프가 같다. deep 모드에서는 턴당 새 백그라운드 추천 배치가 1개로 제한된다(`batch_trigger_limit`).
 
 **실행 방법**:
 ```
@@ -407,3 +411,22 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 이 디렉터리의 스크립트들은 전부 **원자 market만 다루는 레거시/배치 경로**라, 위 1~13번 섹션에서 설명한 대로 "KRX"였던 하드코딩 값을 전부 "KOSPI"(또는 4개 원자값 전체 순회)로 교체하는 정도의 변경만 받았다 — 합성 버킷을 다루는 로직 자체는 이 디렉터리에 없다(그건 `orchestrator/recommendation_coordinator.py`와 `chat_agent/tools.py`의 책임이며, 각각의 리뷰 문서가 다룬다). 신규 공용 모듈 `data/market_routing.py`(`KRX_MARKETS`/`US_MARKETS` 멤버십 집합, `NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS` 라우팅 딕셔너리)는 `pipeline.py`/`tools.py`에 과거 중복됐던 시장 분기 로직을 통합한 것이며, `verify_news_disclosure.py`/`verify_news_sentiment.py`도 이번에 이 모듈을 재사용하도록 바뀌었다.
 
 ML 모델 아티팩트(`models/ml_predictor/*.joblib`)는 market 값을 파일명에 그대로 쓰므로(`ml_predictor/artifact.py::artifact_path`), 과거 "KRX" 기준으로 학습·커밋됐던 `KRX_h5_logreg.*` 아티팩트는 이제 어떤 스크립트도 참조하지 않는다 — `scripts/train_ml_model.py`를 재실행해 `KOSPI`/`KOSDAQ`/`NASDAQ`/`NYSE` 4개 아티팩트를 새로 만들어야 `run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`가 다시 동작한다.
+
+## 15. `eval_main_agent.py` (2026-10-11 신규)
+
+**목적**: 메인 루프 전환 eval — 구 루프(legacy)와 deepagents 루프(deep)에 같은 대표 질의 Q1~Q12를 돌려 규칙 준수·도구 순서·호출 수·지연을 비교한다(`docs/design/main-agent-migration-plan.md` §9.2, 결정 D11/D18).
+
+**실행 방법**:
+```
+.venv/Scripts/python scripts/eval_main_agent.py --queries Q1,Q2 --repeats 1      (소규모)
+.venv/Scripts/python scripts/eval_main_agent.py                                  (전체: Q1~Q12 × 2루프 × 3회)
+.venv/Scripts/python scripts/eval_main_agent.py --loops deep --max-llm-calls 300 (옵션)
+```
+
+**API 호출**: 실제 OpenAI 호출(유료). 전역 호출 카운터(메인 + 도구 내부 QueryBudget)가 `--max-llm-calls`(기본 1500)에 닿으면 남은 회차를 건너뛰고 `skipped_reason`을 남긴다. 2026-10-11~12 전체 실행 실측 약 1,157회.
+
+**설계상 결정**: 백그라운드 추천 배치는 실제로 띄우지 않고 트리거 횟수만 세는 스텁 coordinator를 쓴다(배치 1회가 LLM 약 268회라 비용을 지배하므로). Q10(프롬프트 인젝션)은 공시·뉴스 도구 결과를 지시문이 섞인 스텁으로 바꾸는 eval 전용 경로다. 시작 시 `check_tracing_allowed()`·`verify_exposure()`를 CLI와 같이 거친다.
+
+**결과**: `data/eval/main_agent_eval_<timestamp>.json`(gitignore — 대화 원문 포함). **회차마다 저장**하므로 중간에 중단해도 끝난 회차의 상세 결과가 남는다. 터미널에는 회차별 규칙 판정과 질의별 요약이 출력된다.
+
+**주의**: 규칙 판정은 답변 문구 휴리스틱이라 오탐이 있다(예: Q7 고지 문구는 표현이 다양, Q11은 읽기 전용 도구 호출을 실패로 잡던 규칙을 2026-10-12 정정). 판정 전에 결과 JSON의 답변 원문을 확인할 것.

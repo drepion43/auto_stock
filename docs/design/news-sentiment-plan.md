@@ -199,5 +199,5 @@ class NewsArticle:
 | 필드명 `sentiment`(vs `market_impact`) | **확정** — `news-disclosure-plan.md`가 이미 예약해둔 이름 |
 | 회사명 해석 재사용(DART/EDGAR 캐시 확장) | 권고안대로 진행. 이견 있으면 알려달라 |
 | 네이버 이용약관 공식 재확인 | **미완료 — Phase 0 필수 선행 조건**, 자동화 수집 허용 범위 확인 전 실행 금지 |
-| GDELT 응답 스키마·rate limit 실측 | **미완료 — Phase 0 재확인 필요**(이번 세션 라이브 조회 실패) |
+| GDELT 응답 스키마·rate limit 실측 | **미완료 — Phase 0 재확인 필요**(이번 세션 라이브 조회 실패) → **2026-10-12 rate limit 실측 완료**: HTTP 429("5초에 1회"), 실제로는 더 엄격. 현황·선택지는 `us-news-source-reliability.md` |
 | 4개 신호원 병합순서 재검토 여부 | 권고안대로 이번엔 보류(병렬 노출 유지). 이견 있으면 알려달라 |
