@@ -248,3 +248,33 @@ def test_module_imports_cleanly_in_fresh_interpreter(module):
     )
 
     assert proc.returncode == 0, proc.stderr[-2000:]
+
+
+def test_stock_analyst_bound_tools_never_run_concurrently(mocker):
+    """deepagents(LangGraph)는 서브에이전트가 한 응답에 낸 여러 tool_call도 병렬 실행한다 —
+    바인딩 도구들은 같은 OHLCVCache DuckDB 연결을 공유하므로 동시에 돌면 'tuple index out of
+    range' 같은 무작위 오류가 났다(2026-10-12 재현, NVDA 분석 실패의 원인)."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    active = {"n": 0, "max": 0}
+    guard = threading.Lock()
+
+    def slow(context, ticker, market):
+        with guard:
+            active["n"] += 1
+            active["max"] = max(active["max"], active["n"])
+        time.sleep(0.03)
+        with guard:
+            active["n"] -= 1
+        return {"available": True}
+
+    for spec in TOOL_SPECS:
+        if spec.subagent_description is not None:
+            mocker.patch(f"auto_stock.chat_agent.tools.{spec.fn_name}", side_effect=slow)
+    bound = bind_stock_analyst_tools(_context(), "NVDA", "NASDAQ")
+
+    with ThreadPoolExecutor(max_workers=len(bound)) as executor:
+        list(executor.map(lambda t: t.invoke({}), bound))
+
+    assert active["max"] == 1

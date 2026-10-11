@@ -30,7 +30,7 @@ from auto_stock.data.models import OHLCVRecord
 from auto_stock.data.service import get_ohlcv
 from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_code, resolve_corp_name
 from auto_stock.data.sources.edgar_source import fetch_filings, resolve_cik, resolve_company_title
-from auto_stock.data.sources.gdelt_source import search_articles
+from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.explainer.generator import generate_explanation
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
@@ -172,10 +172,8 @@ def _sentiment_reasons(
         if market == "KRX":
             articles = search_news(name, ticker, market, start, end)
         else:
-            # 회사명에 따옴표가 들어있으면 GDELT 정확구문 검색 문법이 깨진다 — 제거해서
-            # 방어한다(코드 리뷰 LOW, 실사용에서 발생 가능성은 낮지만 비용이 거의 없음).
-            safe_name = name.replace('"', "")
-            articles = search_articles(f'"{safe_name}"', ticker, market, start, end)
+            # company_phrase: 따옴표 제거(정확구문 문법 보호) + SEC 법인 접미사 제거(뉴스 표기와 일치).
+            articles = search_articles(company_phrase(name), ticker, market, start, end)
     except Exception as exc:
         return [], f"{source_label} 조회 실패: {exc}"
 

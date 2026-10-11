@@ -313,9 +313,16 @@ def bind_stock_analyst_tools(context: "_tools.ChatToolContext", ticker: str, mar
     1개만 다루므로 모델이 판단할 것은 "어떤 도구를 부를지"뿐이다(기존 `tools._bind_stock_analyst_tools`
     동작 그대로 — 골든 테스트로 고정)."""
 
+    # deepagents(LangGraph)는 서브에이전트가 한 응답에 낸 tool_call들도 병렬 실행한다. 바인딩 도구들은
+    # 같은 OHLCVCache DuckDB 연결을 공유하므로 동시에 돌면 'tuple index out of range' 같은 무작위
+    # 오류가 났다(2026-10-12 재현 — NVDA 분석의 "산출 오류"·"분석 오류" 원인). 서브에이전트 인스턴스
+    # 1개(= 이 바인딩 1회) 안에서만 직렬화한다 — 배치의 서로 다른 종목은 각자 cursor를 쓰므로 병렬 유지.
+    binding_lock = threading.Lock()
+
     def _make_bound_tool(fn_name: str) -> Callable[[], dict]:
         def _bound_tool() -> dict:
-            return getattr(_tools, fn_name)(context, ticker, market)
+            with binding_lock:
+                return getattr(_tools, fn_name)(context, ticker, market)
 
         return _bound_tool
 

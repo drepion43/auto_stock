@@ -23,7 +23,7 @@ from auto_stock.chat_agent.credentials import (
     MAX_TICKERS_PER_QUERY,
 )
 from auto_stock.chat_agent.models import QueryBudget
-from auto_stock.data.sources.gdelt_source import search_articles
+from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.news_sentiment.credentials import NEWS_LOOKBACK_DAYS
 
@@ -55,9 +55,7 @@ def verify_companies_co_mentioned_in_news(company_a: str, company_b: str, market
         if market == "KRX":
             articles = search_news(f"{company_a} {company_b}", "", market, start, end)
         elif market == "NASDAQ":
-            safe_a = company_a.replace('"', "")
-            safe_b = company_b.replace('"', "")
-            articles = search_articles(f'"{safe_a}" "{safe_b}"', "", market, start, end)
+            articles = search_articles(f"{company_phrase(company_a)} {company_phrase(company_b)}", "", market, start, end)
         else:
             return {"co_mentioned": False, "error": f"지원하지 않는 시장입니다: {market}"}
     except Exception as exc:

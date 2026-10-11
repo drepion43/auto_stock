@@ -36,7 +36,7 @@ from datetime import date, timedelta
 
 from auto_stock.data.sources.dart_source import resolve_corp_name
 from auto_stock.data.sources.edgar_source import resolve_company_title
-from auto_stock.data.sources.gdelt_source import search_articles
+from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.news_sentiment.analyst import analyze
 from auto_stock.news_sentiment.credentials import (
@@ -71,7 +71,7 @@ def _fetch_sample_articles(market: str) -> tuple[list, str, date]:
     articles = (
         search_news(name, ticker, market, start, end)
         if market == "KRX"
-        else search_articles(f'"{name}"', ticker, market, start, end)
+        else search_articles(company_phrase(name), ticker, market, start, end)
     )
     return articles, ticker, end
 

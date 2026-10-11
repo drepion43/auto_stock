@@ -41,7 +41,7 @@ from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_
 from auto_stock.data.sources.edgar_source import fetch_filings, resolve_cik, resolve_company_title
 from auto_stock.data.sources.etf_source import DEFAULT_TOP_N as ETF_DEFAULT_TOP_N
 from auto_stock.data.sources.etf_source import fetch_etf_holdings
-from auto_stock.data.sources.gdelt_source import search_articles
+from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
@@ -239,8 +239,7 @@ def tool_analyze_news_sentiment(context: ChatToolContext, ticker: str, market: s
         if market == "KRX":
             articles = search_news(name, ticker, market, start, end)
         else:
-            safe_name = name.replace('"', "")
-            articles = search_articles(f'"{safe_name}"', ticker, market, start, end)
+            articles = search_articles(company_phrase(name), ticker, market, start, end)
     except Exception as exc:
         return {"available": False, "error": f"{source_label} 조회 실패: {exc}"}
 

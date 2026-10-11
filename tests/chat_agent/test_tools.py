@@ -918,3 +918,15 @@ def test_no_batch_limit_by_default_keeps_legacy_behavior(mocker):
         tool_get_sector_recommendations(context, query, "KRX")
 
     assert coordinator.ensure_fresh_sector.call_count == 3
+
+
+
+def test_tool_analyze_news_sentiment_searches_gdelt_without_legal_suffix(mocker):
+    """SEC 법인명 'NVIDIA CORP' 그대로 정확구문 검색하면 뉴스 표기('Nvidia')를 대부분 놓친다."""
+    mocker.patch("auto_stock.chat_agent.tools.resolve_company_title", return_value="NVIDIA CORP")
+    mock_search = mocker.patch("auto_stock.chat_agent.tools.search_articles", return_value=[])
+    mocker.patch("auto_stock.chat_agent.tools.analyze_sentiment", return_value=None)
+
+    tool_analyze_news_sentiment(_context(sentiment_client=object(), budget=QueryBudget(max_llm_calls=8)), "NVDA", "NASDAQ")
+
+    assert mock_search.call_args.args[0] == '"NVIDIA"'

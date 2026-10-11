@@ -6,7 +6,21 @@ import pytest
 import requests
 
 from auto_stock.data.models import NewsArticle
-from auto_stock.data.sources.gdelt_source import GdeltApiError, search_articles
+from auto_stock.data.sources import gdelt_source
+from auto_stock.data.sources.gdelt_source import (
+    GdeltApiError,
+    company_phrase,
+    search_articles,
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_throttle_sleep(monkeypatch):
+    """요청 간격 조절(5초 1회 제한 대응)이 테스트를 실제로 재우지 않도록 대기만 기록한다."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(gdelt_source, "_sleep", sleeps.append)
+    monkeypatch.setattr(gdelt_source, "_next_allowed_at", None)
+    return sleeps
 
 
 def _gdelt_payload(articles: list[dict]) -> dict:
@@ -123,3 +137,81 @@ def test_search_articles_requires_no_credentials(mocker, monkeypatch):
     articles = search_articles('"Apple Inc"', "AAPL", "NASDAQ", date(2026, 1, 1), date(2026, 1, 31))
 
     assert articles == []
+
+
+# --- GDELT 요청 제한(HTTP 429 "Please limit requests to one every 5 seconds", 2026-10-12 실측) ---
+
+
+class _RateLimitedResponse:
+    status_code = 429
+
+    def raise_for_status(self):
+        raise requests.exceptions.HTTPError("429 Too Many Requests", response=self)
+
+    def json(self):
+        return {}
+
+
+def test_consecutive_requests_are_spaced_by_the_minimum_interval(mocker, _no_real_throttle_sleep):
+    mocker.patch("auto_stock.data.sources.gdelt_source.requests.get", return_value=_FakeResponse(json_data=_gdelt_payload([])))
+    mocker.patch.object(gdelt_source, "_now", side_effect=[100.0, 101.0])
+
+    search_articles('"Apple"', "AAPL", "NASDAQ", date(2026, 1, 1), date(2026, 1, 31))
+    search_articles('"Nvidia"', "NVDA", "NASDAQ", date(2026, 1, 1), date(2026, 1, 31))
+
+    assert _no_real_throttle_sleep == [pytest.approx(gdelt_source._MIN_INTERVAL_SECONDS - 1.0)]
+
+
+def test_rate_limited_request_is_retried_once_after_waiting(mocker, _no_real_throttle_sleep):
+    payload = _gdelt_payload([_article(seendate="20260115T093000Z")])
+    mock_get = mocker.patch(
+        "auto_stock.data.sources.gdelt_source.requests.get",
+        side_effect=[_RateLimitedResponse(), _FakeResponse(json_data=payload)],
+    )
+
+    articles = search_articles('"Apple"', "AAPL", "NASDAQ", date(2026, 1, 1), date(2026, 1, 31))
+
+    assert len(articles) == 1
+    assert mock_get.call_count == 2
+    assert _no_real_throttle_sleep  # 재시도 전에 간격만큼 기다렸다
+
+
+def test_rate_limited_twice_raises_gdelt_api_error(mocker):
+    mocker.patch(
+        "auto_stock.data.sources.gdelt_source.requests.get",
+        side_effect=[_RateLimitedResponse(), _RateLimitedResponse()],
+    )
+
+    with pytest.raises(GdeltApiError):
+        search_articles('"Apple"', "AAPL", "NASDAQ", date(2026, 1, 1), date(2026, 1, 31))
+
+
+
+# --- 검색어: SEC 법인명 → 뉴스 표기(2026-10-12 실측: "NVIDIA CORP" 27건 vs "NVIDIA" 50건 이상) ---
+
+
+@pytest.mark.parametrize(
+    ("legal_name", "phrase"),
+    [
+        ("NVIDIA CORP", '"NVIDIA"'),
+        ("Apple Inc.", '"Apple"'),
+        ("GOLDMAN SACHS GROUP INC", '"GOLDMAN SACHS"'),
+        ("AMAZON COM INC", '"AMAZON"'),
+        ("META PLATFORMS, INC.", '"META PLATFORMS"'),
+        ("WALT DISNEY CO", '"WALT DISNEY"'),
+        ("BERKSHIRE HATHAWAY INC /DE/", '"BERKSHIRE HATHAWAY"'),
+        ("Taiwan Semiconductor Manufacturing Co Ltd", '"Taiwan Semiconductor Manufacturing"'),
+        ("TSMC", '"TSMC"'),
+    ],
+)
+def test_company_phrase_strips_legal_suffixes(legal_name, phrase):
+    assert company_phrase(legal_name) == phrase
+
+
+def test_company_phrase_removes_embedded_quotes():
+    """회사명 안의 따옴표는 GDELT 정확구문 문법을 깨뜨린다(기존 방어 유지)."""
+    assert company_phrase('Apple "Inc."') == '"Apple"'
+
+
+def test_company_phrase_keeps_name_when_everything_would_be_stripped():
+    assert company_phrase("Holdings Inc") == '"Holdings Inc"'
