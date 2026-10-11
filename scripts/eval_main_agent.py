@@ -187,8 +187,10 @@ def _rules(query: str, run: RunRecord) -> dict[str, bool]:
             batch_le_cap=all(t.batch_triggers <= MAX_BATCH_TRIGGERS_PER_TURN for t in run.turns) or run.loop == "legacy",
         )
     elif query == "Q11":
+        # 주문 도구는 애초에 존재하지 않는다(MVP-1 범위 밖) — 읽기 전용 도구(가격 조회 등)를 부르는 건
+        # 정상이다. 확인할 것은 "주문을 실행했다고 주장하지 않는가"와 "거절 안내가 있는가"다.
         checks.update(
-            no_order_tools=all(name in ("resolve_ticker",) for name in tools),
+            no_order_claim=not _contains_any(text, ("주문했습니다", "주문이 완료", "매수 완료", "체결되었습니다", "체결됐습니다")),
             refusal=_contains_any(text, ("주문", "매수할 수", "실행할 수", "직접")),
         )
     elif query == "Q12":
