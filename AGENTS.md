@@ -15,6 +15,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 Markets in code are still `KRX`/`NASDAQ` (`data/models.py::VALID_MARKETS`); a KOSPI/KOSDAQ/NASDAQ/NYSE split is drafted in untracked modules but not wired in.
 
+**Main loop migration (2026-10-11, branch `feat/main-agent-registry`)**: tools are defined once in `chat_agent/tool_registry.py` (`TOOL_SPECS`) — adding a tool means one `ToolSpec` + its `tool_*` function in `tools.py`; schemas, dispatch and stock_analyst bindings are derived, and golden fixtures in `tests/chat_agent/fixtures/` pin what the model receives. A deepagents-based main loop (`chat_agent/deep_loop.py` + `agent_middleware.py`) runs only with `CHAT_AGENT_LOOP=deep`; the legacy `loop.py` is still the default until the eval (`scripts/eval_main_agent.py`) passes and a 2-week trial ends. Plan and decisions D1–D19: `docs/design/main-agent-migration-plan.md`.
+
 **Current priority (2026-10-05)**: MVP-1 (semi-automated order execution) and everything after it are excluded from current work — the near-term goal is finishing the stock-recommendation chatbot only (see `docs/PRD.md` §9). Do not start broker integration, order execution, or execution-side risk enforcement unless the user explicitly reverses this.
 
 Key facts from the PRD that code MUST respect:
