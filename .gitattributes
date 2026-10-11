@@ -1,0 +1,3 @@
+# Golden fixtures are compared byte-for-byte (tests/chat_agent/test_tool_registry.py) —
+# never let git rewrite their line endings.
+tests/chat_agent/fixtures/** -text
