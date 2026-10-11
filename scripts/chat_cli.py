@@ -27,8 +27,9 @@ Run from the project root so `.env`/`data/` resolve correctly:
 AccountState는 `run_recommendations.py`/`run_recommendations_with_signals.py`와 동일한
 이유로 placeholder다(브로커 연동 전, MVP-1(#8)에서 교체 예정).
 
-메인 루프 선택(docs/design/main-agent-migration-plan.md §4.1): `CHAT_AGENT_LOOP=deep`이면
-deepagents 기반 새 루프(`chat_agent.deep_loop`), 아니면(기본) 기존 `loop.run_turn`. deep 모드는
+메인 루프 선택(docs/design/main-agent-migration-plan.md §4.1b): 기본은 deepagents 기반 새 루프
+(`chat_agent.deep_loop`, 2026-10-12 eval 통과 후 전환), `CHAT_AGENT_LOOP=legacy`면 기존
+`loop.run_turn`(롤백용, 2주 실사용 후 제거 예정). deep 모드는
 시작 시 트레이싱 차단 검사와 노출 도구 검사(fail-closed)를 통과해야만 켜지고, 실패하면 경고 후
 기존 루프로 실행한다. 출력 형식은 두 루프가 같다.
 

@@ -1,6 +1,7 @@
-"""1단계 메인 대화 루프 — `create_deep_agent` 기반(기능 플래그 `CHAT_AGENT_LOOP=deep` 뒤).
+"""메인 대화 루프 — `create_deep_agent` 기반. 2026-10-12부터 기본값(`CHAT_AGENT_LOOP` 미설정 시).
 
-docs/design/main-agent-migration-plan.md §4.1. 구 루프(`loop.py`)는 그대로 남아 있고 기본값이다.
+docs/design/main-agent-migration-plan.md §4.1/§4.1b. 구 루프(`loop.py`)는 `CHAT_AGENT_LOOP=legacy`
+롤백용으로 2주 실사용 기간 동안만 남는다.
 이 루프는 같은 13개 도구(`tool_registry`)·같은 시스템 프롬프트·같은 폴백 문구를 쓰고, 구 루프가
 손으로 지키던 계약은 `agent_middleware.py`의 미들웨어가 지킨다.
 

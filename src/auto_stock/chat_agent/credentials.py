@@ -95,9 +95,11 @@ LOOP_MODES = ("legacy", "deep")
 
 
 def load_loop_mode() -> str:
-    """`CHAT_AGENT_LOOP` 기능 플래그(기본 legacy). 알 수 없는 값은 조용히 넘기지 않고 실패한다."""
+    """`CHAT_AGENT_LOOP` 기능 플래그. 2026-10-12 eval(결정 D11) 통과 후 기본값을 deep으로 바꿨다 —
+    문제가 생기면 `CHAT_AGENT_LOOP=legacy`로 즉시 구 루프로 되돌릴 수 있다(2주 실사용 후 구 루프 제거,
+    결정 D12). 알 수 없는 값은 조용히 넘기지 않고 실패한다."""
     load_dotenv()
-    mode = os.environ.get("CHAT_AGENT_LOOP", "legacy").strip().lower()
+    mode = os.environ.get("CHAT_AGENT_LOOP", "deep").strip().lower()
     if mode not in LOOP_MODES:
         raise ValueError(f"CHAT_AGENT_LOOP must be one of {LOOP_MODES}, got {mode!r}")
     return mode

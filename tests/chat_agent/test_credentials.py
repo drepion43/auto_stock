@@ -87,3 +87,34 @@ def test_subagent_recursion_limits_are_positive_and_bounded():
     assert 0 < FIND_RELATED_RECURSION_LIMIT <= 20
     assert 0 < STOCK_ANALYST_RECURSION_LIMIT <= 20
     assert 0 < SECTOR_THEME_RECURSION_LIMIT <= 20
+
+
+# --- 메인 루프 기능 플래그(docs/design/main-agent-migration-plan.md §4.1b) ---
+
+
+def test_loop_mode_defaults_to_deep_after_eval(monkeypatch):
+    """2026-10-12 eval(D11) 통과 후 기본값을 deep으로 전환 — 구 루프는 롤백용으로만 남는다."""
+    from auto_stock.chat_agent.credentials import load_loop_mode
+
+    monkeypatch.delenv("CHAT_AGENT_LOOP", raising=False)
+
+    assert load_loop_mode() == "deep"
+
+
+def test_loop_mode_legacy_remains_available_for_rollback(monkeypatch):
+    from auto_stock.chat_agent.credentials import load_loop_mode
+
+    monkeypatch.setenv("CHAT_AGENT_LOOP", "legacy")
+
+    assert load_loop_mode() == "legacy"
+
+
+def test_loop_mode_rejects_unknown_value(monkeypatch):
+    import pytest
+
+    from auto_stock.chat_agent.credentials import load_loop_mode
+
+    monkeypatch.setenv("CHAT_AGENT_LOOP", "deeep")
+
+    with pytest.raises(ValueError):
+        load_loop_mode()
