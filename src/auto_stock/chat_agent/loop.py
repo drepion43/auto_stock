@@ -21,16 +21,14 @@ import json
 from collections.abc import Callable
 
 from auto_stock.chat_agent.credentials import MAX_TOOL_ITERATIONS
+from auto_stock.chat_agent.fallbacks import API_ERROR_FALLBACK, TOOL_LIMIT_FALLBACK
 from auto_stock.chat_agent.models import ChatAgentReader, FunctionCall
 from auto_stock.chat_agent.prompt import SYSTEM_PROMPT
 from auto_stock.chat_agent.tool_schemas import TOOL_SCHEMAS
 from auto_stock.chat_agent.tools import TOOL_DISPATCH, ChatToolContext
 
-_ITERATION_LIMIT_MESSAGE = (
-    "도구 호출 한도에 도달해 답변을 완성하지 못했습니다. 질문을 더 구체적으로 나눠서 "
-    "다시 시도해 주세요."
-)
-_API_FAILURE_MESSAGE = "일시적인 오류로 응답을 완성하지 못했습니다. 잠시 후 다시 시도해 주세요."
+_ITERATION_LIMIT_MESSAGE = TOOL_LIMIT_FALLBACK
+_API_FAILURE_MESSAGE = API_ERROR_FALLBACK
 
 
 def _dispatch_tool_call(context: ChatToolContext, call: FunctionCall) -> tuple[dict, dict]:

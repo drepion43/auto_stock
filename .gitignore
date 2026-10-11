@@ -15,6 +15,8 @@ data/*.duckdb
 data/*.duckdb.wal
 data/dart_corp_codes.json
 data/edgar_cik_map.json
+# main-agent eval results (full conversation text) — local only
+data/eval/
 .env
 
 # ML model artifacts (metadata.json sidecars ARE committed — see docs/design/ml-predictor-plan.md)

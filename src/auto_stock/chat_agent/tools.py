@@ -80,6 +80,7 @@ class ChatToolContext:
         agent_model: str,
         scan_cache: MarketScanCache,
         recommendation_coordinator: "RecommendationCoordinator",
+        batch_trigger_limit: int | None = None,
     ) -> None:
         self.cache = cache
         self.ml_models = ml_models
@@ -90,10 +91,25 @@ class ChatToolContext:
         self.account = account
         self.scan_cache = scan_cache
         self.recommendation_coordinator = recommendation_coordinator
+        # 이 턴에 새로 띄울 수 있는 백그라운드 추천 배치 수(결정 D17). None이면 무제한(구 루프 동작).
+        # 배치 1회가 LLM을 최대 약 268회 호출하므로 deep 루프는 1로 둔다 — 모델이 섹터 질의 표현만
+        # 바꿔 여러 배치를 띄우는 비용 폭주를 막기 위함. 캐시 조회 자체는 상한과 무관하게 정상 응답.
+        self.batch_trigger_limit = batch_trigger_limit
+        self.batch_triggers_used = 0
         # find_related_companies/stock_analyst가 deepagents create_deep_agent(model=...)에
         # 넘길 메인 대화 에이전트 자신의 모델 문자열. llm_client 등 다른 신호원 클라이언트의
         # 모델과는 독립적이다(각자 다른 등급일 수 있음) — chat_agent 자신의 LLMConfig.model.
         self.agent_model = agent_model
+
+
+def _maybe_trigger_batch(context: ChatToolContext, trigger) -> None:
+    """`ensure_fresh(_sector)`를 상한 안에서만 부른다. 새 배치 스레드가 실제로 시작됐을 때만
+    (반환값이 Thread) 횟수를 센다 — 캐시가 신선해 아무것도 안 띄운 호출은 상한을 쓰지 않는다."""
+    limit = context.batch_trigger_limit
+    if limit is not None and context.batch_triggers_used >= limit:
+        return
+    if trigger() is not None:
+        context.batch_triggers_used += 1
 
 
 def _fetch_records(context: ChatToolContext, ticker: str, market: str):
@@ -374,7 +390,7 @@ def tool_get_market_scan_recommendations(context: ChatToolContext, market: str) 
     `refreshing`에 반영한다. 파이프라인이 한 번도 실행된 적 없어도 에러가 아니라
     정상 상태다(recommendations가 빈 배열, scanned_at이 None) — 모델이 그 상태를
     그대로 안내하면 된다."""
-    context.recommendation_coordinator.ensure_fresh(market)
+    _maybe_trigger_batch(context, lambda: context.recommendation_coordinator.ensure_fresh(market))
     scanned_at, recommendations = context.scan_cache.get_latest_recommendations(market)
     return {
         "available": True,
@@ -393,7 +409,7 @@ def tool_get_sector_recommendations(context: ChatToolContext, query: str, market
     동일해야 하지만, 그 모듈을 여기서 import하면 순환참조가 된다(그 모듈이 이미 이
     `tools.py`를 import함) — 그래서 같은 리터럴 포맷을 여기 그대로 둔다(두 쪽 다 바꿀 때
     같이 바꿔야 함, 테스트로 고정)."""
-    context.recommendation_coordinator.ensure_fresh_sector(query, market)
+    _maybe_trigger_batch(context, lambda: context.recommendation_coordinator.ensure_fresh_sector(query, market))
     scan_key = f"SECTOR:{query}:{market}"
     scanned_at, recommendations = context.scan_cache.get_latest_recommendations(scan_key)
     return {

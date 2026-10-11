@@ -27,6 +27,11 @@ Run from the project root so `.env`/`data/` resolve correctly:
 AccountState는 `run_recommendations.py`/`run_recommendations_with_signals.py`와 동일한
 이유로 placeholder다(브로커 연동 전, MVP-1(#8)에서 교체 예정).
 
+메인 루프 선택(docs/design/main-agent-migration-plan.md §4.1): `CHAT_AGENT_LOOP=deep`이면
+deepagents 기반 새 루프(`chat_agent.deep_loop`), 아니면(기본) 기존 `loop.run_turn`. deep 모드는
+시작 시 트레이싱 차단 검사와 노출 도구 검사(fail-closed)를 통과해야만 켜지고, 실패하면 경고 후
+기존 루프로 실행한다. 출력 형식은 두 루프가 같다.
+
 Prints only counts/messages — never prints OPENAI_API_KEY, DART_API_KEY,
 SEC_EDGAR_USER_AGENT, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, or ACCOUNT_EQUITY.
 """
@@ -48,7 +53,21 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 from auto_stock.chat_agent.client import OpenAIChatAgentClient
-from auto_stock.chat_agent.credentials import MAX_LLM_CALLS_PER_QUERY, load_llm_config
+from auto_stock.chat_agent.credentials import (
+    MAX_BATCH_TRIGGERS_PER_TURN,
+    MAX_LLM_CALLS_PER_QUERY,
+    load_llm_config,
+    load_loop_mode,
+)
+from auto_stock.chat_agent.deep_loop import (
+    DeepChatSession,
+    ExposureError,
+    TracingNotAllowedError,
+    check_tracing_allowed,
+    make_chat_model,
+    run_turn_deep,
+    verify_exposure,
+)
 from auto_stock.chat_agent.loop import run_turn
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.tools import ChatToolContext
@@ -135,6 +154,23 @@ def _load_sentiment_client() -> OpenAINewsSentimentClient | None:
         return None
 
 
+def _select_loop_mode() -> str:
+    try:
+        mode = load_loop_mode()
+    except ValueError as exc:
+        print(f"FAILED: {exc}")
+        sys.exit(1)
+    if mode != "deep":
+        return mode
+    try:
+        check_tracing_allowed()
+        verify_exposure()
+    except (TracingNotAllowedError, ExposureError) as exc:
+        print(f"WARNING: deep 루프를 쓸 수 없어 기존 루프로 실행합니다 — {exc}")
+        return "legacy"
+    return mode
+
+
 def main() -> None:
     try:
         agent_config = load_llm_config()
@@ -170,7 +206,10 @@ def main() -> None:
     for market in _MARKETS:
         recommendation_coordinator.ensure_fresh(market)
 
-    print("auto_stock 대화형 리서치 챗봇 — 종료하려면 'exit' 입력")
+    loop_mode = _select_loop_mode()
+    deep_session = DeepChatSession(model=make_chat_model(agent_config)) if loop_mode == "deep" else None
+
+    print(f"auto_stock 대화형 리서치 챗봇 (루프: {loop_mode}) — 종료하려면 'exit' 입력")
     previous_response_id: str | None = None
     while True:
         try:
@@ -193,14 +232,19 @@ def main() -> None:
             agent_model=agent_config.model,
             scan_cache=scan_cache,
             recommendation_coordinator=recommendation_coordinator,
+            # 기존 루프 동작은 그대로(상한 없음), deep 루프만 턴당 배치 트리거 상한(결정 D17).
+            batch_trigger_limit=MAX_BATCH_TRIGGERS_PER_TURN if deep_session is not None else None,
         )
-        text, previous_response_id = run_turn(
-            reader,
-            context,
-            user_message,
-            previous_response_id,
-            on_event=_ActivityPrinter(),
-        )
+        if deep_session is not None:
+            text = run_turn_deep(deep_session, context, user_message, on_event=_ActivityPrinter())
+        else:
+            text, previous_response_id = run_turn(
+                reader,
+                context,
+                user_message,
+                previous_response_id,
+                on_event=_ActivityPrinter(),
+            )
         print(f"bot> {text}")
 
 

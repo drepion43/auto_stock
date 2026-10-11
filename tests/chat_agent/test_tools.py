@@ -849,3 +849,72 @@ def test_tool_dispatch_maps_all_ten_schema_names_to_callables():
 
     assert set(TOOL_DISPATCH) == schema_names
     assert all(callable(fn) for fn in TOOL_DISPATCH.values())
+
+
+# --- 배치 트리거 상한(결정 D17, docs/design/main-agent-migration-plan.md §5.2) ---
+
+
+def _coordinator_starting_threads(mocker):
+    coordinator = mocker.Mock()
+    coordinator.ensure_fresh.return_value = mocker.Mock()  # Thread 반환 = 새 배치 시작
+    coordinator.ensure_fresh_sector.return_value = mocker.Mock()
+    coordinator.is_in_progress.return_value = True
+    coordinator.is_sector_in_progress.return_value = True
+    return coordinator
+
+
+def _scan_cache(mocker):
+    cache = mocker.Mock()
+    cache.get_latest_recommendations.return_value = (None, [])
+    return cache
+
+
+def test_sector_tool_starts_at_most_the_per_turn_batch_limit(mocker):
+    from auto_stock.chat_agent.tools import tool_get_sector_recommendations
+
+    coordinator = _coordinator_starting_threads(mocker)
+    context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
+
+    for query in ("로봇", "로봇 섹터", "휴머노이드"):
+        result = tool_get_sector_recommendations(context, query, "KRX")
+        assert result["available"] is True  # 상한을 넘어도 캐시 조회 자체는 정상 응답
+
+    assert coordinator.ensure_fresh_sector.call_count == 1
+
+
+def test_market_scan_and_sector_share_the_same_per_turn_limit(mocker):
+    from auto_stock.chat_agent.tools import tool_get_sector_recommendations
+
+    coordinator = _coordinator_starting_threads(mocker)
+    context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
+
+    tool_get_market_scan_recommendations(context, "KRX")
+    tool_get_sector_recommendations(context, "로봇", "KRX")
+
+    assert coordinator.ensure_fresh.call_count == 1
+    coordinator.ensure_fresh_sector.assert_not_called()
+
+
+def test_fresh_cache_does_not_consume_the_batch_limit(mocker):
+    from auto_stock.chat_agent.tools import tool_get_sector_recommendations
+
+    coordinator = _coordinator_starting_threads(mocker)
+    coordinator.ensure_fresh_sector.side_effect = [None, mocker.Mock()]  # 첫 번째는 캐시 신선 → 배치 없음
+    context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
+
+    tool_get_sector_recommendations(context, "로봇", "KRX")
+    tool_get_sector_recommendations(context, "반도체", "KRX")
+
+    assert coordinator.ensure_fresh_sector.call_count == 2
+
+
+def test_no_batch_limit_by_default_keeps_legacy_behavior(mocker):
+    from auto_stock.chat_agent.tools import tool_get_sector_recommendations
+
+    coordinator = _coordinator_starting_threads(mocker)
+    context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker))
+
+    for query in ("로봇", "반도체", "2차전지"):
+        tool_get_sector_recommendations(context, query, "KRX")
+
+    assert coordinator.ensure_fresh_sector.call_count == 3

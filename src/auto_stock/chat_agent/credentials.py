@@ -78,6 +78,30 @@ MAX_SECTOR_THEME_TICKERS = 20
 MAX_LLM_CALLS_PER_QUERY = 50
 MAX_TOOL_ITERATIONS = 5  # 한 턴 안에서 모델-도구 왕복을 허용하는 최대 라운드 수
 
+# --- 1단계: deepagents 메인 루프(docs/design/main-agent-migration-plan.md §4.1, §5) ---
+# 메인 모델 호출의 턴당 상한 — 구 루프의 MAX_TOOL_ITERATIONS와 같은 값(ModelCallLimitMiddleware run_limit).
+MAIN_AGENT_RUN_LIMIT = MAX_TOOL_ITERATIONS
+# 세션 전체 메인 모델 호출 상한(결정 D5) — 실패해서 롤백된 턴의 호출도 센다(체크포인트 밖 카운터).
+MAIN_AGENT_SESSION_CALL_LIMIT = DEFAULT_MAX_CALLS_PER_RUN
+# 마지막 응답의 실제 입력 토큰이 이 값을 넘으면 다음 턴 전에 히스토리를 압축하고 서버 체인을
+# 새로 시작한다(결정 D5) — previous_response_id 체인은 미들웨어로 줄일 수 없기 때문.
+MAIN_AGENT_INPUT_TOKEN_LIMIT = 200_000
+MAIN_AGENT_COMPACT_KEEP_TURNS = 2  # 압축 시 남기는 최근 (질문, 답변) 쌍 수
+# 한 턴이 새로 띄울 수 있는 백그라운드 추천 배치 수(결정 D17) — 배치 1회가 LLM을 최대
+# 약 268회 호출하므로, 모델이 질의 표현만 바꿔 여러 배치를 띄우는 비용 폭주를 막는다.
+MAX_BATCH_TRIGGERS_PER_TURN = 1
+
+LOOP_MODES = ("legacy", "deep")
+
+
+def load_loop_mode() -> str:
+    """`CHAT_AGENT_LOOP` 기능 플래그(기본 legacy). 알 수 없는 값은 조용히 넘기지 않고 실패한다."""
+    load_dotenv()
+    mode = os.environ.get("CHAT_AGENT_LOOP", "legacy").strip().lower()
+    if mode not in LOOP_MODES:
+        raise ValueError(f"CHAT_AGENT_LOOP must be one of {LOOP_MODES}, got {mode!r}")
+    return mode
+
 
 def load_llm_config() -> LLMConfig:
     load_dotenv()
