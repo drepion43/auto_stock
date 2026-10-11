@@ -1,4 +1,4 @@
-"""메인 대화 에이전트에게 노출하는 5개 도구의 실제 구현. `orchestrator/pipeline.py`의
+"""메인 대화 에이전트 도구들의 실제 구현(목록·스키마·설명은 `tool_registry.py`의 `TOOL_SPECS`). `orchestrator/pipeline.py`의
 `_ml_reasons`/`_llm_reasons`/`_news_reasons`/`_sentiment_reasons`와 동일한 실패격리
 원칙(절대 raise 안 함, market별 소스 분기, 실패 단계별 별도 try/except)을 재사용하지만,
 반환 형태는 `(reasons, error)` 튜플이 아니라 모델에게 그대로 JSON으로 보여줄
@@ -14,8 +14,6 @@ news-sentiment.md 참고).
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
-
-from langchain_core.tools import tool as langchain_tool
 
 from auto_stock.chat_agent.credentials import (
     ETF_COMPOSITION_LLM_CALL_ESTIMATE,
@@ -345,40 +343,14 @@ def tool_find_related_companies(context: ChatToolContext, ticker: str, market: s
     return run_find_related_companies(context.budget, context.agent_model, ticker, market, name)
 
 
-_STOCK_ANALYST_TOOL_SPECS = [
-    ("analyze_rule_engine", "규칙 기반 기술적 매매 후보(RSI/SMA 크로스 등)를 조회한다."),
-    ("analyze_ml_prediction", "ML 분류 모델의 상승확률 예측을 조회한다."),
-    ("analyze_chart_pattern", "LLM 차트 패턴 해석(방향성/신뢰도/근거)을 조회한다."),
-    ("analyze_disclosures", "최근 공식 공시(DART/EDGAR)에 대한 LLM 해석을 조회한다."),
-    ("analyze_news_sentiment", "최근 뉴스 논조에 대한 LLM 해석을 조회한다."),
-    ("analyze_position_sizing", "ATR 기반 손절/익절가·참고용 매수 수량을 조회한다."),
-]
-
-
 def _bind_stock_analyst_tools(context: ChatToolContext, ticker: str, market: str) -> list:
-    """`stock_analyst.py`는 순환 임포트를 피하려고 `tools.py`를 import하지 않는다
-    (stock_analyst.py 모듈 docstring 참고) — 대신 이 함수가 여기 정의된 6개
-    `tool_analyze_*`를 종목/시장에 클로저로 고정한, 인자 없는 langchain `@tool`로
-    감싸 `run_stock_analyst`에 전달한다. 서브에이전트 인스턴스 1개는 종목 1개만
-    다루므로 인자가 필요 없다 — 모델이 판단할 것은 "어떤 도구를 부를지"뿐이다."""
-    dispatch = {
-        "analyze_rule_engine": tool_analyze_rule_engine,
-        "analyze_ml_prediction": tool_analyze_ml_prediction,
-        "analyze_chart_pattern": tool_analyze_chart_pattern,
-        "analyze_disclosures": tool_analyze_disclosures,
-        "analyze_news_sentiment": tool_analyze_news_sentiment,
-        "analyze_position_sizing": tool_analyze_position_sizing,
-    }
-    def _make_bound_tool(fn):
-        def _bound_tool() -> dict:
-            return fn(context, ticker, market)
+    """하위 호환 별칭 — 실제 정의는 `tool_registry.bind_stock_analyst_tools`(도구 단일 레지스트리,
+    docs/design/main-agent-migration-plan.md §4.0). `recommendation_coordinator.py`와 기존 테스트가
+    이 이름을 쓰므로 남겨 둔다. `tool_registry`가 이 모듈을 import하므로 여기서는 지연 import한다."""
+    from auto_stock.chat_agent.tool_registry import bind_stock_analyst_tools
 
-        return _bound_tool
+    return bind_stock_analyst_tools(context, ticker, market)
 
-    bound = []
-    for name, description in _STOCK_ANALYST_TOOL_SPECS:
-        bound.append(langchain_tool(name, description=description)(_make_bound_tool(dispatch[name])))
-    return bound
 
 
 def tool_stock_analyst(context: ChatToolContext, ticker: str, market: str) -> dict:
@@ -489,18 +461,11 @@ def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: 
     }
 
 
-TOOL_DISPATCH = {
-    "resolve_ticker": tool_resolve_ticker,
-    "analyze_rule_engine": tool_analyze_rule_engine,
-    "analyze_ml_prediction": tool_analyze_ml_prediction,
-    "analyze_chart_pattern": tool_analyze_chart_pattern,
-    "analyze_disclosures": tool_analyze_disclosures,
-    "analyze_news_sentiment": tool_analyze_news_sentiment,
-    "analyze_position_sizing": tool_analyze_position_sizing,
-    "get_price_data": tool_get_price_data,
-    "find_related_companies": tool_find_related_companies,
-    "stock_analyst": tool_stock_analyst,
-    "get_market_scan_recommendations": tool_get_market_scan_recommendations,
-    "get_sector_recommendations": tool_get_sector_recommendations,
-    "analyze_etf_composition": tool_analyze_etf_composition,
-}
+def __getattr__(name: str):
+    """`TOOL_DISPATCH` 하위 호환(loop.py·기존 테스트) — 실제 정의는 `tool_registry`. 모듈 수준
+    `__getattr__`(PEP 562)로 처음 접근할 때 지연 import해 순환 import를 피한다."""
+    if name == "TOOL_DISPATCH":
+        from auto_stock.chat_agent.tool_registry import TOOL_DISPATCH
+
+        return TOOL_DISPATCH
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "analyze_rule_engine",
+    "description": "규칙 기반 기술적 매매 후보(RSI/SMA 크로스 등)를 조회한다.",
+    "args": {}
+  },
+  {
+    "name": "analyze_ml_prediction",
+    "description": "ML 분류 모델의 상승확률 예측을 조회한다.",
+    "args": {}
+  },
+  {
+    "name": "analyze_chart_pattern",
+    "description": "LLM 차트 패턴 해석(방향성/신뢰도/근거)을 조회한다.",
+    "args": {}
+  },
+  {
+    "name": "analyze_disclosures",
+    "description": "최근 공식 공시(DART/EDGAR)에 대한 LLM 해석을 조회한다.",
+    "args": {}
+  },
+  {
+    "name": "analyze_news_sentiment",
+    "description": "최근 뉴스 논조에 대한 LLM 해석을 조회한다.",
+    "args": {}
+  },
+  {
+    "name": "analyze_position_sizing",
+    "description": "ATR 기반 손절/익절가·참고용 매수 수량을 조회한다.",
+    "args": {}
+  }
+]
