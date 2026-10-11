@@ -1,4 +1,4 @@
-"""숏리스트(①단계) — 규칙엔진 ∪ ML 방향성 신호(recommendation-synthesis-plan.md §2).
+"""숏리스트(①단계) — 규칙엔진 ∪ ML 방향성 신호(recommendation-synthesis.md §2).
 
 규칙엔진 후보만 숏리스트로 쓰면 AND 게이트가 되어 ML만 잡는 종목을 영구히 놓친다 —
 그래서 둘 중 하나라도 방향성 있는 의견을 내면 숏리스트에 넣는다(OR). 둘 다 LLM을 쓰지

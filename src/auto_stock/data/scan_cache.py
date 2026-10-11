@@ -166,7 +166,7 @@ class MarketScanCache:
         return meta_row[0], explanations
 
     def put_recommendations(self, scan_key: str, recommendations: list[dict]) -> datetime:
-        """recommendation-synthesis-plan.md §6 — `scan_key`는 전체시장이면 market 값
+        """recommendation-synthesis.md §6 — `scan_key`는 전체시장이면 market 값
         그대로("KRX"/"NASDAQ"), 섹터면 합성키("SECTOR:로봇:KRX")를 그대로 재사용한다
         (별도 컬럼 신설 대신 `market` 컬럼과 동일한 합성키 전략, 마이그레이션 최소화).
         `put_scan`과 동일하게 DELETE/INSERT×N/meta upsert를 하나의 트랜잭션+락으로
@@ -222,7 +222,7 @@ class MarketScanCache:
     def put_sector_tickers(
         self, sector_query: str, market: str, tickers: list[str], confidence_labels: list[str]
     ) -> datetime:
-        """recommendation-synthesis-plan.md §6 — 섹터/테마 해석 결과(종목 리스트 +
+        """recommendation-synthesis.md §6 — 섹터/테마 해석 결과(종목 리스트 +
         종목별 confirmed/inferred 레이블)를 캐싱한다. 재해석(1차 LLM 분류 또는 2차
         LLM 제안+뉴스검증)을 매 질의마다 다시 돌리지 않기 위함 — `universe_cache`와
         동일한 단일 행 upsert 패턴(배치 적재가 아니라 트랜잭션 불필요)."""

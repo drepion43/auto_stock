@@ -1,4 +1,4 @@
-"""recommendation-synthesis-plan.md §1/§7 확정 — RecommendationCoordinator는
+"""recommendation-synthesis.md §1/§7 확정 — RecommendationCoordinator는
 ScanCoordinator와 동일한 "stale 체크 + in-progress 추적 + 백그라운드 스레드" 패턴을
 별도 클래스로 구현한다(scan_market의 계약을 안 건드린다는 §2 원칙과 일관). sleep 기반
 타이밍은 쓰지 않고 threading.Event로 결정적으로 제어한다(test_scan_coordinator.py와
@@ -108,7 +108,7 @@ def test_ensure_fresh_runs_full_pipeline_and_persists_result(mocker, cache, scan
 
 def test_shortlist_is_capped_and_ranked_before_deep_scan(mocker, cache, scan_cache, account):
     """숏리스트 캡(기본 20)보다 많으면 상위만 ②단계로 넘겨야 한다 — 규칙엔진 후보
-    존재 + |probability_up - 0.5| 합산 점수 기준(recommendation-synthesis-plan.md §2)."""
+    존재 + |probability_up - 0.5| 합산 점수 기준(recommendation-synthesis.md §2)."""
     low_score = _entry("000660", probability_up=0.51)  # 점수 거의 0
     high_score = _entry("005930", rule_candidate=Candidate(ticker="005930", market="KRX", action="BUY", reasons=["RSI"]), probability_up=0.9)
     mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=["000660", "005930"])
@@ -300,7 +300,7 @@ def test_sector_resolution_failure_is_swallowed_and_leaves_retriable(mocker, cac
 
 def test_sector_and_market_scan_keys_do_not_collide(mocker, cache, scan_cache, account):
     """market="KRX" 전체 유니버스 캐시와 "SECTOR:로봇:KRX" 섹터 캐시가 같은 테이블을
-    쓰므로 서로 침범하지 않는지 확인한다(recommendation-synthesis-plan.md §6)."""
+    쓰므로 서로 침범하지 않는지 확인한다(recommendation-synthesis.md §6)."""
     scan_cache.put_recommendations("KRX", [_recommendation("005930")])
     scan_cache.put_recommendations("SECTOR:로봇:KRX", [_recommendation("277810")])
 

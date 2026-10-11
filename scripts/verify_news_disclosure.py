@@ -1,5 +1,5 @@
 """Manual verification: confirms the 뉴스/공시 분석 에이전트(#4) wiring end-to-end — DART(KRX)
-and EDGAR(NASDAQ) both (docs/design/news-disclosure-nasdaq-plan.md).
+and EDGAR(NASDAQ) both (docs/design/news-disclosure.md).
 
 Run from the project root so `.env` resolves correctly:
     .venv/Scripts/python scripts/verify_news_disclosure.py                          (Windows, KRX/DART real calls)
@@ -18,7 +18,7 @@ Two independent axes:
   강제한 `OpenAIDisclosureClient` → `analyze()` 실행 후 구조화 결과 출력.
 
 샘플 종목에 최근 공시가 없으면(`analyze()`가 `None` 반환) 정상 흐름으로 안내하고 실패
-취급하지 않는다(공시가 없는 경우가 정상, docs/design/news-disclosure-plan.md 핵심 설계
+취급하지 않는다(공시가 없는 경우가 정상, docs/design/news-disclosure.md 핵심 설계
 결정 5).
 
 Prints only counts/labels/rationale text — never prints DART_API_KEY, SEC_EDGAR_USER_AGENT,

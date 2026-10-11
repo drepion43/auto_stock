@@ -2,8 +2,8 @@
 
 `sentiment` 필드명은 `news_disclosure/schema.py::DisclosureRead.market_impact`와 의도적으로
 다르다 — 공시는 논조 없는 사실 통지라 "영향 해석"이지만, 뉴스 기사는 실제로 논조·어조가
-있으므로 진짜 감성분석이다(docs/design/news-sentiment-plan.md 핵심 설계 결정 1,
-news-disclosure-plan.md 핵심 설계 결정 1이 예약해둔 이름 구분). `confidence`가 서수인 이유,
+있으므로 진짜 감성분석이다(docs/design/news-sentiment.md 핵심 설계 결정 1,
+news-disclosure.md 핵심 설계 결정 1이 예약해둔 이름 구분). `confidence`가 서수인 이유,
 목표가/수량 필드가 없는 이유는 llm_chart_analyst/schema.py의 동일 근거를 그대로 따른다
 (중복 설명 생략).
 """

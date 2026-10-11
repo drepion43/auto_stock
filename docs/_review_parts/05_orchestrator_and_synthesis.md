@@ -13,7 +13,7 @@
 ## 전체 그림 — 이 레포에는 서로 다른 두 종류의 파이프라인이 있다
 
 1. **MVP-0 알림 파이프라인** (`pipeline.py::run_recommendation_pipeline`) — 호출자가 명시적으로 지정한 소수의 워치리스트 티커를 돌며, 신호가 있으면 **텔레그램으로 실제 알림을 보낸다**. `scripts/run_recommendations*.py` 계열이 이 경로를 쓴다.
-2. **전체 유니버스 배치 추천 파이프라인** — 챗봇이 "지금 추천할 만한 종목 있어?" 질의에 즉답하기 위해 백그라운드에서 전체 시장(또는 섹터)을 훑어 결과를 캐시에 적재하는 경로다. 세 단계로 나뉜다(각 단계는 `docs/design/`에 없는 `recommendation-synthesis-plan.md`라는 계획 문서를 참조하는 주석이 코드 곳곳에 있는데, **그 파일 자체는 현재 디스크에 존재하지 않는다** — 삭제됐거나 다른 이름으로 옮겨진 것으로 보이며, 설계 결정 근거는 각 코드 docstring에 남은 설명으로만 추적 가능하다):
+2. **전체 유니버스 배치 추천 파이프라인** — 챗봇이 "지금 추천할 만한 종목 있어?" 질의에 즉답하기 위해 백그라운드에서 전체 시장(또는 섹터)을 훑어 결과를 캐시에 적재하는 경로다. 세 단계로 나뉜다(각 단계는 `docs/design/`에 없는 `recommendation-synthesis.md`라는 계획 문서를 참조하는 주석이 코드 곳곳에 있는데, **그 파일 자체는 현재 디스크에 존재하지 않는다** — 삭제됐거나 다른 이름으로 옮겨진 것으로 보이며, 설계 결정 근거는 각 코드 docstring에 남은 설명으로만 추적 가능하다):
    - **① 숏리스트** (`shortlist.py::build_shortlist`) — 규칙엔진 ∪ ML 중 하나라도 방향성 의견을 내면 통과시키는 저비용 1차 필터.
    - **② 심층분석(딥다이브)** (`deep_scan.py::run_deep_scan`) — 숏리스트에 오른 종목마다 기존 `stock_analyst` deepagents 서브에이전트를 재사용해 자율적으로 신호를 골라 심층 판단.
    - **③ 종합(synthesis)** (`recommendation_synthesis/synthesizer.py::run_recommendation_synthesis`) — 숏리스트 전체의 심층판단을 한 번에 비교해 상위 N개만 순위와 근거를 매기는 세 번째 deepagents 서브에이전트.

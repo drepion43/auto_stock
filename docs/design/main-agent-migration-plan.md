@@ -2,7 +2,7 @@
 
 > 작성일: 2026-10-11 (리뷰 3종 반영 최종본: feasibility / cost-security / consistency)
 > 상태: **승인됨 (2026-10-11)** — 사용자가 §11 D1~D19 전부 추천안대로 승인("추천안대로 진행해줘"). 착수 범위 D1(a): 체크포인트 커밋 → 스파이크 → 0단계 → 1단계. 2·3단계는 트리거 기반으로 보류.
-> 관련 문서: `chat-agent-plan.md`(핵심 설계 결정 1·5, Stage E 구현 결과), `chat-agent-architecture-review.md`(§7 agent-as-tool), `multi-asset-automation-roadmap.md`(결론 요약), `recommendation-synthesis-plan.md`, `etf-composition-analysis.md`, `docs/PRD.md` §4(2026-08-29 노트), `docs/_review_parts/06_chat_agent.md`
+> 관련 문서: `_review_parts/06_chat_agent.md`(핵심 설계 결정 1·5, Stage E 구현 결과), `main-agent-migration-plan.md`(§7 agent-as-tool), `PRD.md`(결론 요약), `recommendation-synthesis.md`, `etf-composition-analysis.md`, `docs/PRD.md` §4(2026-08-29 노트), `docs/_review_parts/06_chat_agent.md`
 
 ## 요약 (사용자 검토용)
 
@@ -62,9 +62,9 @@
 
 메인 루프를 LangGraph/deepagents 없이 유지한다는 결정은 **네 차례** 내려졌다.
 
-1. `chat-agent-plan.md` 핵심 설계 결정 1(초기 설계).
-2. 2026-08-29 agent-as-tool 도입 시(`chat-agent-architecture-review.md` §7). `PRD.md` §4의 "아키텍처 구체화(2026-08-29)" 노트도 "향후 대화형 챗봇의 메인 에이전트까지 네이티브 tool-calling"이라고 못박았다.
-3. **Stage E 구현 결과(2026-09-06)와 `multi-asset-automation-roadmap.md`** — 가장 직접적인 선행 결정이다. 결론은 "어떤 도구를 부를지는 native tool-calling(parallel function call 포함)만으로 충분히 자율적이며, **새 자산군/도구를 추가할 때 필요한 건 새 tool/서브에이전트뿐이고 메인 루프 코드는 변경 불필요**"였다.
+1. `_review_parts/06_chat_agent.md` 핵심 설계 결정 1(초기 설계).
+2. 2026-08-29 agent-as-tool 도입 시(`main-agent-migration-plan.md` §7). `PRD.md` §4의 "아키텍처 구체화(2026-08-29)" 노트도 "향후 대화형 챗봇의 메인 에이전트까지 네이티브 tool-calling"이라고 못박았다.
+3. **Stage E 구현 결과(2026-09-06)와 `PRD.md`** — 가장 직접적인 선행 결정이다. 결론은 "어떤 도구를 부를지는 native tool-calling(parallel function call 포함)만으로 충분히 자율적이며, **새 자산군/도구를 추가할 때 필요한 건 새 tool/서브에이전트뿐이고 메인 루프 코드는 변경 불필요**"였다.
 4. 2026-10-05·10-11 서브에이전트 추가 시("메인 에이전트 자신은 여전히 LangGraph를 쓰지 않는다").
 
 그 결정이 기댄 전제와 지금의 사실을 나란히 놓는다.
@@ -75,7 +75,7 @@
 | (roadmap) 도구 추가는 메인 루프 변경 없이 가능 | **여전히 기술적으로 참이다.** 도구 추가 비용은 루프가 아니라 4곳 등록 구조에서 나오고, 그것은 0단계로 해결된다. 이 결론을 무효로 만드는 새 기술적 사실은 **없다** |
 | (결정 5) 멀티턴은 히스토리 재전송으로 충분, "LangGraph 체크포인트 시스템 같은 것은 필요 없다" | **여전히 참이다.** 현행 구현은 실제로는 재전송이 아니라 서버 측 `previous_response_id`다(loop.py:7-12). checkpointer는 독립적 필요가 아니라 `create_deep_agent`를 쓸 때 따라올 수 있는 부수 비용이다. 그래서 §6은 **체크포인터 없는 방식**을 1순위 후보로 둔다(D4) |
 | 프레임워크를 들이면 프로젝트에 패러다임이 하나 더 생긴다 | 이미 deepagents 서브에이전트 4개(설계 문서 기준: related, stock_analyst, recommendation_synthesis, etf_composition)와 sector_resolution 내부 호출 1곳, 즉 **`create_deep_agent` 호출부 5곳**이 있다. 메인 루프만 다른 패러다임인 상태다 |
-| `chat-agent-plan.md`의 "LangGraph가 정당화되는 시점"(복잡한 상태 유지, 사이클 있는 제어 흐름) | 2·3단계(도메인 서브에이전트, todo)가 생기면 해당될 수 있지만, **두 단계 모두 트리거가 아직 오지 않았다** |
+| `_review_parts/06_chat_agent.md`의 "LangGraph가 정당화되는 시점"(복잡한 상태 유지, 사이클 있는 제어 흐름) | 2·3단계(도메인 서브에이전트, todo)가 생기면 해당될 수 있지만, **두 단계 모두 트리거가 아직 오지 않았다** |
 
 **정직한 결론**: 이번 번복은 "같은 기준을 다시 적용했더니 필요가 생겼다"가 **아니다**. **사용자의 전략적 결정(2026-10-11)에 따른 선제 전환이며, 기술적 트리거는 아직 충족되지 않았다.** 1단계 자체의 기능상 이득은 거의 없다(같은 일을 하는 루프를 바꿔 끼우는 것). 이득은 2·3단계를 붙일 때 바닥 공사를 미리 해 둔다는 데 있다. 또 2단계의 추천 구현(타입 인자를 지키는 agent-as-tool)은 현행 루프에서도 가능하므로, 1단계의 고유 이득은 사실상 3단계(TodoListMiddleware)와 미들웨어 생태계(호출 상한, 스트리밍)를 그대로 쓸 수 있다는 점에 한정된다. 그래서 D1에 "0단계만 지금, 1단계는 트리거 시"를 동등한 선택지로 둔다.
 
@@ -691,10 +691,10 @@ def run_turn_deep(session, context, user_message, on_event=None) -> str:
 
 | 문서 | 갱신 내용 | 시점 |
 |---|---|---|
-| `docs/design/chat-agent-plan.md` 핵심 설계 결정 1 + Stage E 구현 결과 | "결정 갱신 (2026-10-xx) — 메인 대화 에이전트 deepagents 전환" 블록: §1.2의 정직한 번복 근거(사용자 전략 결정, 기술 트리거 미충족), 감수한 비용, 이 문서 링크 | 1단계 착수 시 |
-| `docs/design/chat-agent-plan.md` 핵심 설계 결정 5, "이번에 하지 않는 것" 표 | D4 결과 기록(①② 채택 시 "결정 5 유지", ③ 채택 시 번복 주석) | 1단계 완료 시 |
-| `docs/design/chat-agent-architecture-review.md` §7 결론 표 | "메인 대화 에이전트 자체: 네이티브 루프 유지" 행에 번복 주석 | 1단계 착수 시 |
-| `docs/design/multi-asset-automation-roadmap.md` 결론 표·"왜 메인 챗봇 루프와 분리해서 생각하는가" 절 | "메인 루프 코드 변경 불필요" 결론이 기술적으로는 여전히 참이나, 사용자 결정으로 선제 전환했다는 번복 주석 | 1단계 착수 시 |
+| `docs/_review_parts/06_chat_agent.md` 핵심 설계 결정 1 + Stage E 구현 결과 | "결정 갱신 (2026-10-xx) — 메인 대화 에이전트 deepagents 전환" 블록: §1.2의 정직한 번복 근거(사용자 전략 결정, 기술 트리거 미충족), 감수한 비용, 이 문서 링크 | 1단계 착수 시 |
+| `docs/_review_parts/06_chat_agent.md` 핵심 설계 결정 5, "이번에 하지 않는 것" 표 | D4 결과 기록(①② 채택 시 "결정 5 유지", ③ 채택 시 번복 주석) | 1단계 완료 시 |
+| `docs/design/main-agent-migration-plan.md` §7 결론 표 | "메인 대화 에이전트 자체: 네이티브 루프 유지" 행에 번복 주석 | 1단계 착수 시 |
+| `docs/PRD.md` 결론 표·"왜 메인 챗봇 루프와 분리해서 생각하는가" 절 | "메인 루프 코드 변경 불필요" 결론이 기술적으로는 여전히 참이나, 사용자 결정으로 선제 전환했다는 번복 주석 | 1단계 착수 시 |
 | `docs/PRD.md` §4 "아키텍처 구체화(2026-08-29)" 노트 | "향후 대화형 챗봇의 메인 에이전트까지 네이티브 tool-calling" 문구에 번복 주석 | 1단계 착수 시 |
 | `CLAUDE.md`, `AGENTS.md` "Architecture update" 절 | 메인 에이전트 create_deep_agent 기반, 도구 레지스트리 위치, 플래그, deepagents 사용 범위. 서브에이전트 숫자를 "설계 기준 4개 + sector_resolution 내부 호출 1곳 = 호출부 5곳"으로 통일(현재 CLAUDE.md는 "3개") | 0단계·1단계 완료 시 |
 | `docs/_review_parts/06_chat_agent.md` | tool_registry, deep_loop, agent_middleware, harness 리뷰 항목, docstring 숫자 불일치 해소 | 각 단계 완료 시 |

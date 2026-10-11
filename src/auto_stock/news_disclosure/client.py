@@ -1,5 +1,5 @@
 """`openai` SDK를 import하는 유일한 파일. llm_chart_analyst/client.py와 동일한 예외 매핑
-표를 그대로 복제한다(코드는 공유하지 않음 — news-disclosure-plan.md 핵심 설계 결정 7).
+표를 그대로 복제한다(코드는 공유하지 않음 — news-disclosure.md 핵심 설계 결정 7).
 모든 SDK 예외를 `NewsDisclosureError`로 통일한다.
 
 포착 순서가 중요하다: `APITimeoutError` ⊂ `APIConnectionError`, `RateLimitError`/

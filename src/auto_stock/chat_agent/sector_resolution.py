@@ -1,5 +1,5 @@
 """섹터/테마 질의("로봇섹터 추천해줄만한 거 있어?") → 종목 리스트 해석
-(recommendation-synthesis-plan.md §5). 2단계 하이브리드:
+(recommendation-synthesis.md §5). 2단계 하이브리드:
 
 1차(이 파일, 완성): `data/sources/sector_classification.py`의 공식 업종명 목록 중
 하나로 질의를 분류하는 **닫힌 선택지 분류** — 자유 생성이 아니라 주어진 목록 중

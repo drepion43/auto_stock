@@ -215,7 +215,7 @@ def test_ml_prediction_failure_still_sends_notification_and_records_error(mocker
     assert kwargs["extra_reasons"] == []
 
 
-# --- LLM #3 wiring (Phase 3, docs/design/llm-chart-analyst-plan.md "오케스트레이터 통합") ---
+# --- LLM #3 wiring (Phase 3, docs/design/llm-chart-analyst.md "오케스트레이터 통합") ---
 
 
 def test_pipeline_without_any_auxiliary_signal_behaves_identically_to_before(mocker):
@@ -412,7 +412,7 @@ def test_both_failures_record_two_errors_and_still_send(mocker):
     assert kwargs["extra_reasons"] == []
 
 
-# --- 뉴스/공시 #4 wiring (Phase 3, docs/design/news-disclosure-phase3-plan.md) ---
+# --- 뉴스/공시 #4 wiring (Phase 3, docs/design/news-disclosure.md) ---
 
 
 def test_pipeline_with_news_client_only_passes_news_reasons(mocker):
@@ -491,7 +491,7 @@ def test_pipeline_with_ml_llm_and_news_merges_reasons_in_order(mocker):
     ]
 
 
-# --- EDGAR(나스닥) market 분기 (docs/design/news-disclosure-nasdaq-plan.md 핵심 설계 결정 4) ---
+# --- EDGAR(나스닥) market 분기 (docs/design/news-disclosure.md 핵심 설계 결정 4) ---
 
 
 def test_krx_ticker_uses_dart_not_edgar(mocker):
@@ -757,7 +757,7 @@ def test_all_three_signal_failures_record_three_errors_and_still_send(mocker):
     assert kwargs["extra_reasons"] == []
 
 
-# --- 뉴스 감성분석 #4-뉴스 wiring (docs/design/news-sentiment-plan.md) ---
+# --- 뉴스 감성분석 #4-뉴스 wiring (docs/design/news-sentiment.md) ---
 
 
 def test_pipeline_with_sentiment_client_only_passes_sentiment_reasons(mocker):

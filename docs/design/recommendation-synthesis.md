@@ -1,6 +1,6 @@
 # 추천 질의 재설계 — 숏리스트(규칙엔진∪ML) + 병렬 심층분석 종합, 섹터 질의 지원
 
-> `chat-agent-plan.md`가 확정한 "필요한 신호만 골라 병렬 호출 → 종합 답변"이라는 큰 그림은 **종목이 특정된 질의**(`stock_analyst`)에만 구현돼 있다. 이 문서는 그 그림을 "종목 미지정 추천 질의"(`get_market_scan_recommendations`)와 "섹터 지정 추천 질의"(신규)에도 확장하는 설계를 다룬다 — 실행 가능한 수준의 상세 계획이며, 착수 전 사용자 확인이 필요한 지점은 각 절에 **[결정 필요]**로 표시했다.
+> `_review_parts/06_chat_agent.md`가 확정한 "필요한 신호만 골라 병렬 호출 → 종합 답변"이라는 큰 그림은 **종목이 특정된 질의**(`stock_analyst`)에만 구현돼 있다. 이 문서는 그 그림을 "종목 미지정 추천 질의"(`get_market_scan_recommendations`)와 "섹터 지정 추천 질의"(신규)에도 확장하는 설계를 다룬다 — 실행 가능한 수준의 상세 계획이며, 착수 전 사용자 확인이 필요한 지점은 각 절에 **[결정 필요]**로 표시했다.
 
 ## 배경
 
@@ -101,9 +101,9 @@ class TickerJudgment:
 
 ### 4. ③단계(종합) — **[결정 변경, 2026-10-05 사용자 확정] plain function이 아니라 3번째 deepagents 서브에이전트**
 
-직전엔 "입력/출력이 고정돼 있어 더 조사할 게 없다"는 이유로 plain function을 택했지만, **사용자가 ③단계에도 agent 자율성을 보장하길 원해 번복**됐다 — 단, "입력/출력이 고정"이라는 전제 자체가 바뀐다: ③단계 agent는 순위를 매기다가 **두 종목(예: 3위·4위) 간 우열이 애매하면, 그 종목에 대해 `stock_analyst`를 다시 호출해 추가 증거를 확보한 뒤 최종 순위를 확정**할 수 있다. 이건 "스스로 몇 단계를 더 쓸지 판단"하는 정확히 그 agent 정당화 기준(`chat-agent-plan.md` §2)을 충족하므로, 이번엔 plain function이 아니라 deepagents가 맞다.
+직전엔 "입력/출력이 고정돼 있어 더 조사할 게 없다"는 이유로 plain function을 택했지만, **사용자가 ③단계에도 agent 자율성을 보장하길 원해 번복**됐다 — 단, "입력/출력이 고정"이라는 전제 자체가 바뀐다: ③단계 agent는 순위를 매기다가 **두 종목(예: 3위·4위) 간 우열이 애매하면, 그 종목에 대해 `stock_analyst`를 다시 호출해 추가 증거를 확보한 뒤 최종 순위를 확정**할 수 있다. 이건 "스스로 몇 단계를 더 쓸지 판단"하는 정확히 그 agent 정당화 기준(`_review_parts/06_chat_agent.md` §2)을 충족하므로, 이번엔 plain function이 아니라 deepagents가 맞다.
 
-**이 프로젝트에 3번째 deepagents 서브에이전트가 생긴다** — 지금까지는 정확히 2개(`find_related_companies`, `stock_analyst`)로 고정돼 있었다(`chat-agent-plan.md` 결정 1). `chat-agent-plan.md`에도 이 사실을 반영하는 결정 갱신이 필요하다.
+**이 프로젝트에 3번째 deepagents 서브에이전트가 생긴다** — 지금까지는 정확히 2개(`find_related_companies`, `stock_analyst`)로 고정돼 있었다(`_review_parts/06_chat_agent.md` 결정 1). `_review_parts/06_chat_agent.md`에도 이 사실을 반영하는 결정 갱신이 필요하다.
 
 ```python
 # recommendation_synthesis/synthesizer.py (신규 모듈)

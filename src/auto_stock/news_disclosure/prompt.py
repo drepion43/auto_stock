@@ -4,7 +4,7 @@
 전자 3개는 환각 방어(llm_chart_analyst/prompt.py와 동일 원칙, PRD §10), `action` 부재는
 동조 방어를 함수 시그니처 수준에서 못박는다. 개별 공시의 접수일도 절대 날짜가 아니라
 `as_of` 기준 D-N 상대 오프셋으로만 렌더링한다 — llm_chart_analyst가 봉 날짜 대신 t-N
-오프셋을 쓴 것과 같은 이유(news-disclosure-plan.md 핵심 설계 결정 2 연장).
+오프셋을 쓴 것과 같은 이유(news-disclosure.md 핵심 설계 결정 2 연장).
 """
 
 from auto_stock.news_disclosure.models import DisclosureSummary

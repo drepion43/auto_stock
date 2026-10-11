@@ -1,6 +1,6 @@
 # 뉴스/공시 분석 에이전트 (#4) — 구현 결과
 
-> `docs/design/news-disclosure-plan.md`(사전 계획, DART/KRX)과 `docs/design/news-disclosure-nasdaq-plan.md`(EDGAR/NASDAQ 확장 계획)의 실제 구현 결과 기록. Phase 0~4(DART) + 나스닥 확장 Phase 1~3(EDGAR) 전체 완료.
+> `docs/design/news-disclosure.md`(사전 계획, DART/KRX)과 `docs/design/news-disclosure.md`(EDGAR/NASDAQ 확장 계획)의 실제 구현 결과 기록. Phase 0~4(DART) + 나스닥 확장 Phase 1~3(EDGAR) 전체 완료.
 
 ## 목적·입출력
 
@@ -27,15 +27,15 @@
 | `client.py` | `OpenAIDisclosureClient` — `openai`를 import하는 유일한 파일 |
 | `analyst.py` | `analyze(client, disclosures, ticker, market, as_of)`, `to_reasons(analysis, action)` |
 
-계획서의 7개 핵심 설계 결정("감성분석"이 아닌 "공시 영향 해석", 보고서명+메타데이터만 입력, corp_code 매핑을 데이터 수집 계층 확장으로 분류, `extra_reasons` 경유, 공시 없음은 정상, DART/LLM 독립 실패격리, SDK 직접 호출)은 코드로 그대로 구현됐다 — 상세 근거는 `news-disclosure-plan.md` 참고, 여기서는 중복 서술하지 않는다.
+계획서의 7개 핵심 설계 결정("감성분석"이 아닌 "공시 영향 해석", 보고서명+메타데이터만 입력, corp_code 매핑을 데이터 수집 계층 확장으로 분류, `extra_reasons` 경유, 공시 없음은 정상, DART/LLM 독립 실패격리, SDK 직접 호출)은 코드로 그대로 구현됐다 — 상세 근거는 `news-disclosure.md` 참고, 여기서는 중복 서술하지 않는다.
 
 ## 오케스트레이터 통합
 
 `orchestrator/pipeline.py`에 `news_client: DisclosureReader | None = None` 파라미터 추가. 분기 조건은 `ml_model is None and llm_client is None and news_client is None`(3항)일 때만 기존 2-위치인자 `generate_explanation` 호출을 보존(회귀 잠금). `_news_reasons` 헬퍼는 절대 raise하지 않고 `([], str(exc))`를 반환하되, 공시 조회 실패와 LLM 해석 실패를 별도 `try/except`로 감싸 각각 `"DART 조회 실패: "`/`"EDGAR 조회 실패: "`/`"LLM 공시해석 실패: "` 접두사를 스스로 붙인다 — `_ml_reasons`/`_llm_reasons`(호출부에서 접두사를 붙임)와 다른 이 함수만의 특징이다(두 단계 외부 호출을 체이닝하기 때문).
 
-**시장별 소스 분기**: `_news_reasons`는 `_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}`로 market에 따라 `resolve_corp_code`/`fetch_disclosures`(KRX) 또는 `resolve_cik`/`fetch_filings`(NASDAQ)를 호출한다 — 해석 계층(`analyze_disclosures`/`to_disclosure_reasons`)은 시장과 무관하게 완전히 동일한 코드가 재사용된다. 별도 헬퍼로 쪼개지 않고 이 함수 안에서 분기한 이유는 `_ml_reasons`/`_llm_reasons`/`_news_reasons`를 애초에 3개로 분리했던 것과 다른 판단이기 때문이다 — 저 셋은 서로 다른 신호원이지만, DART/EDGAR는 같은 신호원(공시)의 시장별 소스 차이일 뿐이다(`docs/design/news-disclosure-nasdaq-plan.md` 핵심 설계 결정 4). 미등록 종목(예: DART에 없는 나스닥 티커, EDGAR에 없는 한국 티커)은 `resolve_corp_code`/`resolve_cik`가 `None`을 반환해 조회 함수 자체가 호출되지 않고 조용히 스킵된다(에러 아님). `extra_reasons` 병합 순서는 ML → LLM차트 → 뉴스/공시(항상 마지막).
+**시장별 소스 분기**: `_news_reasons`는 `_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}`로 market에 따라 `resolve_corp_code`/`fetch_disclosures`(KRX) 또는 `resolve_cik`/`fetch_filings`(NASDAQ)를 호출한다 — 해석 계층(`analyze_disclosures`/`to_disclosure_reasons`)은 시장과 무관하게 완전히 동일한 코드가 재사용된다. 별도 헬퍼로 쪼개지 않고 이 함수 안에서 분기한 이유는 `_ml_reasons`/`_llm_reasons`/`_news_reasons`를 애초에 3개로 분리했던 것과 다른 판단이기 때문이다 — 저 셋은 서로 다른 신호원이지만, DART/EDGAR는 같은 신호원(공시)의 시장별 소스 차이일 뿐이다(`docs/design/news-disclosure.md` 핵심 설계 결정 4). 미등록 종목(예: DART에 없는 나스닥 티커, EDGAR에 없는 한국 티커)은 `resolve_corp_code`/`resolve_cik`가 `None`을 반환해 조회 함수 자체가 호출되지 않고 조용히 스킵된다(에러 아님). `extra_reasons` 병합 순서는 ML → LLM차트 → 뉴스/공시(항상 마지막).
 
-`scripts/verify_news_disclosure.py`(dry-run/실호출 2모드, `NEWS_VERIFY_MARKET`으로 KRX/NASDAQ 선택)와 `scripts/run_recommendations_with_signals.py`(`news_client` 배선 추가)도 함께 구현됐다 — 각각 `docs/design/news-disclosure-phase3-plan.md` §5/§6, `docs/design/news-disclosure-nasdaq-plan.md` 참고.
+`scripts/verify_news_disclosure.py`(dry-run/실호출 2모드, `NEWS_VERIFY_MARKET`으로 KRX/NASDAQ 선택)와 `scripts/run_recommendations_with_signals.py`(`news_client` 배선 추가)도 함께 구현됐다 — 각각 `docs/design/news-disclosure.md` §5/§6, `docs/design/news-disclosure.md` 참고.
 
 ## `code-reviewer` + `security-reviewer` 리뷰 결과 반영 (Phase 4)
 
@@ -62,7 +62,7 @@ CRITICAL 1건 + HIGH 1건 + MEDIUM 2건, 전부 TDD로 수정. LOW 3건은 낮�
 
 ## EDGAR(나스닥) 확장 리뷰 결과 반영
 
-DART 완료 후 `docs/design/news-disclosure-nasdaq-plan.md`에 따라 `edgar_source.py` + `_news_reasons` market 분기를 구현하고 동일하게 `code-reviewer`+`security-reviewer` 병렬 리뷰를 거쳤다. CRITICAL/HIGH 없음. MEDIUM 1건 + LOW 3건(코드 리뷰 2건 + 보안 리뷰 공통 지적 1건, 중복 제외) 발견, MEDIUM과 이번에 반영하기로 한 LOW 2건은 TDD로 수정. 리뷰 반영 전 283개 → 반영 후 **284개**로 회귀 확인.
+DART 완료 후 `docs/design/news-disclosure.md`에 따라 `edgar_source.py` + `_news_reasons` market 분기를 구현하고 동일하게 `code-reviewer`+`security-reviewer` 병렬 리뷰를 거쳤다. CRITICAL/HIGH 없음. MEDIUM 1건 + LOW 3건(코드 리뷰 2건 + 보안 리뷰 공통 지적 1건, 중복 제외) 발견, MEDIUM과 이번에 반영하기로 한 LOW 2건은 TDD로 수정. 리뷰 반영 전 283개 → 반영 후 **284개**로 회귀 확인.
 
 **MEDIUM**
 1. **Form 3/4/5 정정판(`"3/A"`/`"4/A"`/`"5/A"`)이 필터를 우회했음** — `_EXCLUDED_FORM_TYPES`가 정확 문자열 일치(`form in _EXCLUDED_FORM_TYPES`)라 정정판은 걸러지지 않아, 애초에 필터가 막으려던 노이즈(임원 지분변동 신고)가 정정판 형태로 다시 새어 들어올 수 있었다. `form.split("/")[0] in _EXCLUDED_FORM_TYPES`로 접두사 비교하도록 수정.

@@ -1,5 +1,5 @@
 """심층분석(②단계) — 숏리스트 종목마다 기존 `stock_analyst`(deepagents, 자율 판단)를
-재사용한다(recommendation-synthesis-plan.md §3). 신규 agent를 만들지 않는다 — 고정
+재사용한다(recommendation-synthesis.md §3). 신규 agent를 만들지 않는다 — 고정
 fan-out(모든 종목에 3신호 균일 호출)보다 agent 자율성을 우선하기로 사용자가 확정했다
 (2026-10-02). 트레이드오프로 종목마다 `signals_used`가 달라질 수 있다는 점은 ③단계
 종합 프롬프트가 흡수한다.
@@ -24,7 +24,7 @@ from auto_stock.ml_predictor.models import MLPrediction
 from auto_stock.orchestrator.shortlist import ShortlistEntry
 from auto_stock.rule_engine.models import Candidate
 
-DEFAULT_MAX_WORKERS = 8  # recommendation-synthesis-plan.md §3, 2026-10-05 확정
+DEFAULT_MAX_WORKERS = 8  # recommendation-synthesis.md §3, 2026-10-05 확정
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,4 @@
-"""sector_classification.py TDD — recommendation-synthesis-plan.md §5 1차(공식 업종)
+"""sector_classification.py TDD — recommendation-synthesis.md §5 1차(공식 업종)
 경로. pykrx의 지수 API를 모킹해 래퍼 로직(코스피+코스닥 병합, 구성종목 합집합)만
 검증한다 — 2026-10-05 실제 pykrx 호출로 `load_dotenv()` 선행이 필요함을 확인했다
 (KRX_ID/KRX_PW 로그인, pykrx_source.py와 동일 패턴). NASDAQ은 pykrx 대상이 아니라

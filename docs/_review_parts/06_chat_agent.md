@@ -2,7 +2,7 @@
 
 > 전체 코드베이스에서 가장 복잡한 조율 로직을 담은 모듈이다. MVP-0 신호 소스(#1 규칙엔진, #2 ML예측, #3 LLM차트분석, #4 공시/뉴스감성)와 #5 리스크 사이징을 메인 대화 에이전트에게 "도구(tool)"로 노출하고, 사용자가 자유 질의하면 모델이 필요한 도구만 스스로 골라 호출해 종합 답변한다. 메인 루프는 LangGraph나 `deepagents`의 Tool Runner를 쓰지 않고 OpenAI Responses API의 네이티브 함수콜링을 수동 while 루프로 직접 오케스트레이션한다(`loop.py`). 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브) 2개만 `deepagents`의 `create_deep_agent()`로 만든 서브에이전트를 "agent-as-tool" 패턴으로 메인 루프에 노출한다. 메인 루프 입장에서는 이 2개도 다른 평범한 함수콜링 도구와 구분되지 않는다 — `TOOL_DISPATCH`에 똑같이 등록되어 있다.
 
-> **참조 문서 경고**: 코드 docstring과 `docs/CODEBASE_REVIEW.md`, `docs/PRD.md`는 이 모듈의 설계 근거를 `docs/design/chat-agent-plan.md`와 `docs/design/chat-agent-architecture-review.md`에서 찾아보라고 반복해서 안내하지만, **이 두 파일은 2026-10-07 현재 `docs/design/` 디렉터리에 실제로 존재하지 않는다**(`find docs/design -iname "*chat-agent*"` 결과 없음). 코드 docstring 안에 설계 근거가 이미 상당히 자세히 남아 있어 실질적인 정보 손실은 적지만, 이 레퍼런스들은 stale 포인터로 취급해야 한다 — 과거에 작성됐다가 삭제/미커밋되었거나, 애초에 별도 파일로 만들어지지 않고 코드 docstring에만 흡수된 것으로 보인다.
+> **참조 문서 경고**: 코드 docstring과 `docs/CODEBASE_REVIEW.md`, `docs/PRD.md`는 이 모듈의 설계 근거를 `docs/_review_parts/06_chat_agent.md`와 `docs/design/main-agent-migration-plan.md`에서 찾아보라고 반복해서 안내하지만, **이 두 파일은 2026-10-07 현재 `docs/design/` 디렉터리에 실제로 존재하지 않는다**(`find docs/design -iname "*chat-agent*"` 결과 없음). 코드 docstring 안에 설계 근거가 이미 상당히 자세히 남아 있어 실질적인 정보 손실은 적지만, 이 레퍼런스들은 stale 포인터로 취급해야 한다 — 과거에 작성됐다가 삭제/미커밋되었거나, 애초에 별도 파일로 만들어지지 않고 코드 docstring에만 흡수된 것으로 보인다.
 
 실행 진입점은 `scripts/chat_cli.py`다(이 문서 마지막 절에서 다룸). 전체 흐름을 한 문장으로 요약하면: `chat_cli.py`가 모든 신호원 클라이언트/캐시/코디네이터를 조립해 `ChatToolContext`를 만들고, 사용자 입력마다 `loop.run_turn()`을 호출하며, `run_turn`은 `tool_schemas.TOOL_SCHEMAS`를 모델에게 보여주고 모델이 고른 도구를 `tools.TOOL_DISPATCH`로 디스패치한다.
 
@@ -95,7 +95,7 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 **`OpenAIChatAgentClient`** / **`ChatAgentError`**
 
-이 파일이 `openai` SDK를 import하는 유일한 지점이다. 다른 3개 LLM 클라이언트(`llm_chart_analyst`/`news_disclosure`/`news_sentiment`)와 동일한 예외 매핑 표를 복제하지만 코드는 공유하지 않는다(설계 결정 — `news-disclosure-plan.md` 핵심 설계 결정 7 참고, 다만 그 문서 자체도 디스크에서 확인되지 않았으므로 이 근거는 docstring을 통해서만 확인됨).
+이 파일이 `openai` SDK를 import하는 유일한 지점이다. 다른 3개 LLM 클라이언트(`llm_chart_analyst`/`news_disclosure`/`news_sentiment`)와 동일한 예외 매핑 표를 복제하지만 코드는 공유하지 않는다(설계 결정 — `news-disclosure.md` 핵심 설계 결정 7 참고, 다만 그 문서 자체도 디스크에서 확인되지 않았으므로 이 근거는 docstring을 통해서만 확인됨).
 
 핵심 차이점: 다른 3개 클라이언트는 `responses.parse(text_format=...)`로 Pydantic 구조화 출력을 받지만, 이 클라이언트는 **`responses.create(tools=...)`**를 쓴다(client.py:49-61) — tool-calling 경로이고 구조화 출력 경로가 아니므로, `pydantic.ValidationError` 매핑이 의도적으로 없다(도달 불가능한 except 분기를 만들지 않기 위해).
 

@@ -41,7 +41,7 @@ def test_try_consume_llm_calls_can_be_combined_with_single_consumption():
 
 
 def test_try_consume_llm_call_is_thread_safe_under_concurrent_access():
-    """recommendation-synthesis-plan.md §3의 run_deep_scan이 ThreadPoolExecutor로
+    """recommendation-synthesis.md §3의 run_deep_scan이 ThreadPoolExecutor로
     여러 종목의 run_stock_analyst를 동시에 호출하면서 같은 budget 인스턴스를 공유한다
     — QueryBudget이 스레드 간 공유되는 건 이번이 처음이라, check-then-increment가
     락 없이 레이스 컨디션으로 과소비될 수 있었다. sleep 없이 join()으로만 동기화되는

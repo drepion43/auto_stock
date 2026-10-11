@@ -20,13 +20,13 @@ src/auto_stock/ml_predictor/
 └── predictor.py       # 추론 + 근거 문구 생성
 ```
 
-참고 설계 문서: `docs/design/ml-predictor-plan.md`(구현 전 계획), `docs/design/ml-predictor.md`(구현 후 실제 결과 기록). 아래 설명은 이 두 문서와 실제 코드(2026-10-07 기준)를 직접 대조해서 작성했다.
+참고 설계 문서: `docs/design/ml-predictor.md`(구현 전 계획), `docs/design/ml-predictor.md`(구현 후 실제 결과 기록). 아래 설명은 이 두 문서와 실제 코드(2026-10-07 기준)를 직접 대조해서 작성했다.
 
 ---
 
 ## 1. lookahead bias(미래 데이터 누출) — 이 모듈 전체를 관통하는 핵심 설계 축
 
-금융 시계열 ML에서 가장 흔하고 치명적인 실수가 lookahead bias다. 모델이 학습·검증 시점에 "미래에만 알 수 있는 정보"를 몰래 참조하면, 백테스트 성능은 비현실적으로 좋게 나오지만 실전에서는 전혀 작동하지 않는다. 이 모듈은 설계 문서(`ml-predictor-plan.md` 핵심 설계 결정 3)에서 "5중 방어"라고 명명한 다섯 겹의 구조적 방어를 두고 있다. 각 축이 어느 파일의 어느 코드에 대응하는지 미리 정리한다.
+금융 시계열 ML에서 가장 흔하고 치명적인 실수가 lookahead bias다. 모델이 학습·검증 시점에 "미래에만 알 수 있는 정보"를 몰래 참조하면, 백테스트 성능은 비현실적으로 좋게 나오지만 실전에서는 전혀 작동하지 않는다. 이 모듈은 설계 문서(`ml-predictor.md` 핵심 설계 결정 3)에서 "5중 방어"라고 명명한 다섯 겹의 구조적 방어를 두고 있다. 각 축이 어느 파일의 어느 코드에 대응하는지 미리 정리한다.
 
 | # | 방어 축 | 구현 위치 | 핵심 아이디어 |
 |---|---|---|---|
@@ -183,7 +183,7 @@ FEATURE_NAMES = [
 4. 레코드 하나하나(인덱스 `i`)를 순회하며 11개 피처값을 딕셔너리로 모은다. 이때 각 피처의 분모가 0이거나(`sma_20[i] == 0` 등) 선행 지표 자체가 `None`(워밍업 미충족)이면 해당 피처값도 `None`이 된다.
 5. **11개 피처 중 단 하나라도 `None`이면 그 인덱스 전체를 `None`으로 처리한다**(`if any(v is None for v in raw.values())`). 즉 "일부 피처는 있고 일부는 없는" 반쪽짜리 벡터는 절대 만들지 않는다 — 전부 있거나 전부 없거나(all-or-nothing).
 
-가장 긴 워밍업 요구 지표가 SMA60(60거래일)이므로, 레코드가 60개 미만이면 모든 인덱스가 `None`이 된다. 이는 오케스트레이터의 기존 `DEFAULT_LOOKBACK_DAYS = 120`으로 충분히 커버되는 범위라서 추론 경로의 lookback 설정을 바꿀 필요가 없었다(설계 결정, `ml-predictor-plan.md` 참고).
+가장 긴 워밍업 요구 지표가 SMA60(60거래일)이므로, 레코드가 60개 미만이면 모든 인덱스가 `None`이 된다. 이는 오케스트레이터의 기존 `DEFAULT_LOOKBACK_DAYS = 120`으로 충분히 커버되는 범위라서 추론 경로의 lookback 설정을 바꿀 필요가 없었다(설계 결정, `ml-predictor.md` 참고).
 
 **lookahead 방어와의 연결(방어 축 1)**: 인덱스 `i`의 피처값은 `records[0..i]` 범위의 데이터만으로 계산된다. `records[i+1]` 이후를 아무리 추가해도 인덱스 `i`의 피처값은 바뀌지 않는다 — 이것이 테스트(`test_feature_at_index_is_unchanged_when_future_bars_are_appended`, `ml-predictor.md:32` 인용)로 자동 검증되는 "인과성(causality)" 속성이다.
 
@@ -268,7 +268,7 @@ def forward_returns(closes, horizon=LABEL_HORIZON_DAYS):
 - **`"dummy"`**: `DummyClassifier(strategy="prior")`. 데이터의 클래스 비율만으로 예측하는 베이스라인 — "아무 패턴도 안 쓰고 그냥 다수 클래스로만 찍었을 때" 수준을 보여주는 하한선 역할.
 - 알 수 없는 알고리즘 문자열이 들어오면 `ValueError`.
 
-**RandomForest를 프로덕션에 쓰지 않는 이유**: `ml-predictor-plan.md`(핵심 설계 결정 1)에 명문화된 승격 규칙이 있다 — "RandomForest가 walk-forward AUC 중앙값 기준 LogReg 대비 +0.02 이상 우세할 때만 승격을 재검토한다"는 기준을 **미리** 못박아, 나중에 결과를 보고 나서 기준을 만드는 사후 정당화(post-hoc rationalization)를 방지했다. LogisticRegression이 선택된 근본 이유는 PRD §5가 요구하는 Explainability(설명 가능성)다 — 계수(coefficient) 기반으로 "왜 이 예측이 나왔는지"를 분해할 수 있는 건 선형모델뿐이다(§8의 `_top_contributing_features` 참고).
+**RandomForest를 프로덕션에 쓰지 않는 이유**: `ml-predictor.md`(핵심 설계 결정 1)에 명문화된 승격 규칙이 있다 — "RandomForest가 walk-forward AUC 중앙값 기준 LogReg 대비 +0.02 이상 우세할 때만 승격을 재검토한다"는 기준을 **미리** 못박아, 나중에 결과를 보고 나서 기준을 만드는 사후 정당화(post-hoc rationalization)를 방지했다. LogisticRegression이 선택된 근본 이유는 PRD §5가 요구하는 Explainability(설명 가능성)다 — 계수(coefficient) 기반으로 "왜 이 예측이 나왔는지"를 분해할 수 있는 건 선형모델뿐이다(§8의 `_top_contributing_features` 참고).
 
 ### `evaluate(estimator: Any, dataset: TrainingDataset) -> dict[str, float]` (`training.py:50-65`)
 
@@ -454,7 +454,7 @@ ml_predictor 패키지 자체(`models.py`/`features.py`/`labeling.py`/`dataset.p
   - `test_accuracy: 0.5342`
 
   AUC 0.536은 완전 무작위(0.5)보다 약간 높은 수준으로, "약한 신호는 있지만 강한 예측력은 없다"는 뜻이다. 이 수치 자체가 `predictor.py`의 `DISCLAIMER`("백테스트 검증 전 참고용 보조 지표")가 왜 항상 붙는지에 대한 실증적 근거이기도 하다 — 이 모델은 아직 "승격 규칙"(§6, AUC가 여러 홀드아웃에서 일관되게 베이스라인을 넘고, 전략 레벨 백테스트로 개선이 입증되는 등 4개 조건을 모두 충족)을 만족하지 못했으므로, 보조 신호 지위를 유지해야 한다.
-- **전략 레벨 백테스트(거래비용/슬리피지/누적손익/MDD)는 아직 없다.** 이 모듈이 하는 평가는 "모델 레벨"(ROC-AUC, accuracy, walk-forward)뿐이고, 실제 매매 전략으로서의 손익 시뮬레이션은 범위 밖이다(`ml-predictor-plan.md` "이번 스코프가 아닌 것" 표).
+- **전략 레벨 백테스트(거래비용/슬리피지/누적손익/MDD)는 아직 없다.** 이 모듈이 하는 평가는 "모델 레벨"(ROC-AUC, accuracy, walk-forward)뿐이고, 실제 매매 전략으로서의 손익 시뮬레이션은 범위 밖이다(`ml-predictor.md` "이번 스코프가 아닌 것" 표).
 - **생존편향(survivorship bias) 미보정.** `get_universe()`가 "오늘 시점 상장종목 목록"만 반환하므로, 과거 데이터로 학습하더라도 그 유니버스 자체는 "지금까지 살아남은 종목들"로 구성돼 있다 — 상장폐지된 종목은 애초에 데이터셋에 들어오지 않는다. 메타데이터에 이 사실이 명시만 돼 있을 뿐 보정 로직은 없다.
 - **4계층 앙상블(규칙엔진/ML/LLM차트/뉴스) 가중치는 미확정**이다. 지금은 각 신호원이 독립된 문구를 `extra_reasons`에 나열하는 수준이고, 신호 간 가중 결합 로직은 PRD §5/§11에 TBD로 남아 있다.
 - **ML 단독 후보 생성·필터링 권한은 없다.** §6에서 설명한 승격 규칙(4개 조건 모두 충족) 전부를 만족해야 재검토 대상이 되는데, 현재 AUC 수준(0.536)으로는 조건 1("서로 겹치지 않는 3개 이상의 홀드아웃에서 AUC가 일관되게 베이스라인 초과")조차 아직 입증된 바 없다.

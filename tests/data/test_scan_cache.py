@@ -126,7 +126,7 @@ def _recommendation(ticker="005930", market="KRX", action="BUY", rank=1, summary
 
 
 def test_get_latest_recommendations_returns_none_and_empty_when_never_run(cache):
-    """recommendation-synthesis-plan.md §6 — scan_key는 전체시장이면 market 값 그대로,
+    """recommendation-synthesis.md §6 — scan_key는 전체시장이면 market 값 그대로,
     섹터면 합성키("SECTOR:로봇:KRX")를 재사용한다. 여기선 market 값으로만 검증."""
     scanned_at, recommendations = cache.get_latest_recommendations("KRX")
 
@@ -175,7 +175,7 @@ def test_put_recommendations_with_empty_list_still_records_scanned_at(cache):
 
 def test_put_recommendations_scopes_by_scan_key(cache):
     """섹터 합성키("SECTOR:로봇:KRX")와 일반 market 키("KRX")가 서로 침범하지 않아야
-    한다 — recommendation-synthesis-plan.md §6."""
+    한다 — recommendation-synthesis.md §6."""
     cache.put_recommendations("KRX", [_recommendation(ticker="005930")])
     cache.put_recommendations("SECTOR:로봇:KRX", [_recommendation(ticker="277810")])
 

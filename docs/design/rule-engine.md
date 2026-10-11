@@ -1,6 +1,6 @@
 # 규칙엔진 (#1) 구현 가이드
 
-> `docs/IMPLEMENTATION_PLAN.md` §1을 구현한 뒤 작성한 가이드 문서. `docs/design/data-collection-layer.md`와 같은 위치·형식.
+> `docs/CODEBASE_REVIEW.md` §1을 구현한 뒤 작성한 가이드 문서. `docs/design/data-collection-layer.md`와 같은 위치·형식.
 
 ## 목적
 

@@ -11,7 +11,7 @@ Two modes:
   builds a `ChartSnapshot` via `build_snapshot`, and prints the exact system/user
   prompts that would be sent to OpenAI — without ever constructing an OpenAI client
   or making a network call. Use this to eyeball prompt content (docs/design/
-  llm-chart-analyst-plan.md §검증 "수동(dry-run, 비용 0)").
+  llm-chart-analyst.md §검증 "수동(dry-run, 비용 0)").
 - Otherwise: loads `LLMConfig` via `load_llm_config()` (requires `OPENAI_API_KEY` in
   `.env`), builds an `OpenAIChartClient` with `max_calls_per_run` forced to 1 (this
   script only ever needs a single call), and runs `analyze()` against the sample

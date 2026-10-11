@@ -240,7 +240,7 @@ class NewsArticle:
 
 ## `sources/dart_source.py` — DART(국내 전자공시) OpenAPI 연동
 
-DART API는 KRX 종목코드가 아니라 자체 `corp_code`로 종목을 식별하므로, 이 모듈은 전체 매핑(`corpCode.xml`, zip 압축)을 다운로드해 로컬 JSON 캐시(`data/dart_corp_codes.json`, 기본 7일 갱신)로 관리하고 종목코드로 역조회하는 역할을 한다(`docs/design/news-disclosure-plan.md` 핵심 설계 결정 3 — 해당 파일은 리포에 존재하지 않으나 소스 주석에 참조됨).
+DART API는 KRX 종목코드가 아니라 자체 `corp_code`로 종목을 식별하므로, 이 모듈은 전체 매핑(`corpCode.xml`, zip 압축)을 다운로드해 로컬 JSON 캐시(`data/dart_corp_codes.json`, 기본 7일 갱신)로 관리하고 종목코드로 역조회하는 역할을 한다(`docs/design/news-disclosure.md` 핵심 설계 결정 3 — 해당 파일은 리포에 존재하지 않으나 소스 주석에 참조됨).
 
 `DART_API_KEY`는 `notifier/credentials.py`와 동일한 패턴으로 필요 시점에 직접 `load_dotenv()`를 호출해 로드한다(`_load_dart_api_key`, `dart_source.py:40-42`).
 
@@ -408,7 +408,7 @@ DART의 `resolve_ticker_by_name`과 동일한 매칭 규칙(완전일치 우선,
 
 ## `sources/sector_classification.py` — 공식 업종 분류(국내 전용)
 
-`recommendation-synthesis-plan.md` §5의 "1차 매칭 경로"로 쓰이는 모듈(해당 설계 문서는 현재 리포에 파일로 존재하지 않으나 소스 주석에 참조됨). pykrx의 지수 API로 업종명↔코드 매핑과 그 업종의 구성종목을 조회한다.
+`recommendation-synthesis.md` §5의 "1차 매칭 경로"로 쓰이는 모듈(해당 설계 문서는 현재 리포에 파일로 존재하지 않으나 소스 주석에 참조됨). pykrx의 지수 API로 업종명↔코드 매핑과 그 업종의 구성종목을 조회한다.
 
 **설계상 비자명한 결정(실제 호출로 확인된 로그인 요구사항)**: 2026-10-05 실제 pykrx 호출로, `KRX_ID`/`KRX_PW` 로그인이 선행되어야 하며 그걸 빼먹으면 모든 호출이 `"Expecting value"`라는 모호한 에러로 실패한다는 사실이 확인됐다(`sector_classification.py:5-8`) — 라이브러리 자체의 버그가 아니라 **로그인 선행 누락이 원인**이었다. 이 때문에 모든 공개 함수가 호출 직전에 `load_dotenv()`를 부른다(`pykrx_source.py`와 동일한 "함수 호출 시점 재로그인" 패턴).
 

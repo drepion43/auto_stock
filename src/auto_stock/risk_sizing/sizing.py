@@ -1,4 +1,4 @@
-"""Reference-only position sizing for MVP-0 (PRD §6, IMPLEMENTATION_PLAN.md §5).
+"""Reference-only position sizing for MVP-0 (PRD §6, CODEBASE_REVIEW.md §5).
 
 Computes a suggested quantity/allocation, ATR-based stop-loss/take-profit, and
 a non-blocking limit check against PRD §6's risk caps. No enforcement (no

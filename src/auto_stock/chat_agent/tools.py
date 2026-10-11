@@ -298,7 +298,7 @@ def tool_get_price_data(context: ChatToolContext, ticker: str, market: str) -> d
     신호가 없던 SK하이닉스)을 물으면 analyze_rule_engine/analyze_position_sizing 둘 다
     candidate/suggestion이 null이 되어 가격 자체를 아예 반환하지 못했다(OHLCV 조회 자체는
     정상이었는데도). 이 도구는 규칙엔진 신호 유무와 무관하게 캐시된 최신 OHLCV 한 건을
-    그대로 반환한다 — chat-agent-plan.md Stage E에서 미리 남겨뒀던 `get_price_data` TBD
+    그대로 반환한다 — _review_parts/06_chat_agent.md Stage E에서 미리 남겨뒀던 `get_price_data` TBD
     항목."""
     try:
         records = _fetch_records(context, ticker, market)
@@ -379,7 +379,7 @@ def tool_get_market_scan_recommendations(context: ChatToolContext, market: str) 
     온디맨드로 적재하는 market별 추천 캐시(`data/scan_cache.py`의 `recommendation_cache`)를
     읽으므로 market은 받는다. 규칙엔진/ML(①숏리스트) + 차트/공시/뉴스감성(②심층분석,
     `stock_analyst` 재사용) + LLM 종합(③, `recommendation_synthesis`)까지 전부 거친
-    순위(rank)·근거(summary) 포함 결과다(recommendation-synthesis-plan.md) — 예전엔
+    순위(rank)·근거(summary) 포함 결과다(recommendation-synthesis.md) — 예전엔
     규칙엔진 신호만 쓰는 무료 경로(`scan_market`/`ScanCoordinator`)였으나 2026-10-05
     교체됨. `scan_market` 자체는 폐기되지 않았고 `scripts/run_market_scan.py`의
     수동/오프라인 경로로 남아 있다. LLM 미사용, QueryBudget 소비 없음(이 도구 자신은
@@ -403,7 +403,7 @@ def tool_get_sector_recommendations(context: ChatToolContext, query: str, market
     """섹터/테마형 질의("로봇섹터 추천해줄만한 거 있어?") 전용 신규 도구 —
     `get_market_scan_recommendations`와 동일한 "백그라운드 트리거+캐시 조회" 셰이프를
     `RecommendationCoordinator`의 섹터 경로(`ensure_fresh_sector`/`is_sector_in_progress`,
-    `recommendation-synthesis-plan.md` §5/§6)로 그대로 재사용한다. `scan_key` 포맷
+    `recommendation-synthesis.md` §5/§6)로 그대로 재사용한다. `scan_key` 포맷
     ("SECTOR:{query}:{market}")은 `recommendation_coordinator._sector_scan_key`와 반드시
     동일해야 하지만, 그 모듈을 여기서 import하면 순환참조가 된다(그 모듈이 이미 이
     `tools.py`를 import함) — 그래서 같은 리터럴 포맷을 여기 그대로 둔다(두 쪽 다 바꿀 때

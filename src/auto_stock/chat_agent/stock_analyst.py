@@ -11,7 +11,7 @@
 
 `provenance`("서브에이전트 자율 조사 결과") 라벨은 LLM 출력 텍스트를 신뢰하지 않고
 이 함수가 결정론적으로 붙인다 — 이 프로젝트의 기존 환각 방지 컨벤션과 동일
-(chat-agent-architecture-review.md §7)."""
+(main-agent-migration-plan.md §7)."""
 
 from deepagents import create_deep_agent
 from pydantic import BaseModel

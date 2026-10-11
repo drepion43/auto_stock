@@ -1,6 +1,6 @@
 # 뉴스 감성분석 (#4-뉴스) — 구현 결과
 
-> `docs/design/news-sentiment-plan.md`(사전 계획)의 실제 구현 결과 기록. Phase 1~4 전체 완료.
+> `docs/design/news-sentiment.md`(사전 계획)의 실제 구현 결과 기록. Phase 1~4 전체 완료.
 
 ## 목적·입출력
 
@@ -22,7 +22,7 @@
 
 ### 해석 계층 (`src/auto_stock/news_sentiment/`)
 
-`news_disclosure/`와 동일한 구조(Protocol, SDK 예외 통일, `analyze()`/`to_reasons()` 분리)를 따르되 코드는 공유하지 않는다(계획 문서 핵심 설계 결정, `news-disclosure-plan.md` 핵심 설계 결정 7 연장).
+`news_disclosure/`와 동일한 구조(Protocol, SDK 예외 통일, `analyze()`/`to_reasons()` 분리)를 따르되 코드는 공유하지 않는다(계획 문서 핵심 설계 결정, `news-disclosure.md` 핵심 설계 결정 7 연장).
 
 | 파일 | 역할 |
 |---|---|
@@ -66,7 +66,7 @@ CRITICAL/HIGH 없음. MEDIUM 4건 + LOW 2건(코드 리뷰), 별도 LOW 2건(보
 
 ## 남은 작업 (사용자 액션 필요)
 
-- **네이버 이용약관 재확인** — 이 세션에서 `developers.naver.com` 접근이 차단되어 재확인하지 못함. 실제 프로덕션 자동 실행(스케줄러)에 넣기 전 반드시 사용자가 직접 확인 필요(`news-sentiment-plan.md` Phase 0 미완료 항목).
+- **네이버 이용약관 재확인** — 이 세션에서 `developers.naver.com` 접근이 차단되어 재확인하지 못함. 실제 프로덕션 자동 실행(스케줄러)에 넣기 전 반드시 사용자가 직접 확인 필요(`news-sentiment.md` Phase 0 미완료 항목).
 - **GDELT `seendate` 형식 라이브 검증** — 이 세션에서 `api.gdeltproject.org`로의 아웃바운드 연결이 전부 타임아웃되어(WebFetch·curl 모두) 확인 못 함. `%Y%m%dT%H%M%SZ` 가정은 공식 문서·커뮤니티 자료 교차 확인 값이나, 실제 사용 전 `scripts/verify_news_sentiment.py`(NASDAQ 모드)로 1회 검증 권장.
 - `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후: `scripts/verify_news_sentiment.py` dry-run(비용 0) → 실호출(소액) 순서로 KRX 검증
 - 위 GDELT 검증과 함께: NASDAQ 모드도 동일하게 검증

@@ -2,7 +2,7 @@
 
 `.joblib`은 `data/*.duckdb`와 같은 이유로 커밋하지 않는다(.gitignore). 대신 메타데이터
 JSON은 커밋해 "어떤 모델이 어떤 성능으로 배포됐는지"를 git 히스토리에 남긴다
-(docs/design/ml-predictor-plan.md 핵심 설계 결정 4).
+(docs/design/ml-predictor.md 핵심 설계 결정 4).
 """
 
 import json

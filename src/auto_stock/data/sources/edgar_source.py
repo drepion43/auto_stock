@@ -3,7 +3,7 @@
 `dart_source.py`와 같은 위치: 나스닥 상장사의 공시 데이터를 보조한다. EDGAR는 KRX
 종목코드 같은 개념이 없고 자체 CIK(Central Index Key)로 종목을 식별하므로, 전체
 매핑(`company_tickers.json`)을 다운로드해 로컬에 캐싱하고 종목코드로 역조회한다
-(docs/design/news-disclosure-nasdaq-plan.md 핵심 설계 결정 2). DART와 달리 API 키가
+(docs/design/news-disclosure.md 핵심 설계 결정 2). DART와 달리 API 키가
 아니라 SEC 정책상 필수인 `User-Agent`(연락처 포함 식별 문자열)가 필요하다(같은 문서
 핵심 설계 결정 1) — 비밀은 아니지만 없으면 즉시 실패하는 계약은 동일하게 유지한다.
 """
@@ -40,7 +40,7 @@ _FORM_TYPE_LABELS = {
 }
 # 임원·주요주주 지분변동 신고(Form 3/4/5)는 대형주 기준 주 단위로 여러 건씩 쏟아져
 # MAX_DISCLOSURES_PER_QUERY 윈도우를 노이즈로 채운다 — 기본 제외한다
-# (docs/design/news-disclosure-nasdaq-plan.md 핵심 설계 결정 3).
+# (docs/design/news-disclosure.md 핵심 설계 결정 3).
 _EXCLUDED_FORM_TYPES = frozenset({"3", "4", "5"})
 
 
@@ -56,7 +56,7 @@ def _load_edgar_user_agent() -> str:
 def _download_cik_map() -> dict[str, dict[str, str]]:
     """`company_tickers.json`을 다운로드해 {ticker: {"cik":..., "title":...}} 매핑으로
     파싱한다. `title`(회사명)은 뉴스 감성분석(#4-뉴스) 확장에서 뉴스 검색 쿼리를 만들
-    때 쓰인다(docs/design/news-sentiment-plan.md 핵심 설계 결정 2) — 이전에는 파싱만
+    때 쓰인다(docs/design/news-sentiment.md 핵심 설계 결정 2) — 이전에는 파싱만
     하고 버렸다."""
     user_agent = _load_edgar_user_agent()
     try:
@@ -68,7 +68,7 @@ def _download_cik_map() -> dict[str, dict[str, str]]:
         response.raise_for_status()
     except requests.exceptions.RequestException as exc:
         # dart_source.py와 동일 원칙: 원본 예외를 문자열화하지 않고 타입명만 남긴다
-        # (docs/design/news-disclosure-nasdaq-plan.md 핵심 설계 결정 7).
+        # (docs/design/news-disclosure.md 핵심 설계 결정 7).
         raise EdgarApiError(f"EDGAR API 요청 실패: {type(exc).__name__}") from exc
 
     payload = response.json()
@@ -106,7 +106,7 @@ def _load_or_refresh_cik_map(cache_path: Path, refresh_days: int) -> dict:
 def _cik_and_title(entry) -> tuple[str | None, str | None]:
     """캐시 항목에서 (cik, title)을 뽑는다. `entry`가 문자열이면 뉴스 감성분석 확장
     전(title이 없던 시절)에 저장된 구 스키마 캐시다 — cik만 반환하고 title은 None
-    (하위호환, docs/design/news-sentiment-plan.md 핵심 설계 결정 2)."""
+    (하위호환, docs/design/news-sentiment.md 핵심 설계 결정 2)."""
     if entry is None:
         return None, None
     if isinstance(entry, str):
@@ -135,7 +135,7 @@ def resolve_company_title(
 ) -> str | None:
     """`company_tickers.json` 캐시에서 티커로 회사명(title)을 역조회한다. 뉴스 검색
     API는 티커가 아니라 회사명 문자열로 질의해야 하므로(docs/design/
-    news-sentiment-plan.md 핵심 설계 결정 2), 그 쿼리 입력을 만드는 데 쓰인다.
+    news-sentiment.md 핵심 설계 결정 2), 그 쿼리 입력을 만드는 데 쓰인다.
     `resolve_cik`와 캐시를 공유한다 — 같은 티커에 대해 두 함수를 순서대로 호출해도
     EDGAR API를 두 번 부르지 않는다."""
     mapping = _load_or_refresh_cik_map(Path(cache_path), refresh_days)

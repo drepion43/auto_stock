@@ -1,6 +1,6 @@
 # 데이터 수집 계층 (#0) 개발 계획
 
-> `docs/IMPLEMENTATION_PLAN.md`의 #0 항목을 실제 스캐폴딩이 가능한 수준으로 구체화한 컴포넌트 설계 문서.
+> `docs/CODEBASE_REVIEW.md`의 #0 항목을 실제 스캐폴딩이 가능한 수준으로 구체화한 컴포넌트 설계 문서.
 
 ## 목적
 
@@ -70,7 +70,7 @@ def refresh_recent(tickers: list[str]) -> None:
 
 한국장(09:00–15:30 KST)과 나스닥(현지 09:30–16:00 ET, 한국시간 기준 야간)은 운영시간이 다르므로, **시장별로 별도 APScheduler job**을 등록하고 각 시장의 장 시간 외에는 폴링을 정지한다. 동시 호출은 세마포어로 제한한다 (asyncio 기반).
 
-- Kafka 등 메시지 브로커는 채택하지 않는다 — 1인 사용자·단일 파이프라인 규모에 과도한 인프라 (`docs/IMPLEMENTATION_PLAN.md` #0 참고, YAGNI)
+- Kafka 등 메시지 브로커는 채택하지 않는다 — 1인 사용자·단일 파이프라인 규모에 과도한 인프라 (`docs/CODEBASE_REVIEW.md` #0 참고, YAGNI)
 - 폴링 주기·동시성 제한의 정확한 수치는 스캐폴딩 시점에 FDR/pykrx의 실제 응답 시간과 호출 제한을 관찰하며 튜닝한다 (지금 임의로 고정하지 않음)
 
 ### 7. 확장 시 재검토 (Kafka 등)

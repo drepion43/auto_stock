@@ -322,7 +322,7 @@ def test_fetch_disclosures_treats_explicit_null_remark_and_report_name_as_empty_
 
 
 # --- 뉴스 감성분석(#4-뉴스) 확장: resolve_corp_name — 뉴스 검색 쿼리를 만들기 위한
-# 회사명 조회. resolve_corp_code와 캐시를 공유한다(docs/design/news-sentiment-plan.md
+# 회사명 조회. resolve_corp_code와 캐시를 공유한다(docs/design/news-sentiment.md
 # 핵심 설계 결정 2). ---
 
 

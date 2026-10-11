@@ -1,6 +1,6 @@
 # 알림봇 (#7) 구현 가이드 — 텔레그램
 
-> `docs/IMPLEMENTATION_PLAN.md` §7을 구현한 뒤 작성한 가이드 문서. `docs/design/recommendation-explainer.md`와 같은 위치·형식.
+> `docs/CODEBASE_REVIEW.md` §7을 구현한 뒤 작성한 가이드 문서. `docs/design/recommendation-explainer.md`와 같은 위치·형식.
 
 ## 목적
 
@@ -8,7 +8,7 @@
 
 ## MVP-0 범위 (알림 전용)
 
-`IMPLEMENTATION_PLAN.md` §7에 따라 **1차 목표는 알림 전용**이다. 승인/거부 버튼이나 콜백 처리는 하지 않는다 — 승인해도 트리거되는 주문이 없기 때문이다(주문 실행 에이전트 #8이 아직 없음). 승인/거부 흐름은 #8과 함께 2차 목표(MVP-1)에서 추가한다.
+`CODEBASE_REVIEW.md` §7에 따라 **1차 목표는 알림 전용**이다. 승인/거부 버튼이나 콜백 처리는 하지 않는다 — 승인해도 트리거되는 주문이 없기 때문이다(주문 실행 에이전트 #8이 아직 없음). 승인/거부 흐름은 #8과 함께 2차 목표(MVP-1)에서 추가한다.
 
 ## 모듈 구조
 

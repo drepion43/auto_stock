@@ -1,7 +1,7 @@
 """ML 예측 모델(#2) 학습 스크립트 — logreg/rf/dummy 3종 평가 리포트 후 logreg만 저장.
 
 rf/dummy는 평가 리포트 전용 벤치마크이며 프로덕션에는 배선하지 않는다
-(docs/design/ml-predictor-plan.md 핵심 설계 결정 1). 승격 규칙: RandomForest가
+(docs/design/ml-predictor.md 핵심 설계 결정 1). 승격 규칙: RandomForest가
 walk-forward AUC 중앙값 기준 LogReg 대비 +0.02 이상 우세할 때만 재검토한다.
 
 2026-09-27부로 KRX/NASDAQ 둘 다 순회하며 시장별로 독립된 아티팩트를 학습·저장한다

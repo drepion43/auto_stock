@@ -32,7 +32,7 @@ class LLMConfig:
 class QueryBudget:
     max_llm_calls: int
     llm_calls_made: int = 0
-    # recommendation-synthesis-plan.md §3 — run_deep_scan이 ThreadPoolExecutor로 여러
+    # recommendation-synthesis.md §3 — run_deep_scan이 ThreadPoolExecutor로 여러
     # 종목의 run_stock_analyst를 동시에 호출하면서 같은 budget 인스턴스를 공유한다(이전엔
     # 항상 대화 1턴 안에서 단일 스레드로만 쓰였다). 락 없는 check-then-increment는
     # 레이스 컨디션으로 과소비될 수 있어 내부 전용 락을 추가한다 — repr/비교에서는

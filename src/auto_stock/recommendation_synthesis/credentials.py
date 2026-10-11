@@ -7,7 +7,7 @@ chat_agent/credentials.py 참고) — 구조적으로 재발을 막기 위해 �
 
 `find_related_companies`와 복잡도가 비슷하다고 판단해(규칙엔진 후보/ML확률 비교 +
 애매한 소수 종목만 선택적으로 재조사) `STOCK_ANALYST_RECURSION_LIMIT`(8)이 아니라
-`FIND_RELATED_RECURSION_LIMIT`(6)과 같은 값을 쓴다(recommendation-synthesis-plan.md §7,
+`FIND_RELATED_RECURSION_LIMIT`(6)과 같은 값을 쓴다(recommendation-synthesis.md §7,
 2026-10-05 확정)."""
 
 RECOMMENDATION_SYNTHESIS_RECURSION_LIMIT = 6

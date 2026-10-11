@@ -1,4 +1,4 @@
-"""OHLCV -> 스케일 프리(비율/정규화) 피처 11종 (docs/design/ml-predictor-plan.md 피처 정의표).
+"""OHLCV -> 스케일 프리(비율/정규화) 피처 11종 (docs/design/ml-predictor.md 피처 정의표).
 
 전부 비율/정규화값이라 KRX(원)와 NASDAQ(달러) 종목을 하나의 pooled 모델에 섞어도
 스케일 왜곡이 없다. rule_engine.indicators의 sma/rsi/macd/atr는 이미 후행(trailing)

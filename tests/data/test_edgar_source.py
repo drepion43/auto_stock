@@ -261,7 +261,7 @@ def test_fetch_filings_wraps_malformed_filing_date_as_edgar_api_error(mocker):
 
 
 # --- 뉴스 감성분석(#4-뉴스) 확장: resolve_company_title — 뉴스 검색 쿼리를 만들기
-# 위한 회사명 조회. resolve_cik와 캐시를 공유한다(docs/design/news-sentiment-plan.md
+# 위한 회사명 조회. resolve_cik와 캐시를 공유한다(docs/design/news-sentiment.md
 # 핵심 설계 결정 2). ---
 
 

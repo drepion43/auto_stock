@@ -1,5 +1,5 @@
 """deep_scan.py TDD — run_deep_scan은 숏리스트 종목마다 기존 run_stock_analyst(agent
-자율 판단)를 ThreadPoolExecutor로 동시 호출한다(recommendation-synthesis-plan.md §3).
+자율 판단)를 ThreadPoolExecutor로 동시 호출한다(recommendation-synthesis.md §3).
 `run_stock_analyst`는 모킹해 래퍼 로직(병렬 호출 배선, 결과 순서 보존, budget 공유,
 실패격리)만 검증한다 — 실제 agent 판단 품질은 stock_analyst 자신의 테스트 몫이다."""
 
@@ -112,7 +112,7 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
 
 def test_shares_a_single_budget_instance_across_all_calls(mocker):
     """②단계 전체가 같은 budget을 공유해야 ③단계(재조사)까지 이어지는 예산 집계가
-    정확하다(recommendation-synthesis-plan.md §7) — 종목마다 새 QueryBudget을 만들면
+    정확하다(recommendation-synthesis.md §7) — 종목마다 새 QueryBudget을 만들면
     안 된다."""
     seen_budgets = []
 

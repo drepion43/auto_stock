@@ -1,6 +1,6 @@
 """shortlist.py TDD — build_shortlist는 scan_market과 동일한 티커별 실패격리 원칙을
 쓰지만, 규칙엔진 OR ML(둘 다 공짜 계산) 중 하나라도 방향성 있는 의견을 내면 숏리스트에
-넣는다(recommendation-synthesis-plan.md §2) — 규칙엔진 AND 게이트가 되어 ML만 잡는
+넣는다(recommendation-synthesis.md §2) — 규칙엔진 AND 게이트가 되어 ML만 잡는
 종목을 놓치는 걸 막기 위함."""
 
 from datetime import date, timedelta

@@ -1,6 +1,6 @@
 # 추천 설명 생성기 (#6) 구현 가이드
 
-> `docs/IMPLEMENTATION_PLAN.md` §6을 구현한 뒤 작성한 가이드 문서. `docs/design/risk-position-sizing.md`와 같은 위치·형식.
+> `docs/CODEBASE_REVIEW.md` §6을 구현한 뒤 작성한 가이드 문서. `docs/design/risk-position-sizing.md`와 같은 위치·형식.
 
 ## 목적
 
@@ -21,7 +21,7 @@ PRD §5.1의 예시("RSI 과매도 구간 진입 + 실적 서프라이즈 기사
 
 - API 키/네트워크 호출/비용/지연시간이 없다
 - 출력이 결정론적이라 테스트하기 쉽다(LLM 환각 위험 없음)
-- IMPLEMENTATION_PLAN.md §6의 설계 원칙("확장 가능한 구조")은 `extra_reasons: list[str] | None` 파라미터로 충족한다 — 이후 ML/LLM차트/뉴스 신호가 추가되면, 그 신호가 만든 근거 문자열을 이 파라미터로 전달하기만 하면 되고 `generate_explanation` 자체를 재설계할 필요가 없다. 신호가 늘어나 템플릿 나열만으로는 자연스러운 문장이 안 나오는 시점이 오면, 그때 이 함수를 LLM 기반으로 교체하는 것을 재검토한다.
+- CODEBASE_REVIEW.md §6의 설계 원칙("확장 가능한 구조")은 `extra_reasons: list[str] | None` 파라미터로 충족한다 — 이후 ML/LLM차트/뉴스 신호가 추가되면, 그 신호가 만든 근거 문자열을 이 파라미터로 전달하기만 하면 되고 `generate_explanation` 자체를 재설계할 필요가 없다. 신호가 늘어나 템플릿 나열만으로는 자연스러운 문장이 안 나오는 시점이 오면, 그때 이 함수를 LLM 기반으로 교체하는 것을 재검토한다.
 
 ## 조합 로직 (`generate_explanation`)
 

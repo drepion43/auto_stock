@@ -3,7 +3,7 @@
 `pykrx_source.py`와 같은 위치: FDR/pykrx가 다루지 않는 국내 공시 데이터를 보조한다.
 DART API는 KRX 종목코드가 아니라 자체 `corp_code`로 종목을 식별하므로, 전체
 매핑(`corpCode.xml`, zip)을 다운로드해 로컬에 캐싱하고 종목코드로 역조회한다
-(docs/design/news-disclosure-plan.md 핵심 설계 결정 3). `DART_API_KEY`는
+(docs/design/news-disclosure.md 핵심 설계 결정 3). `DART_API_KEY`는
 `notifier/credentials.py`와 동일하게 필요 시점에 직접 `load_dotenv()`를 호출해
 로드한다.
 """
@@ -45,7 +45,7 @@ def _load_dart_api_key() -> str:
 def _download_corp_code_map() -> dict[str, dict[str, str]]:
     """corpCode.xml(zip)을 다운로드해 {stock_code: {"corp_code":..., "corp_name":...}}
     매핑으로 파싱한다. `corp_name`은 뉴스 감성분석(#4-뉴스) 확장에서 뉴스 검색 쿼리를
-    만들 때 쓰인다(docs/design/news-sentiment-plan.md 핵심 설계 결정 2) — 이전에는
+    만들 때 쓰인다(docs/design/news-sentiment.md 핵심 설계 결정 2) — 이전에는
     파싱만 하고 버렸다.
 
     비상장 등 `stock_code`가 없는 항목은 종목코드로 역조회할 일이 없어 제외한다."""
@@ -107,7 +107,7 @@ def _load_or_refresh_corp_map(cache_path: Path, refresh_days: int) -> dict:
 def _corp_code_and_name(entry) -> tuple[str | None, str | None]:
     """캐시 항목에서 (corp_code, corp_name)을 뽑는다. `entry`가 문자열이면 뉴스
     감성분석 확장 전(corp_name이 없던 시절)에 저장된 구 스키마 캐시다 — corp_code만
-    반환하고 corp_name은 None(하위호환, docs/design/news-sentiment-plan.md 핵심
+    반환하고 corp_name은 None(하위호환, docs/design/news-sentiment.md 핵심
     설계 결정 2). refresh_days가 지나면 새 스키마로 자연 갱신된다."""
     if entry is None:
         return None, None
@@ -137,7 +137,7 @@ def resolve_corp_name(
 ) -> str | None:
     """`corpCode.xml` 캐시에서 티커로 회사명(corp_name)을 역조회한다. 뉴스 검색
     API는 티커가 아니라 회사명 문자열로 질의해야 하므로(docs/design/
-    news-sentiment-plan.md 핵심 설계 결정 2), 그 쿼리 입력을 만드는 데 쓰인다.
+    news-sentiment.md 핵심 설계 결정 2), 그 쿼리 입력을 만드는 데 쓰인다.
     `resolve_corp_code`와 캐시(다운로드/저장)를 공유한다 — 시장이 같은 티커에 대해
     두 함수를 순서대로 호출해도 DART API를 두 번 부르지 않는다."""
     mapping = _load_or_refresh_corp_map(Path(cache_path), refresh_days)

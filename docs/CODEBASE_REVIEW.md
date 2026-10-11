@@ -8,7 +8,7 @@
 
 ### 이전 진행 기록 (Phase 0~3)
 
-`docs/design/llm-chart-analyst-plan.md`(OpenAI `gpt-5.6-luna` 기준) 승인 완료, **Phase 0(의존성 게이트) 완료**:
+`docs/design/llm-chart-analyst.md`(OpenAI `gpt-5.6-luna` 기준) 승인 완료, **Phase 0(의존성 게이트) 완료**:
 - `pyproject.toml`에 `openai`(3.5.0 설치됨), `pydantic>=2` 추가
 - 기존 126개 테스트 회귀 없음 확인
 - 설치된 SDK로 `client.responses.parse`/`response.output_parsed` 존재 및 예외 계층(`APITimeoutError ⊂ APIConnectionError`, `RateLimitError`/`AuthenticationError` 등 ⊂ `APIStatusError` ⊂ `APIError` ⊂ `OpenAIError`) 직접 확인 — 계획서 설계와 일치
@@ -33,7 +33,7 @@
 - `tests/orchestrator/test_pipeline.py`에 신규 7케이스 추가(기존 7개는 문자 그대로 무수정): 무보조신호 회귀 확장판(`analyze_chart` 미호출 포함), LLM단독, ML+LLM 병합 순서(ML 먼저 → LLM 나중), LLM실패 격리, LLM실패해도 ML 근거 유지, ML실패해도 LLM 근거 유지, 이중실패 시 `errors` 2건 기록 + 발송 유지.
 - `scripts/verify_llm_chart_analyst.py` 신규 작성 — `LLM_VERIFY_DRY_RUN=1`이면 실제 종목(005930) OHLCV로 `build_snapshot` → 시스템/유저 프롬프트만 출력(API 호출 0, 비용 0), 아니면 `load_llm_config()` + `OpenAIChartClient(max_calls_per_run을 1로 강제)`로 실제 1회 호출 후 구조화 결과 출력. **이번 태스크에서는 dry-run 모드만 직접 실행해 확인**(정상 동작 확인됨 — SUCCESS 출력 + 프롬프트에 ticker/market/실제 날짜/action 미노출 육안 확인). 실호출 경로는 코드만 작성했고 실행하지 않았다(`OPENAI_API_KEY` 미발급).
 - `scripts/run_recommendations_with_signals.py` 신규 작성(`run_recommendations_with_ml.py`의 ML+LLM 동시 실행 변형) — ML 아티팩트 또는 `OPENAI_API_KEY` 중 하나라도 없으면 안내 후 종료. **이 스크립트는 작성만 하고 실행하지 않았다**(실제 유료 API 호출 경로이므로 키 발급 전 실행 금지 지침 준수).
-- 계획과 다른 점 없음 — `docs/design/llm-chart-analyst-plan.md` "오케스트레이터 통합" 절의 코드 스케치와 4가지 핵심 포인트를 그대로 구현.
+- 계획과 다른 점 없음 — `docs/design/llm-chart-analyst.md` "오케스트레이터 통합" 절의 코드 스케치와 4가지 핵심 포인트를 그대로 구현.
 - `OPENAI_API_KEY` 발급 전이라 **배선은 완료됐지만 실제 API 호출로 검증된 적은 아직 없다** — 발급 후 `scripts/verify_llm_chart_analyst.py`(실호출 모드)와 `scripts/run_recommendations_with_signals.py`로 사용자가 직접 1회 검증 필요.
 
 ## 완료: 뉴스/공시 분석 에이전트 (#4, Phase 0~4 전체)
@@ -46,7 +46,7 @@
 
 ## 완료: 대화형 챗봇 에이전트 (Stage A~E, `src/auto_stock/chat_agent/`)
 
-> MVP-0+신호 소스 확장(#1~#4)이 전부 일방향 배치 파이프라인인 것과 별도 축으로, 사용자가 자유 질의하면 필요한 분석 도구만 스스로 골라 호출하고 종합 답변하는 대화형 에이전트를 구현했다. 메인 루프는 OpenAI Responses API의 네이티브 tool-calling을 수동 while 루프로 오케스트레이션(`chat_agent/loop.py`, LangGraph/`deepagents` 미도입) — 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브)만 `deepagents` 서브에이전트로 agent-as-tool 노출한다. 메인 tool은 총 9개(`resolve_ticker` + 6개 신호 분석 + 위 2개 서브에이전트). `code-reviewer`/`security-reviewer`/`risk-policy-guardian` 3중 병렬 리뷰에서 나온 HIGH 2건(`loop.py`의 무방비 API 호출 + 배치용 `max_calls_per_run` 재사용으로 인한 세션 잠김, 뉴스/공시 원문 프롬프트 인젝션 방어 부재)과 MEDIUM 2건(서브에이전트 `structured_response` 후처리가 try 밖에 있던 문제, `QueryBudget` 사전차감 추정치가 실제 재귀상한보다 작던 문제)을 전부 TDD로 수정, 회귀 없음(488개 테스트, 커버리지 98%). 리스크정책 리뷰는 위반 없음. 상세: `docs/design/chat-agent-plan.md`("Stage E 구현 결과" 섹션), `docs/design/chat-agent-architecture-review.md`, `docs/design/multi-asset-automation-roadmap.md`(향후 멀티에셋/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.
+> MVP-0+신호 소스 확장(#1~#4)이 전부 일방향 배치 파이프라인인 것과 별도 축으로, 사용자가 자유 질의하면 필요한 분석 도구만 스스로 골라 호출하고 종합 답변하는 대화형 에이전트를 구현했다. 메인 루프는 OpenAI Responses API의 네이티브 tool-calling을 수동 while 루프로 오케스트레이션(`chat_agent/loop.py`, LangGraph/`deepagents` 미도입) — 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브)만 `deepagents` 서브에이전트로 agent-as-tool 노출한다. 메인 tool은 총 9개(`resolve_ticker` + 6개 신호 분석 + 위 2개 서브에이전트). `code-reviewer`/`security-reviewer`/`risk-policy-guardian` 3중 병렬 리뷰에서 나온 HIGH 2건(`loop.py`의 무방비 API 호출 + 배치용 `max_calls_per_run` 재사용으로 인한 세션 잠김, 뉴스/공시 원문 프롬프트 인젝션 방어 부재)과 MEDIUM 2건(서브에이전트 `structured_response` 후처리가 try 밖에 있던 문제, `QueryBudget` 사전차감 추정치가 실제 재귀상한보다 작던 문제)을 전부 TDD로 수정, 회귀 없음(488개 테스트, 커버리지 98%). 리스크정책 리뷰는 위반 없음. 상세: `docs/_review_parts/06_chat_agent.md`("Stage E 구현 결과" 섹션), `docs/design/main-agent-migration-plan.md`, `docs/PRD.md`(향후 멀티에셋/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴 등)은 아직 미실행.
 
 > **갱신 (2026-10-12)**: 메인 루프는 deepagents `create_deep_agent` 기반(`chat_agent/deep_loop.py` + `agent_middleware.py`)이 기본이 됐다(구 수동 루프 `loop.py`는 `CHAT_AGENT_LOOP=legacy` 롤백용, 2026-10-26 이후 제거 예정). 도구는 `chat_agent/tool_registry.py`의 `TOOL_SPECS` 한 곳에서 정의한다. deepagents 서브에이전트는 4개(find_related_companies, stock_analyst, recommendation_synthesis, etf_composition). 상세: `docs/design/main-agent-migration-plan.md`.
 
@@ -166,7 +166,7 @@ OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입�
 
 ## `src/auto_stock/news_disclosure/` — 뉴스/공시 분석 에이전트 (#4, 보조 신호, DART+EDGAR 양쪽 완료)
 
-공시 목록(보고서명·접수일자·비고) — KRX는 DART, NASDAQ은 SEC EDGAR — 을 OpenAI GPT(`gpt-5.6-luna`)에 입력해 시장 영향(호재/악재/중립)을 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다(ML #2·LLM차트 #3과 동일하게 자체 후보를 만들지도 알림을 필터링하지도 않음). `llm_chart_analyst/`와 구조적으로 동일한 패턴(Protocol, SDK 예외 통일, `analyze()`/`to_reasons()` 분리)을 따르되 코드는 공유하지 않는다(의도된 설계 — 근거는 `news-disclosure-plan.md` 핵심 설계 결정 7). 이 해석 계층 자체는 시장과 무관하게 완전히 동일한 코드가 재사용된다 — DART/EDGAR 분기는 데이터 수집 계층(`dart_source.py`/`edgar_source.py`)과 오케스트레이터(`_news_reasons`)에만 있다.
+공시 목록(보고서명·접수일자·비고) — KRX는 DART, NASDAQ은 SEC EDGAR — 을 OpenAI GPT(`gpt-5.6-luna`)에 입력해 시장 영향(호재/악재/중립)을 구조화된 형태로 해석하고, 규칙엔진 후보에 대한 **보조 근거**로만 추가한다(ML #2·LLM차트 #3과 동일하게 자체 후보를 만들지도 알림을 필터링하지도 않음). `llm_chart_analyst/`와 구조적으로 동일한 패턴(Protocol, SDK 예외 통일, `analyze()`/`to_reasons()` 분리)을 따르되 코드는 공유하지 않는다(의도된 설계 — 근거는 `news-disclosure.md` 핵심 설계 결정 7). 이 해석 계층 자체는 시장과 무관하게 완전히 동일한 코드가 재사용된다 — DART/EDGAR 분기는 데이터 수집 계층(`dart_source.py`/`edgar_source.py`)과 오케스트레이터(`_news_reasons`)에만 있다.
 
 | 파일 | 역할 |
 |---|---|

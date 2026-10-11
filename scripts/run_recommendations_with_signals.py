@@ -1,7 +1,7 @@
 """MVP-0 + ML 보조 신호(#2) + LLM 차트분석 보조 신호(#3) + 뉴스/공시 보조 신호(#4) +
 뉴스 감성분석 보조 신호(#4-뉴스) 동시 실행 스크립트 — scripts/run_recommendations_with_ml.py의
-변형(docs/design/llm-chart-analyst-plan.md "오케스트레이터 통합" / Phase 3,
-docs/design/news-disclosure-phase3-plan.md §6, docs/design/news-sentiment-plan.md).
+변형(docs/design/llm-chart-analyst.md "오케스트레이터 통합" / Phase 3,
+docs/design/news-disclosure.md §6, docs/design/news-sentiment.md).
 
 KRX 로컬 ML 모델 아티팩트(models/ml_predictor/KRX_h5_logreg.joblib)와 OpenAI LLM
 크리덴셜(.env의 OPENAI_API_KEY)을 모두 로드해 run_recommendation_pipeline에

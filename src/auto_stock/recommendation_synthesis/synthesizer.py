@@ -1,7 +1,7 @@
 """`recommendation_synthesis` — 3번째 deepagents 서브에이전트(다른 둘은
 `related_companies.py`/`stock_analyst.py`). 숏리스트 종목들의 `TickerJudgment`를 비교해
 순위를 매기되, 두 종목의 우열이 신호만으로 애매하면 `reinvestigate_ticker`로 `stock_analyst`를
-다시 호출해 추가 증거를 확보할 수 있다(recommendation-synthesis-plan.md §4,
+다시 호출해 추가 증거를 확보할 수 있다(recommendation-synthesis.md §4,
 2026-10-05 확정 — 처음엔 "입력/출력이 고정돼 있어 agent가 필요 없다"고 판단해 plain
 function으로 설계했으나, 이 재조사 자율성 요구로 agent 정당화 기준을 충족하게 되어 번복).
 

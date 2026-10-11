@@ -1,5 +1,5 @@
 """`openai` SDK를 import하는 유일한 파일. news_disclosure/client.py·news_sentiment/client.py와
-동일한 예외 매핑 표를 그대로 복제한다(코드는 공유하지 않음 — news-disclosure-plan.md
+동일한 예외 매핑 표를 그대로 복제한다(코드는 공유하지 않음 — news-disclosure.md
 핵심 설계 결정 7). 모든 SDK 예외를 `ChatAgentError`로 통일한다.
 
 다른 3개 클라이언트와의 유일한 차이: 이 클라이언트는 `responses.parse(text_format=...)`가

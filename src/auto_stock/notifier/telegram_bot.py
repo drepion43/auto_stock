@@ -1,4 +1,4 @@
-"""Notification-only Telegram sender for MVP-0 (IMPLEMENTATION_PLAN.md §7).
+"""Notification-only Telegram sender for MVP-0 (CODEBASE_REVIEW.md §7).
 
 Approval/rejection callback handling is out of scope here — that's added in
 MVP-1 alongside the order execution agent (#8). This module only pushes the

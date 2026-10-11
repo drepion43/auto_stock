@@ -1,6 +1,6 @@
 """`client.responses.parse(..., text_format=DisclosureRead)`가 검증하는 구조화 출력 스키마.
 
-`market_impact`를 `sentiment`가 아닌 이 이름으로 둔 이유는 news-disclosure-plan.md 핵심 설계
+`market_impact`를 `sentiment`가 아닌 이 이름으로 둔 이유는 news-disclosure.md 핵심 설계
 결정 1 참고 — 공시는 뉴스처럼 어조가 있는 게 아니라 기업이 제출하는 사실 통지이므로 "감성"이
 아니라 "통상적 영향 해석"이다. `confidence`가 서수인 이유, 목표가/수량 필드가 없는 이유는
 llm_chart_analyst/schema.py의 동일 근거를 그대로 따른다(중복 설명 생략).

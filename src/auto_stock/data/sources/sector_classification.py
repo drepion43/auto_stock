@@ -1,4 +1,4 @@
-"""공식 업종 분류(KRX 전용) — recommendation-synthesis-plan.md §5 1차 매칭 경로.
+"""공식 업종 분류(KRX 전용) — recommendation-synthesis.md §5 1차 매칭 경로.
 pykrx의 지수 API(`get_index_ticker_list`/`get_index_ticker_name`/
 `get_index_portfolio_deposit_file`)로 업종명↔코드 매핑과 구성종목을 조회한다.
 

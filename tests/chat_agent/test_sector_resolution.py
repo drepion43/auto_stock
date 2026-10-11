@@ -1,5 +1,5 @@
 """sector_resolution.py TDD — 1차(공식 업종 분류) 경로만 다룬다
-(recommendation-synthesis-plan.md §5). `resolve_official_sector`는 새 LLM
+(recommendation-synthesis.md §5). `resolve_official_sector`는 새 LLM
 클라이언트를 만들지 않고 메인 챗봇이 이미 쓰는 `ChatAgentReader`를 재사용한다 —
 닫힌 선택지 중 하나(또는 'NONE')만 자유텍스트로 받아, 실제 업종명 목록에 있는지
 검증한다(환각 방지: 모델이 목록 밖 이름을 지어내도 무시됨). 2차(LLM 제안+뉴스검증

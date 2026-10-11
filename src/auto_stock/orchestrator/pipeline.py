@@ -5,9 +5,9 @@ Pure composition of already-built, already-tested modules (docs/design/orchestra
 caller (see design doc for why the orchestrator doesn't decide those itself).
 
 `ml_model`/`llm_client`/`news_client`/`sentiment_client` are optional boost-only signal
-sources (ML #2, LLM #3, 공시 #4, 뉴스감성 #4-뉴스 — docs/design/ml-predictor-plan.md 핵심
-설계 결정 2, docs/design/llm-chart-analyst-plan.md "오케스트레이터 통합", docs/design/
-news-disclosure-phase3-plan.md, docs/design/news-sentiment-plan.md): when all four are
+sources (ML #2, LLM #3, 공시 #4, 뉴스감성 #4-뉴스 — docs/design/ml-predictor.md 핵심
+설계 결정 2, docs/design/llm-chart-analyst.md "오케스트레이터 통합", docs/design/
+news-disclosure.md, docs/design/news-sentiment.md): when all four are
 omitted (default None), this function is byte-for-byte identical to the pre-extension
 behavior — no extra_reasons kwarg is even passed to generate_explanation. The branch
 condition below is deliberately a single `and`-chained check (not separate `if`s) so the
@@ -92,7 +92,7 @@ def _news_reasons(
 
     시장별로 다른 공시 소스를 쓴다(KRX -> DART, NASDAQ -> EDGAR) — 해석 계층(analyze_disclosures/
     to_disclosure_reasons)은 시장과 무관하게 완전히 동일하게 재사용된다(docs/design/
-    news-disclosure-nasdaq-plan.md 핵심 설계 결정 2/4). 별도 헬퍼로 쪼개지 않고 이 함수 안에서
+    news-disclosure.md 핵심 설계 결정 2/4). 별도 헬퍼로 쪼개지 않고 이 함수 안에서
     분기하는 이유도 같은 문서에 있다 — 서로 다른 신호원이 아니라 같은 신호원의 시장별 소스
     차이일 뿐이기 때문(_ml_reasons/_llm_reasons/_news_reasons를 분리한 것과는 다른 판단).
 
@@ -143,7 +143,7 @@ def _sentiment_reasons(
 
     `_news_reasons`(공시)와 동일한 market 분기 구조다(KRX -> 네이버뉴스, NASDAQ -> GDELT)
     — 다만 티커→회사명 해석부터 필요하다(뉴스 API는 티커가 아니라 회사명으로 검색해야
-    한다, docs/design/news-sentiment-plan.md 핵심 설계 결정 2). GDELT 쪽은 정확 구문
+    한다, docs/design/news-sentiment.md 핵심 설계 결정 2). GDELT 쪽은 정확 구문
     검색을 위해 회사명을 따옴표로 감싸 질의를 만든다(핵심 설계 결정 3) — naver_news_source.py/
     gdelt_source.py는 이 질의 구성 로직을 모르는 순수 데이터 접근 계층이라 여기서 만든다.
 

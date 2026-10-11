@@ -1,6 +1,6 @@
 # LLM 차트분석 에이전트 (#3) — 구현 결과
 
-> `docs/design/llm-chart-analyst-plan.md`(사전 계획)의 실제 구현 결과 기록. Phase 0~4 전체 완료.
+> `docs/design/llm-chart-analyst.md`(사전 계획)의 실제 구현 결과 기록. Phase 0~4 전체 완료.
 
 ## 목적·입출력
 
@@ -18,7 +18,7 @@ OHLCV + 기술적 지표의 수치 요약을 OpenAI GPT(`gpt-5.6-luna`)에 입�
 | `client.py` | `OpenAIChartClient` — `openai`를 import하는 유일한 파일 |
 | `analyst.py` | `analyze(client, records)`, `to_reasons(analysis, action)` |
 
-계획서의 8개 핵심 설계 결정(수치 입력, 환각 방어, 동조 방어, `extra_reasons` 경유, 구조화 출력, 실패 격리, SDK 직접 호출, OpenAI 프로바이더)은 코드로 그대로 구현됐다 — 상세 근거는 `llm-chart-analyst-plan.md` 참고, 여기서는 중복 서술하지 않는다.
+계획서의 8개 핵심 설계 결정(수치 입력, 환각 방어, 동조 방어, `extra_reasons` 경유, 구조화 출력, 실패 격리, SDK 직접 호출, OpenAI 프로바이더)은 코드로 그대로 구현됐다 — 상세 근거는 `llm-chart-analyst.md` 참고, 여기서는 중복 서술하지 않는다.
 
 ## 오케스트레이터 통합
 

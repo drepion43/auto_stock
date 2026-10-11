@@ -3,7 +3,7 @@
 `analyze`는 `action`을 받지 않고 독립적으로 영향을 판단하며(동조 방어), `ticker`/`market`는
 호출자가 넘긴 값을 그대로 라벨링에만 쓰고 프롬프트에는 넣지 않는다(환각 방어, prompt.py
 참고). 공시 목록이 비어 있으면 `None`을 반환하고 `client.read_disclosures`를 호출하지
-않는다 — API 호출 자체가 발생하지 않는 1층 방어(news-disclosure-plan.md 에러 처리 1층과
+않는다 — API 호출 자체가 발생하지 않는 1층 방어(news-disclosure.md 에러 처리 1층과
 동일). `to_reasons`가 코드에서 동의/상충/중립을 비교한다 — llm_chart_analyst.analyst와
 정확히 같은 구조다.
 """

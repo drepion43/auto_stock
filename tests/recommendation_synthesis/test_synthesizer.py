@@ -125,7 +125,7 @@ def test_system_prompt_instructs_selective_reinvestigation_not_blanket():
 
 def test_system_prompt_requires_disclosing_signal_coverage_asymmetry():
     """§3에서 agent 자율성을 택한 트레이드오프 — 종목마다 signals_used가 다를 수 있다는
-    걸 최종 summary가 숨기면 안 된다(recommendation-synthesis-plan.md §4)."""
+    걸 최종 summary가 숨기면 안 된다(recommendation-synthesis.md §4)."""
     assert "signals_used" in _SYSTEM_PROMPT
 
 

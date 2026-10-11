@@ -1,6 +1,6 @@
 # ML 예측 모듈 (#2) 구현 가이드
 
-> `docs/design/ml-predictor-plan.md`(구현 착수 전 계획)를 실제로 구현한 뒤 작성한 결과 문서. `docs/design/rule-engine.md`, `docs/design/orchestrator.md`와 같은 위치·형식.
+> `docs/design/ml-predictor.md`(구현 착수 전 계획)를 실제로 구현한 뒤 작성한 결과 문서. `docs/design/rule-engine.md`, `docs/design/orchestrator.md`와 같은 위치·형식.
 
 ## 목적
 
@@ -71,4 +71,4 @@ src/auto_stock/ml_predictor/
 
 ## 이번 스코프가 아닌 것
 
-`docs/design/ml-predictor-plan.md`의 "이번 스코프가 아닌 것" 절 그대로 유효하다 — 전략 레벨 백테스트, 생존편향 제거, 4계층 앙상블 가중치 확정, ML 단독 후보 생성/필터링, 딥러닝 고도화, 전 종목 실시간 스캔, 자동 재학습 등은 모두 이연됐다.
+`docs/design/ml-predictor.md`의 "이번 스코프가 아닌 것" 절 그대로 유효하다 — 전략 레벨 백테스트, 생존편향 제거, 4계층 앙상블 가중치 확정, ML 단독 후보 생성/필터링, 딥러닝 고도화, 전 종목 실시간 스캔, 자동 재학습 등은 모두 이연됐다.

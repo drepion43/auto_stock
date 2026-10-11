@@ -3,7 +3,7 @@
 `StandardScaler`는 반드시 `Pipeline` 안에 넣는다 — fold/split 밖에서 전체 데이터로
 스케일러를 fit하면 테스트 구간의 분포 정보가 학습에 새어 들어간다(lookahead 방어
 5중 축 중 하나). RandomForest/DummyClassifier는 학습 스크립트의 평가 리포트 전용
-벤치마크이며 프로덕션에는 배선하지 않는다 (docs/design/ml-predictor-plan.md 핵심 설계 결정 1).
+벤치마크이며 프로덕션에는 배선하지 않는다 (docs/design/ml-predictor.md 핵심 설계 결정 1).
 """
 
 from datetime import datetime

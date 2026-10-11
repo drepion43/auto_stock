@@ -1,5 +1,5 @@
 """Manual verification: confirms the 뉴스 감성분석 에이전트(#4-뉴스) wiring end-to-end —
-네이버(KRX)와 GDELT(NASDAQ) 둘 다(docs/design/news-sentiment-plan.md).
+네이버(KRX)와 GDELT(NASDAQ) 둘 다(docs/design/news-sentiment.md).
 
 Run from the project root so `.env` resolves correctly:
     .venv/Scripts/python scripts/verify_news_sentiment.py                           (Windows, KRX/네이버 real calls)
@@ -19,7 +19,7 @@ Two independent axes:
   강제한 `OpenAINewsSentimentClient` → `analyze()` 실행 후 구조화 결과 출력.
 
 **주의**: GDELT `seendate` 필드 형식은 이 세션에서 라이브 검증하지 못했다(네트워크 제약,
-docs/design/news-sentiment-plan.md Phase 0 미완료 항목) — NASDAQ 모드는 실제 실행 전
+docs/design/news-sentiment.md Phase 0 미완료 항목) — NASDAQ 모드는 실제 실행 전
 `gdelt_source.py`의 `_SEENDATE_FORMAT` 가정이 맞는지 먼저 확인할 것.
 
 샘플 종목에 최근 기사가 없으면(`analyze()`가 `None` 반환) 정상 흐름으로 안내하고 실패

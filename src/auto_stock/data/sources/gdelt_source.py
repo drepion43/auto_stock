@@ -1,5 +1,5 @@
 """GDELT DOC 2.0 API 연동 — 데이터 수집 계층(#0)의 확장, 뉴스 감성분석(#4-뉴스)
-미국 소스(docs/design/news-sentiment-plan.md).
+미국 소스(docs/design/news-sentiment.md).
 
 DART/EDGAR가 공시를 다루는 것과 달리, 이 모듈은 진짜 뉴스 기사를 다룬다. GDELT는
 API 키가 필요 없는 무료 공개 API — 크리덴셜 로딩 자체가 없다.
@@ -8,7 +8,7 @@ API 키가 필요 없는 무료 공개 API — 크리덴셜 로딩 자체가 없
 (예: DOC 2.0 API 날짜 파라미터가 `YYYYMMDDHHMMSS` 형식을 쓰는 것과 일관된 패턴)로
 교차 확인한 값이며, 이 세션에서는 네트워크 제약(이 환경에서 api.gdeltproject.org로의
 아웃바운드 연결이 모두 타임아웃됨 — WebFetch·curl 둘 다 확인)으로 실제 라이브 응답을
-직접 검증하지 못했다(docs/design/news-sentiment-plan.md Phase 0 미완료 항목). 실제
+직접 검증하지 못했다(docs/design/news-sentiment.md Phase 0 미완료 항목). 실제
 사용 전 반드시 라이브 호출로 재확인해야 한다.
 
 **요청 제한(2026-10-12 라이브 실측)**: GDELT는 "Please limit requests to one every 5 seconds"와 함께
@@ -109,7 +109,7 @@ def search_articles(
     """GDELT DOC 2.0 기사 검색(`mode=artlist`) 호출. 결과 없으면 빈 리스트(예외 아님).
 
     `query`는 호출자가 완성한 검색 질의(정확 구문 검색이 필요하면 호출자가 따옴표로
-    감싸 전달 — 이 함수는 질의 구성 로직을 모른다, docs/design/news-sentiment-plan.md
+    감싸 전달 — 이 함수는 질의 구성 로직을 모른다, docs/design/news-sentiment.md
     핵심 설계 결정 3). GDELT는 `startdatetime`/`enddatetime` 파라미터를 지원하지만,
     타임존/경계 처리 불확실성을 피하기 위해 dart_source.py/edgar_source.py와 동일하게
     최신순으로 가져온 뒤 클라이언트 사이드로 기간을 필터링한다. `ticker`/`market`은

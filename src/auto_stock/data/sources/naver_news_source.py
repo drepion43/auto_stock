@@ -1,5 +1,5 @@
 """네이버 뉴스 검색 API 연동 — 데이터 수집 계층(#0)의 확장, 뉴스 감성분석(#4-뉴스)
-국내 소스(docs/design/news-sentiment-plan.md).
+국내 소스(docs/design/news-sentiment.md).
 
 DART/EDGAR가 공시(기업이 직접 제출하는 공식 문서)를 다루는 것과 달리, 이 모듈은 진짜
 뉴스 기사를 다룬다. 네이버 뉴스 검색 API는 종목코드가 아니라 회사명 문자열로 검색해야
