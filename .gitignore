@@ -26,6 +26,4 @@ models/**/*.joblib
 .coverage
 
 #claude
-CLAUDE.md
-docs/*
 .claude/*
