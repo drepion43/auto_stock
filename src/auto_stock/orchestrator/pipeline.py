@@ -26,6 +26,11 @@ merge order is ML → LLM차트 → 공시 → 뉴스감성(항상 마지막).
 from datetime import date, timedelta
 
 from auto_stock.data.cache import OHLCVCache
+from auto_stock.data.market_routing import (
+    KRX_MARKETS,
+    NEWS_SOURCE_LABELS,
+    SENTIMENT_SOURCE_LABELS,
+)
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.data.service import get_ohlcv
 from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_code, resolve_corp_name
@@ -82,19 +87,17 @@ def _llm_reasons(
         return [], str(exc)
 
 
-_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}
-
-
 def _news_reasons(
     news_client: DisclosureReader | None, ticker: str, market: str, action: str
 ) -> tuple[list[str], str | None]:
     """절대 raise하지 않는다 — 공시 조회든 LLM 해석이든 실패가 추천 발송을 막아서는 안 된다.
 
-    시장별로 다른 공시 소스를 쓴다(KRX -> DART, NASDAQ -> EDGAR) — 해석 계층(analyze_disclosures/
-    to_disclosure_reasons)은 시장과 무관하게 완전히 동일하게 재사용된다(docs/design/
-    news-disclosure.md 핵심 설계 결정 2/4). 별도 헬퍼로 쪼개지 않고 이 함수 안에서
-    분기하는 이유도 같은 문서에 있다 — 서로 다른 신호원이 아니라 같은 신호원의 시장별 소스
-    차이일 뿐이기 때문(_ml_reasons/_llm_reasons/_news_reasons를 분리한 것과는 다른 판단).
+    시장별로 다른 공시 소스를 쓴다(KOSPI/KOSDAQ -> DART, NASDAQ/NYSE -> EDGAR) —
+    해석 계층(analyze_disclosures/to_disclosure_reasons)은 시장과 무관하게 완전히
+    동일하게 재사용된다(docs/design/news-disclosure.md 핵심 설계 결정 2/4). 별도
+    헬퍼로 쪼개지 않고 이 함수 안에서 분기하는 이유도 같은 문서에 있다 — 서로 다른
+    신호원이 아니라 같은 신호원의 시장별 소스 차이일 뿐이기 때문(_ml_reasons/
+    _llm_reasons/_news_reasons를 분리한 것과는 다른 판단).
 
     공시 조회와 LLM 해석은 서로 다른 실패 지점이라 별도 try/except로 감싸고, 에러 메시지에
     "DART 조회 실패"/"EDGAR 조회 실패"/"LLM 공시해석 실패" 접두사를 붙여 반환한다 — `_ml_reasons`/
@@ -103,14 +106,14 @@ def _news_reasons(
     if news_client is None:
         return [], None
 
-    source_label = _NEWS_SOURCE_LABELS.get(market)
+    source_label = NEWS_SOURCE_LABELS.get(market)
     if source_label is None:
         return [], None  # 지원하지 않는 시장 — 조용히 스킵(향후 시장 확장 대비)
 
     try:
-        if market == "KRX":
+        if market in KRX_MARKETS:
             corp_id = resolve_corp_code(ticker)
-        else:  # NASDAQ
+        else:  # NASDAQ/NYSE
             corp_id = resolve_cik(ticker)
         if corp_id is None:
             return [], None  # 미등록 종목 — 에러 아님, 조용히 스킵
@@ -119,7 +122,7 @@ def _news_reasons(
         start = end - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
         disclosures = (
             fetch_disclosures(corp_id, start, end)
-            if market == "KRX"
+            if market in KRX_MARKETS
             else fetch_filings(corp_id, start, end)
         )
     except Exception as exc:
@@ -132,36 +135,34 @@ def _news_reasons(
         return [], f"LLM 공시해석 실패: {exc}"
 
 
-_SENTIMENT_SOURCE_LABELS = {"KRX": "네이버뉴스", "NASDAQ": "GDELT"}
-
-
 def _sentiment_reasons(
     sentiment_client: NewsSentimentReader | None, ticker: str, market: str, action: str
 ) -> tuple[list[str], str | None]:
     """절대 raise하지 않는다 — 이름 해석이든 뉴스 조회든 LLM 해석이든 실패가 추천 발송을
     막아서는 안 된다.
 
-    `_news_reasons`(공시)와 동일한 market 분기 구조다(KRX -> 네이버뉴스, NASDAQ -> GDELT)
-    — 다만 티커→회사명 해석부터 필요하다(뉴스 API는 티커가 아니라 회사명으로 검색해야
-    한다, docs/design/news-sentiment.md 핵심 설계 결정 2). GDELT 쪽은 정확 구문
-    검색을 위해 회사명을 따옴표로 감싸 질의를 만든다(핵심 설계 결정 3) — naver_news_source.py/
-    gdelt_source.py는 이 질의 구성 로직을 모르는 순수 데이터 접근 계층이라 여기서 만든다.
+    `_news_reasons`(공시)와 동일한 market 분기 구조다(KOSPI/KOSDAQ -> 네이버뉴스,
+    NASDAQ/NYSE -> GDELT) — 다만 티커→회사명 해석부터 필요하다(뉴스 API는 티커가
+    아니라 회사명으로 검색해야 한다, docs/design/news-sentiment.md 핵심 설계
+    결정 2). GDELT 쪽은 정확 구문 검색을 위해 회사명을 따옴표로 감싸 질의를
+    만든다(핵심 설계 결정 3) — naver_news_source.py/gdelt_source.py는 이 질의
+    구성 로직을 모르는 순수 데이터 접근 계층이라 여기서 만든다.
 
     이름 해석(DART/EDGAR 호출)과 뉴스 조회(네이버/GDELT 호출)는 서로 다른 외부 시스템을
     부르므로 별도 try/except로 감싼다 — 하나로 묶으면 DART/EDGAR 실패가 "네이버뉴스/GDELT
     조회 실패"로 잘못 라벨링된다(코드 리뷰 MEDIUM). `_news_reasons`가 이미 쓰는
-    `_NEWS_SOURCE_LABELS`(DART/EDGAR)를 이름 해석 실패 라벨로 재사용한다."""
+    `NEWS_SOURCE_LABELS`(DART/EDGAR)를 이름 해석 실패 라벨로 재사용한다."""
     if sentiment_client is None:
         return [], None
 
-    source_label = _SENTIMENT_SOURCE_LABELS.get(market)
+    source_label = SENTIMENT_SOURCE_LABELS.get(market)
     if source_label is None:
         return [], None  # 지원하지 않는 시장 — 조용히 스킵(향후 시장 확장 대비)
 
     try:
-        name = resolve_corp_name(ticker) if market == "KRX" else resolve_company_title(ticker)
+        name = resolve_corp_name(ticker) if market in KRX_MARKETS else resolve_company_title(ticker)
     except Exception as exc:
-        name_source_label = _NEWS_SOURCE_LABELS.get(market, source_label)
+        name_source_label = NEWS_SOURCE_LABELS.get(market, source_label)
         return [], f"{name_source_label} 조회 실패: {exc}"
     if name is None:
         return [], None  # 회사명 해석 실패 — 에러 아님, 조용히 스킵
@@ -169,7 +170,7 @@ def _sentiment_reasons(
     try:
         end = date.today()
         start = end - timedelta(days=NEWS_LOOKBACK_DAYS)
-        if market == "KRX":
+        if market in KRX_MARKETS:
             articles = search_news(name, ticker, market, start, end)
         else:
             # company_phrase: 따옴표 제거(정확구문 문법 보호) + SEC 법인 접미사 제거(뉴스 표기와 일치).

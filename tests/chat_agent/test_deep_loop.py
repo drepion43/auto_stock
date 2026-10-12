@@ -62,7 +62,7 @@ def _tc(name: str, args: dict, call_id: str) -> dict:
 
 
 def _price_call(call_id: str = "c1", ticker: str = "005930") -> dict:
-    return _tc("get_price_data", {"ticker": ticker, "market": "KRX"}, call_id)
+    return _tc("get_price_data", {"ticker": ticker, "market": "KOSPI"}, call_id)
 
 
 def _context(**overrides) -> ChatToolContext:
@@ -139,11 +139,11 @@ def test_tool_result_round_trips_as_legacy_json_and_emits_ordered_events(price_t
     assert tool_messages[0].content == json.dumps({"available": True, "latest": {"close": 263000.0}}, ensure_ascii=False)
     assert events == [
         {"type": "thinking"},
-        {"type": "tool_start", "name": "get_price_data", "arguments": {"ticker": "005930", "market": "KRX"}},
+        {"type": "tool_start", "name": "get_price_data", "arguments": {"ticker": "005930", "market": "KOSPI"}},
         {
             "type": "tool_done",
             "name": "get_price_data",
-            "arguments": {"ticker": "005930", "market": "KRX"},
+            "arguments": {"ticker": "005930", "market": "KOSPI"},
             "result": {"available": True, "latest": {"close": 263000.0}},
         },
         {"type": "thinking"},

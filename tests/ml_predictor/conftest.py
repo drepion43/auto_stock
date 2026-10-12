@@ -17,7 +17,7 @@ from auto_stock.ml_predictor.models import FeatureVector, LabeledSample, Trainin
 def make_records(
     prices: list[float],
     ticker: str = "005930",
-    market: str = "KRX",
+    market: str = "KOSPI",
     start: date = date(2024, 1, 1),
     volumes: list[int] | None = None,
 ) -> list[OHLCVRecord]:
@@ -72,6 +72,6 @@ def synthetic_training_dataset() -> TrainingDataset:
     for i in range(200):
         values = {name: rng.uniform(-1, 1) for name in FEATURE_NAMES}
         label = 1 if values["return_1d"] + values["return_5d"] > 0 else 0
-        feature = FeatureVector(ticker="TEST", market="KRX", date=start + timedelta(days=i), values=values)
+        feature = FeatureVector(ticker="TEST", market="KOSPI", date=start + timedelta(days=i), values=values)
         samples.append(LabeledSample(feature=feature, label=label))
     return TrainingDataset(samples=samples, feature_names=FEATURE_NAMES)

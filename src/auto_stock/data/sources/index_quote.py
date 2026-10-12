@@ -1,5 +1,6 @@
-"""지수 자체의 시세 조회 — VIX/다우존스/나스닥종합/S&P500/러셀2000. 종목(ticker)이
-아니라 지수 자체를 묻는 챗봇 질의("VIX 지금 어때") 전용 데이터 소스다.
+"""지수 자체의 시세 조회 — 코스피/코스닥/코스피200/VIX/다우존스/나스닥종합/S&P500/
+러셀2000. 종목(ticker)이 아니라 지수 자체를 묻는 챗봇 질의("VIX 지금 어때",
+"코스피 지금 어때") 전용 데이터 소스다.
 
 `fdr.DataReader(symbol)`이 Yahoo Finance를 거쳐 지수의 OHLCV+Adj Close를 그대로
 반환한다(FDR 소스코드 확인: `data.py`의 `yahoo_index_symbol_map`을 거쳐
@@ -15,7 +16,7 @@ import FinanceDataReader as fdr
 
 # fdr.DataReader가 받는 심볼 — 챗봇 tool enum(tool_schemas.py의 get_index_quote)과
 # 반드시 동기화해야 한다.
-SUPPORTED_INDICES = frozenset({"VIX", "DJI", "IXIC", "S&P500", "RUT"})
+SUPPORTED_INDICES = frozenset({"KS11", "KQ11", "KS200", "VIX", "DJI", "IXIC", "S&P500", "RUT"})
 
 _LOOKBACK_DAYS = 10  # 전일대비 변화율 계산에 필요한 최소 2거래일 + 공휴일 여유
 

@@ -23,13 +23,13 @@ def test_fetch_ohlcv_maps_fdr_dataframe_to_records(mocker):
     mocker.patch.object(fdr_source.fdr, "DataReader", return_value=_fake_fdr_dataframe())
 
     # Act
-    records = fdr_source.fetch_ohlcv("005930", date(2026, 1, 1), date(2026, 1, 6), market="KRX")
+    records = fdr_source.fetch_ohlcv("005930", date(2026, 1, 1), date(2026, 1, 6), market="KOSPI")
 
     # Assert
     assert len(records) == 2
     first = records[0]
     assert first.ticker == "005930"
-    assert first.market == "KRX"
+    assert first.market == "KOSPI"
     assert first.date == date(2026, 1, 2)
     assert first.open == 70000.0
     assert first.volume == 12_345_678
@@ -46,6 +46,6 @@ def test_fetch_ohlcv_supports_nasdaq_market(mocker):
 def test_fetch_ohlcv_returns_empty_list_for_empty_response(mocker):
     mocker.patch.object(fdr_source.fdr, "DataReader", return_value=pd.DataFrame())
 
-    records = fdr_source.fetch_ohlcv("000000", date(2026, 1, 1), date(2026, 1, 6), market="KRX")
+    records = fdr_source.fetch_ohlcv("000000", date(2026, 1, 1), date(2026, 1, 6), market="KOSPI")
 
     assert records == []

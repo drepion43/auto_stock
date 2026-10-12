@@ -30,14 +30,16 @@ from auto_stock.chat_agent.models import ChatAgentReader, QueryBudget
 from auto_stock.chat_agent.sector_resolution import resolve_sector_tickers
 from auto_stock.chat_agent.tools import ChatToolContext, _bind_stock_analyst_tools
 from auto_stock.data.cache import OHLCVCache
+from auto_stock.data.market_routing import ML_MODEL_KEYS
 from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
 from auto_stock.ml_predictor.models import ModelBundle
 from auto_stock.news_disclosure.models import DisclosureReader
 from auto_stock.news_sentiment.models import NewsSentimentReader
 from auto_stock.orchestrator.deep_scan import run_deep_scan
+from auto_stock.orchestrator.market_buckets import bucket_universe_by_atomic_market
 from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
-from auto_stock.orchestrator.scan_coordinator import _fresh_universe
+from auto_stock.orchestrator.scan_coordinator import _fresh_universe_atomic
 from auto_stock.orchestrator.shortlist import ShortlistEntry, build_shortlist
 from auto_stock.recommendation_synthesis.credentials import (
     RECOMMENDATION_SYNTHESIS_LLM_CALL_ESTIMATE,
@@ -195,14 +197,31 @@ class RecommendationCoordinator:
             )
 
     def _run(self, market: str) -> None:
+        """`market`은 원자 market이거나 합성 버킷(KRX/US/SP500/DOW)일 수 있다 —
+        합성 버킷은 원자 market별로 쪼개 각각 숏리스트를 만들고(기존 `build_shortlist`
+        계약은 안 바꿈), 합친 숏리스트를 버킷 하나로 심층분석+종합한 뒤 버킷 자신의
+        키로 캐싱한다(ScanCoordinator._run과 동일 패턴)."""
         try:
             cache = self._cache.cursor()
             scan_cache = self._scan_cache.cursor()
-            tickers = _fresh_universe(scan_cache, market, self._universe_size, self._stale_after)
-
-            shortlist, build_errors = build_shortlist(
-                cache, tickers, market, self._ml_models.get(market), self._lookback_days
+            universe_by_market = bucket_universe_by_atomic_market(
+                market,
+                fetch_universe=lambda m: _fresh_universe_atomic(
+                    scan_cache, m, self._universe_size, self._stale_after
+                ),
             )
+
+            shortlist: list[ShortlistEntry] = []
+            build_errors: list[tuple[str, str]] = []
+            for atomic_market, tickers in universe_by_market.items():
+                ml_key = ML_MODEL_KEYS.get(atomic_market)
+                ml_model = self._ml_models.get(ml_key) if ml_key is not None else None
+                market_shortlist, market_errors = build_shortlist(
+                    cache, tickers, atomic_market, ml_model, self._lookback_days
+                )
+                shortlist.extend(market_shortlist)
+                build_errors.extend(market_errors)
+
             shortlist.sort(key=_shortlist_score, reverse=True)
             shortlist = shortlist[: self._shortlist_cap]
 

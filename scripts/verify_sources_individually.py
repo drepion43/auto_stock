@@ -104,7 +104,7 @@ def test_naver() -> None:
     try:
         end = date.today()
         start = end - timedelta(days=_LOOKBACK_DAYS)
-        articles = search_news("삼성전자", _SAMPLE_TICKER_KRX, "KRX", start, end)
+        articles = search_news("삼성전자", _SAMPLE_TICKER_KRX, "KOSPI", start, end)
         print(f"SUCCESS: 기사 {len(articles)}건 (최근 {_LOOKBACK_DAYS}일)")
         _print_articles(articles)
     except NaverNewsApiError as exc:

@@ -25,9 +25,10 @@ from functools import lru_cache
 
 from auto_stock.data.sources.dart_source import resolve_corp_name
 from auto_stock.data.sources.dart_source import resolve_ticker_by_name as resolve_dart_ticker_by_name
-from auto_stock.data.sources.edgar_source import resolve_company_title
+from auto_stock.data.sources.edgar_source import resolve_company_title, resolve_exchange
 from auto_stock.data.sources.edgar_source import resolve_ticker_by_name as resolve_edgar_ticker_by_name
 from auto_stock.data.sources.etf_source import fetch_etf_listing
+from auto_stock.data.sources.pykrx_source import resolve_market
 
 logger = logging.getLogger(__name__)
 
@@ -125,42 +126,72 @@ def _etf_listing_or_empty() -> tuple[tuple[str, str], ...]:
         return ()
 
 
+_KRX_SUB_MARKETS = ("KOSPI", "KOSDAQ")
+_US_SUB_MARKETS = ("NASDAQ", "NYSE")
+
+
+def _krx_markets_for(code: str) -> list[str]:
+    """국내 종목코드의 실제 소속 거래소를 역조회한다. 역조회 실패(코넥스, 캐시
+    미스 등)는 에러가 아니라 "KOSPI/KOSDAQ 둘 다 후보"로 보수적으로 처리한다 —
+    `resolve_ticker`의 기존 모호(ambiguous) 처리 경로가 그대로 사용자에게 되묻는다."""
+    market = resolve_market(code)
+    return [market] if market is not None else list(_KRX_SUB_MARKETS)
+
+
+def _us_markets_for(ticker: str) -> list[str]:
+    """영문 심볼의 실제 소속 거래소(NASDAQ/NYSE)를 역조회한다. 역조회 실패는
+    "NASDAQ/NYSE 둘 다 후보"로 보수적으로 처리한다(`_krx_markets_for`와 동일 원칙)."""
+    exchange = resolve_exchange(ticker)
+    return [exchange] if exchange is not None else list(_US_SUB_MARKETS)
+
+
 def _match_etf_by_name(query: str) -> list[TickerMatch]:
     """`dart_source.resolve_ticker_by_name`과 동일 규칙: 대소문자 무시 완전일치가 있으면
-    그것만, 없으면 부분문자열 포함으로 폴백한다."""
+    그것만, 없으면 부분문자열 포함으로 폴백한다. ETF는 전부 KRX 상장이므로 KOSPI/KOSDAQ
+    역조회(실패 시 둘 다 후보)를 거친다."""
     listing = _etf_listing_or_empty()
     query_casefold = query.casefold()
     exact = [(t, n) for t, n in listing if n.casefold() == query_casefold]
     found = exact or [(t, n) for t, n in listing if query_casefold in n.casefold()]
-    return [TickerMatch(ticker=t, market="KRX", name=n) for t, n in found]
+    return [
+        TickerMatch(ticker=t, market=market, name=n)
+        for t, n in found
+        for market in _krx_markets_for(t)
+    ]
 
 
-def _match_etf_by_code(code: str) -> TickerMatch | None:
+def _match_etf_by_code(code: str) -> list[TickerMatch]:
     name = dict(_etf_listing_or_empty()).get(code)
-    return TickerMatch(ticker=code, market="KRX", name=name) if name is not None else None
+    if name is None:
+        return []
+    return [TickerMatch(ticker=code, market=market, name=name) for market in _krx_markets_for(code)]
 
 
-def _try_direct_code_match(query: str) -> TickerMatch | None:
+def _try_direct_code_match(query: str) -> list[TickerMatch]:
     if query.isdigit() and len(query) == _KRX_CODE_LENGTH:
         name = resolve_corp_name(query)
         if name is None:
             return _match_etf_by_code(query)
-        return TickerMatch(ticker=query, market="KRX", name=name)
+        return [TickerMatch(ticker=query, market=market, name=name) for market in _krx_markets_for(query)]
 
     if query.isascii() and query.isalpha() and len(query) <= _NASDAQ_SYMBOL_MAX_LENGTH:
         upper = query.upper()
         title = resolve_company_title(upper)
-        return TickerMatch(ticker=upper, market="NASDAQ", name=title) if title is not None else None
+        if title is None:
+            return []
+        return [TickerMatch(ticker=upper, market=market, name=title) for market in _us_markets_for(upper)]
 
-    return None
+    return []
 
 
-def _try_korean_alias_match(query: str) -> TickerMatch | None:
+def _try_korean_alias_match(query: str) -> list[TickerMatch]:
     ticker = _NASDAQ_KOREAN_ALIASES.get(query)
     if ticker is None:
-        return None
+        return []
     title = resolve_company_title(ticker)
-    return TickerMatch(ticker=ticker, market="NASDAQ", name=title) if title is not None else None
+    if title is None:
+        return []
+    return [TickerMatch(ticker=ticker, market=market, name=title) for market in _us_markets_for(ticker)]
 
 
 def resolve_ticker(query: str) -> TickerResolution:
@@ -169,19 +200,21 @@ def resolve_ticker(query: str) -> TickerResolution:
         return TickerResolution(matches=[])
 
     direct = _try_direct_code_match(query) or _try_korean_alias_match(query)
-    if direct is not None:
-        return TickerResolution(matches=[direct])
+    if direct:
+        return TickerResolution(matches=direct)
 
     matches = [
-        TickerMatch(ticker=ticker, market="KRX", name=name)
+        TickerMatch(ticker=ticker, market=market, name=name)
         for ticker, name in resolve_dart_ticker_by_name(query)
+        for market in _krx_markets_for(ticker)
     ]
     if not matches:
         # DART 매치가 있을 때는 ETF를 섞지 않는다 — "삼성전자" 질의에 "KODEX 삼성전자채권
         # 혼합" 등이 끼어들어 이미 확정되던 일반 종목 질의를 모호하게 만들지 않기 위함.
         matches = _match_etf_by_name(query)
     matches += [
-        TickerMatch(ticker=ticker, market="NASDAQ", name=name)
+        TickerMatch(ticker=ticker, market=market, name=name)
         for ticker, name in resolve_edgar_ticker_by_name(query)
+        for market in _us_markets_for(ticker)
     ]
     return TickerResolution(matches=matches)

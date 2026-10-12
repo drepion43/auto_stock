@@ -48,7 +48,7 @@ def test_every_ticker_market_tool_schema_takes_only_ticker_and_market_params():
         assert set(params["properties"]) == {"ticker", "market"}
         assert params["required"] == ["ticker", "market"]
         assert params["additionalProperties"] is False
-        assert params["properties"]["market"]["enum"] == ["KRX", "NASDAQ"]
+        assert params["properties"]["market"]["enum"] == ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]
 
 
 def test_resolve_ticker_schema_takes_only_query_param():
@@ -62,9 +62,9 @@ def test_resolve_ticker_schema_takes_only_query_param():
 
 
 def test_get_market_scan_recommendations_schema_takes_only_market_param():
-    """티커를 지정하지 않는 전체 스캔형 질의 전용 도구라 ticker는 없지만, KRX/NASDAQ 배치
-    스캔 캐시가 market별로 분리돼 있으므로 market은 요구한다(2026-09-09부로 NASDAQ 지원
-    추가 — 이전에는 KRX로 하드코딩되어 있었다)."""
+    """티커를 지정하지 않는 전체 스캔형 질의 전용 도구라 ticker는 없지만, market별로
+    분리된 배치 스캔 캐시를 조회하므로 market은 요구한다. 원자 거래소(KOSPI/KOSDAQ/
+    NASDAQ/NYSE)뿐 아니라 합성 버킷(KRX/US/SP500/DOW, market 세분화 작업)도 받는다."""
     schema = next(s for s in TOOL_SCHEMAS if s["name"] == "get_market_scan_recommendations")
     params = schema["parameters"]
 
@@ -72,7 +72,9 @@ def test_get_market_scan_recommendations_schema_takes_only_market_param():
     assert set(params["properties"]) == {"market"}
     assert params["required"] == ["market"]
     assert params["additionalProperties"] is False
-    assert params["properties"]["market"]["enum"] == ["KRX", "NASDAQ"]
+    assert params["properties"]["market"]["enum"] == [
+        "KOSPI", "KOSDAQ", "KRX", "NASDAQ", "NYSE", "US", "SP500", "DOW",
+    ]
 
 
 def test_every_tool_schema_has_a_nonempty_description():

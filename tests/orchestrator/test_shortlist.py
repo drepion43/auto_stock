@@ -11,7 +11,7 @@ from auto_stock.orchestrator.shortlist import ShortlistEntry, build_shortlist
 from auto_stock.rule_engine.models import Candidate
 
 
-def _records(ticker="005930", market="KRX", n=2):
+def _records(ticker="005930", market="KOSPI", n=2):
     start = date(2026, 1, 1)
     return [
         OHLCVRecord(
@@ -22,11 +22,11 @@ def _records(ticker="005930", market="KRX", n=2):
     ]
 
 
-def _candidate(ticker="005930", market="KRX"):
+def _candidate(ticker="005930", market="KOSPI"):
     return Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"])
 
 
-def _prediction(ticker="005930", market="KRX", probability_up=0.5):
+def _prediction(ticker="005930", market="KOSPI", probability_up=0.5):
     return MLPrediction(
         ticker=ticker, market=market, date=date(2026, 1, 2),
         probability_up=probability_up, top_features=[],
@@ -39,13 +39,13 @@ def test_rule_signal_only_is_included(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert errors == []
     assert shortlist == [
         ShortlistEntry(
-            ticker="005930", market="KRX",
+            ticker="005930", market="KOSPI",
             rule_candidate=_candidate(), ml_prediction=_prediction(probability_up=0.5),
         )
     ]
@@ -59,7 +59,7 @@ def test_ml_signal_only_is_included_even_without_rule_candidate(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.7))
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert errors == []
@@ -74,7 +74,7 @@ def test_both_signals_present_included_once(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.1))
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert errors == []
@@ -89,7 +89,7 @@ def test_neither_signal_is_excluded(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert shortlist == []
@@ -104,7 +104,7 @@ def test_ml_prediction_none_is_treated_as_no_opinion_not_error(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=None)
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert errors == []
@@ -121,7 +121,7 @@ def test_ml_model_none_falls_back_to_rule_engine_only(mocker):
     mock_predict = mocker.patch("auto_stock.orchestrator.shortlist.predict")
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=None
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=None
     )
 
     assert errors == []
@@ -140,7 +140,7 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
 
     shortlist, errors = build_shortlist(
-        cache=mocker.Mock(), tickers=["005930", "000660"], market="KRX", ml_model=mocker.Mock()
+        cache=mocker.Mock(), tickers=["005930", "000660"], market="KOSPI", ml_model=mocker.Mock()
     )
 
     assert [e.ticker for e in shortlist] == ["005930"]
@@ -156,6 +156,6 @@ def test_fetches_ohlcv_only_once_per_ticker(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
     mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
 
-    build_shortlist(cache=mocker.Mock(), tickers=["005930"], market="KRX", ml_model=mocker.Mock())
+    build_shortlist(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock())
 
     assert mock_get_ohlcv.call_count == 1

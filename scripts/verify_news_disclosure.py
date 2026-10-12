@@ -41,12 +41,13 @@ from auto_stock.news_disclosure.credentials import (
 from auto_stock.news_disclosure.models import DisclosureSummary
 from auto_stock.news_disclosure.prompt import build_user_prompt
 
-_SAMPLE_TICKERS = {"KRX": "005930", "NASDAQ": "AAPL"}  # 삼성전자 / Apple — 각 시장의 스모크 테스트 타깃
-_MISSING_CREDENTIAL_ENV_VAR = {"KRX": "DART_API_KEY", "NASDAQ": "SEC_EDGAR_USER_AGENT"}
+_SAMPLE_TICKERS = {"KOSPI": "005930", "NASDAQ": "AAPL"}  # 삼성전자 / Apple — 각 시장의 스모크 테스트 타깃
+_MISSING_CREDENTIAL_ENV_VAR = {"KOSPI": "DART_API_KEY", "NASDAQ": "SEC_EDGAR_USER_AGENT"}
+_KRX_MARKETS = frozenset({"KOSPI"})
 
 
 def _resolve_sample_market() -> str:
-    market = os.environ.get("NEWS_VERIFY_MARKET", "KRX").upper()
+    market = os.environ.get("NEWS_VERIFY_MARKET", "KOSPI").upper()
     if market not in _SAMPLE_TICKERS:
         print(f"FAILED: NEWS_VERIFY_MARKET은 {sorted(_SAMPLE_TICKERS)} 중 하나여야 합니다 (입력값: {market!r})")
         sys.exit(1)
@@ -55,20 +56,22 @@ def _resolve_sample_market() -> str:
 
 def _fetch_sample_disclosures(market: str) -> tuple[list, date]:
     ticker = _SAMPLE_TICKERS[market]
-    corp_id = resolve_corp_code(ticker) if market == "KRX" else resolve_cik(ticker)
+    corp_id = resolve_corp_code(ticker) if market in _KRX_MARKETS else resolve_cik(ticker)
     if corp_id is None:
-        source = "DART" if market == "KRX" else "EDGAR"
+        source = "DART" if market in _KRX_MARKETS else "EDGAR"
         print(f"FAILED: {ticker}의 {source} 식별자를 찾을 수 없습니다 (매핑 확인 필요)")
         sys.exit(1)
 
     end = date.today()
     start = end - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
-    disclosures = fetch_disclosures(corp_id, start, end) if market == "KRX" else fetch_filings(corp_id, start, end)
+    disclosures = (
+        fetch_disclosures(corp_id, start, end) if market in _KRX_MARKETS else fetch_filings(corp_id, start, end)
+    )
     return disclosures, end
 
 
 def _run_dry_run(market: str) -> None:
-    source_label = "DART" if market == "KRX" else "EDGAR"
+    source_label = "DART" if market in _KRX_MARKETS else "EDGAR"
     ticker = _SAMPLE_TICKERS[market]
     disclosures, as_of = _fetch_sample_disclosures(market)
     print(f"SUCCESS: {source_label} 공시 조회 완료 (OpenAI 호출 없음, 비용 0) — {len(disclosures)}건")

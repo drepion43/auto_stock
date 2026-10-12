@@ -28,3 +28,9 @@ SENTIMENT_SOURCE_LABELS = {
 # 멤버십 집합도 함께 둔다.
 KRX_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
 US_MARKETS = frozenset({"NASDAQ", "NYSE"})
+
+# ML 모델(ml_predictor)은 재학습하지 않고 기존 합성 "KRX" 모델을 그대로 쓴다(사용자
+# 결정, market 세분화 작업) — KOSPI/KOSDAQ 둘 다 "KRX" 모델 아티팩트를 조회하고,
+# NYSE는 애초에 모델이 없던 것과 동일하게 취급한다(값이 None이면 해당 도구가
+# unavailable로 저하됨, tool_analyze_ml_prediction과 동일 계약).
+ML_MODEL_KEYS = {"KOSPI": "KRX", "KOSDAQ": "KRX", "NASDAQ": "NASDAQ", "NYSE": None}

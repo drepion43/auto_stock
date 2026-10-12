@@ -37,7 +37,7 @@ src/auto_stock/data/
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
 | ticker | VARCHAR | 종목코드 |
-| market | VARCHAR | `KRX` \| `NASDAQ` |
+| market | VARCHAR | `KOSPI` \| `KOSDAQ` \| `NASDAQ` \| `NYSE` (원자 거래소, 2026-10-12 시장 세분화 — 이전엔 `KRX` \| `NASDAQ`) |
 | date | DATE | 거래일 |
 | open, high, low, close | DOUBLE | 가격 |
 | volume | BIGINT | 거래량 |
@@ -49,18 +49,19 @@ src/auto_stock/data/
 |---|---|---|
 | ticker | VARCHAR | 종목코드 |
 | name | VARCHAR | 종목명 |
-| market | VARCHAR | `KRX` \| `NASDAQ` |
+| market | VARCHAR | `KOSPI` \| `KOSDAQ` \| `NASDAQ` \| `NYSE` (원자 거래소, 2026-10-12 시장 세분화 — 이전엔 `KRX` \| `NASDAQ`) |
 | market_cap | BIGINT (nullable) | 시가총액 (pykrx, 국내만) |
 | updated_at | TIMESTAMP | 갱신 시각 |
 
 ### 5. 공개 인터페이스 (`service.py`)
 
 ```python
-def get_ohlcv(ticker: str, start: date, end: date, market: Literal["KRX", "NASDAQ"]) -> pd.DataFrame:
+def get_ohlcv(cache: OHLCVCache, ticker: str, start: date, end: date, market: str) -> list[OHLCVRecord]:
     """캐시 우선 조회, 미스(구간 부족) 시 소스 API 호출 후 캐시에 적재."""
 
-def get_universe(market: Literal["KRX", "NASDAQ"]) -> list[str]:
-    """전체 상장종목 리스트. KRX는 pykrx, NASDAQ은 FDR 상장목록 기반."""
+def get_universe(market: str, as_of: date | None = None) -> list[str]:
+    """원자 거래소 하나의 전체 상장종목 리스트. KOSPI/KOSDAQ은 pykrx, NASDAQ/NYSE는 FDR 상장목록 기반.
+    "KRX"/"US" 같은 합성 scan_key는 받지 않는다 — 호출자가 원자 market을 명시한다."""
 
 def refresh_recent(tickers: list[str]) -> None:
     """폴링 잡이 호출하는 근접-실시간 갱신 함수."""

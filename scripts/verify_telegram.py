@@ -13,7 +13,7 @@ from auto_stock.notifier.credentials import load_telegram_credentials
 from auto_stock.notifier.telegram_bot import TelegramNotificationError, send_notification
 
 explanation = Explanation(
-    ticker="TEST", market="KRX", action="BUY",
+    ticker="TEST", market="KOSPI", action="BUY",
     summary="auto_stock 알림봇 연동 확인용 테스트 메시지입니다.",
 )
 

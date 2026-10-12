@@ -9,7 +9,7 @@ from auto_stock.rule_engine.models import Candidate
 from auto_stock.data.models import OHLCVRecord
 
 
-def _records(ticker="005930", market="KRX", n=2):
+def _records(ticker="005930", market="KOSPI", n=2):
     start = date(2026, 1, 1)
     return [
         OHLCVRecord(
@@ -28,11 +28,11 @@ def _credentials():
     return TelegramCredentials(bot_token="123:ABC", chat_id="999")
 
 
-def _candidate(ticker="005930", market="KRX"):
+def _candidate(ticker="005930", market="KOSPI"):
     return Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"])
 
 
-def _sizing(ticker="005930", market="KRX"):
+def _sizing(ticker="005930", market="KOSPI"):
     return SizingSuggestion(
         ticker=ticker, market=market, action="BUY",
         suggested_quantity=10, suggested_allocation_pct=0.05,
@@ -41,7 +41,7 @@ def _sizing(ticker="005930", market="KRX"):
     )
 
 
-def _explanation(ticker="005930", market="KRX"):
+def _explanation(ticker="005930", market="KOSPI"):
     return Explanation(ticker=ticker, market=market, action="BUY", summary=f"{ticker}: RSI 과매도.")
 
 
@@ -53,7 +53,7 @@ def test_buy_candidate_flows_through_all_stages_and_lands_in_sent(mocker):
     mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -71,7 +71,7 @@ def test_ticker_with_no_candidates_skips_sizing_explanation_and_notification(moc
     mock_send = mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -104,7 +104,7 @@ def test_data_fetch_failure_is_isolated_and_other_tickers_still_processed(mocker
     mocker.patch("auto_stock.orchestrator.pipeline.send_notification")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["BAD", "005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["BAD", "005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -126,7 +126,7 @@ def test_notification_failure_is_isolated_and_recorded_as_error(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -152,7 +152,7 @@ def test_pipeline_without_ml_model_behaves_identically_to_before(mocker):
     mock_predict = mocker.patch("auto_stock.orchestrator.pipeline.predict")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -178,7 +178,7 @@ def test_pipeline_with_ml_model_passes_extra_reasons_to_explainer(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(),
     )
 
@@ -202,7 +202,7 @@ def test_ml_prediction_failure_still_sends_notification_and_records_error(mocker
     mocker.patch("auto_stock.orchestrator.pipeline.predict", side_effect=RuntimeError("모델 추론 실패"))
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(),
     )
 
@@ -237,7 +237,7 @@ def test_pipeline_without_any_auxiliary_signal_behaves_identically_to_before(moc
     mock_analyze_sentiment = mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
     )
 
@@ -267,7 +267,7 @@ def test_pipeline_with_llm_client_only_passes_llm_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), llm_client=mocker.Mock(),
     )
 
@@ -301,7 +301,7 @@ def test_pipeline_with_both_ml_and_llm_merges_reasons_in_order(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
     )
 
@@ -324,7 +324,7 @@ def test_llm_failure_still_sends_notification_and_records_error(mocker):
     mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 응답 시간 초과(30.0s)"))
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), llm_client=mocker.Mock(),
     )
 
@@ -352,7 +352,7 @@ def test_llm_failure_does_not_suppress_ml_reasons(mocker):
     mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 레이트리밋 초과"))
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
     )
 
@@ -376,7 +376,7 @@ def test_ml_failure_does_not_suppress_llm_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
     )
 
@@ -396,7 +396,7 @@ def test_both_failures_record_two_errors_and_still_send(mocker):
     mocker.patch("auto_stock.orchestrator.pipeline.analyze_chart", side_effect=RuntimeError("LLM 연결 실패"))
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), ml_model=mocker.Mock(), llm_client=mocker.Mock(),
     )
 
@@ -435,7 +435,7 @@ def test_pipeline_with_news_client_only_passes_news_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
     )
 
@@ -477,7 +477,7 @@ def test_pipeline_with_ml_llm_and_news_merges_reasons_in_order(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
     )
@@ -508,7 +508,7 @@ def test_krx_ticker_uses_dart_not_edgar(mocker):
     mock_fetch_filings = mocker.patch("auto_stock.orchestrator.pipeline.fetch_filings")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), news_client=mocker.Mock(),
     )
 
@@ -666,7 +666,7 @@ def test_dart_failure_does_not_suppress_ml_or_llm_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
     )
@@ -707,7 +707,7 @@ def test_news_llm_failure_does_not_suppress_ml_or_llm_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
     )
@@ -739,7 +739,7 @@ def test_all_three_signal_failures_record_three_errors_and_still_send(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(), news_client=mocker.Mock(),
     )
@@ -781,7 +781,7 @@ def test_pipeline_with_sentiment_client_only_passes_sentiment_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
     )
 
@@ -831,7 +831,7 @@ def test_pipeline_with_all_four_signals_merges_reasons_in_order(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(),
         news_client=mocker.Mock(), sentiment_client=mocker.Mock(),
@@ -859,7 +859,7 @@ def test_krx_ticker_uses_naver_not_gdelt_for_sentiment(mocker):
     mock_search_articles = mocker.patch("auto_stock.orchestrator.pipeline.search_articles")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
     )
 
@@ -919,7 +919,7 @@ def test_krx_ticker_with_unresolved_corp_name_skips_naver_fetch(mocker):
     mock_analyze_sentiment = mocker.patch("auto_stock.orchestrator.pipeline.analyze_sentiment")
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
     )
 
@@ -948,7 +948,7 @@ def test_sentiment_failure_does_not_suppress_other_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), sentiment_client=mocker.Mock(),
     )
@@ -984,7 +984,7 @@ def test_sentiment_llm_failure_does_not_suppress_other_reasons(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), sentiment_client=mocker.Mock(),
     )
@@ -1018,7 +1018,7 @@ def test_all_four_signal_failures_record_four_errors_and_still_send(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(),
         ml_model=mocker.Mock(), llm_client=mocker.Mock(),
         news_client=mocker.Mock(), sentiment_client=mocker.Mock(),
@@ -1056,7 +1056,7 @@ def test_krx_name_resolution_failure_is_labeled_dart_not_naver(mocker):
     )
 
     result = run_recommendation_pipeline(
-        cache=mocker.Mock(), tickers=["005930"], market="KRX",
+        cache=mocker.Mock(), tickers=["005930"], market="KOSPI",
         account=_account(), credentials=_credentials(), sentiment_client=mocker.Mock(),
     )
 

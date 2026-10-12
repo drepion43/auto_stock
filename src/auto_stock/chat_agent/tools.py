@@ -28,6 +28,13 @@ from typing import TYPE_CHECKING
 
 from auto_stock.chat_agent.ticker_resolution import resolve_ticker
 from auto_stock.data.cache import OHLCVCache
+from auto_stock.data.market_routing import (
+    KRX_MARKETS,
+    ML_MODEL_KEYS,
+    NEWS_SOURCE_LABELS,
+    SENTIMENT_SOURCE_LABELS,
+    US_MARKETS,
+)
 from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.data.service import get_ohlcv
 
@@ -38,11 +45,19 @@ if TYPE_CHECKING:
     # 전용으로만 쓰고 런타임에는 로드하지 않는다.
     from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoordinator
 from auto_stock.data.sources.dart_source import fetch_disclosures, resolve_corp_code, resolve_corp_name
-from auto_stock.data.sources.edgar_source import fetch_filings, resolve_cik, resolve_company_title
+from auto_stock.data.sources.edgar_nport_source import fetch_latest_nport_holdings, resolve_etf_cik
+from auto_stock.data.sources.edgar_source import (
+    fetch_filings,
+    resolve_cik,
+    resolve_company_title,
+    resolve_exchange,
+    resolve_ticker_by_name as resolve_edgar_ticker_by_name,
+)
 from auto_stock.data.sources.etf_source import DEFAULT_TOP_N as ETF_DEFAULT_TOP_N
 from auto_stock.data.sources.etf_source import fetch_etf_holdings
 from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
+from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
 from auto_stock.ml_predictor.models import ModelBundle
@@ -57,10 +72,6 @@ from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
 from auto_stock.risk_sizing.models import AccountState
 from auto_stock.risk_sizing.sizing import suggest_position
 from auto_stock.rule_engine.engine import generate_candidates
-
-_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}
-_SENTIMENT_SOURCE_LABELS = {"KRX": "네이버뉴스", "NASDAQ": "GDELT"}
-
 
 class ChatToolContext:
     """6개 도구가 공유하는 의존성 묶음. dataclass가 아닌 일반 클래스인 이유는 `budget`
@@ -131,7 +142,8 @@ def tool_analyze_rule_engine(context: ChatToolContext, ticker: str, market: str)
 
 
 def tool_analyze_ml_prediction(context: ChatToolContext, ticker: str, market: str) -> dict:
-    model = context.ml_models.get(market)
+    model_key = ML_MODEL_KEYS.get(market)
+    model = context.ml_models.get(model_key) if model_key is not None else None
     if model is None:
         return {"available": False, "error": f"{market} 시장에 학습된 ML 모델이 없습니다"}
     try:
@@ -180,19 +192,19 @@ def tool_analyze_chart_pattern(context: ChatToolContext, ticker: str, market: st
 def tool_analyze_disclosures(context: ChatToolContext, ticker: str, market: str) -> dict:
     if context.news_client is None:
         return {"available": False, "error": "공시해석 클라이언트가 설정되지 않았습니다"}
-    source_label = _NEWS_SOURCE_LABELS.get(market)
+    source_label = NEWS_SOURCE_LABELS.get(market)
     if source_label is None:
         return {"available": False, "error": f"지원하지 않는 시장입니다: {market}"}
 
     try:
-        corp_id = resolve_corp_code(ticker) if market == "KRX" else resolve_cik(ticker)
+        corp_id = resolve_corp_code(ticker) if market in KRX_MARKETS else resolve_cik(ticker)
         if corp_id is None:
             return {"available": True, "analysis": None}  # 미등록 종목 — 공시 없음과 동일 취급
         end = date.today()
         start = end - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
         disclosures = (
             fetch_disclosures(corp_id, start, end)
-            if market == "KRX"
+            if market in KRX_MARKETS
             else fetch_filings(corp_id, start, end)
         )
     except Exception as exc:
@@ -221,14 +233,14 @@ def tool_analyze_disclosures(context: ChatToolContext, ticker: str, market: str)
 def tool_analyze_news_sentiment(context: ChatToolContext, ticker: str, market: str) -> dict:
     if context.sentiment_client is None:
         return {"available": False, "error": "뉴스감성 클라이언트가 설정되지 않았습니다"}
-    source_label = _SENTIMENT_SOURCE_LABELS.get(market)
+    source_label = SENTIMENT_SOURCE_LABELS.get(market)
     if source_label is None:
         return {"available": False, "error": f"지원하지 않는 시장입니다: {market}"}
 
     try:
-        name = resolve_corp_name(ticker) if market == "KRX" else resolve_company_title(ticker)
+        name = resolve_corp_name(ticker) if market in KRX_MARKETS else resolve_company_title(ticker)
     except Exception as exc:
-        name_source_label = _NEWS_SOURCE_LABELS.get(market, source_label)
+        name_source_label = NEWS_SOURCE_LABELS.get(market, source_label)
         return {"available": False, "error": f"{name_source_label} 조회 실패: {exc}"}
     if name is None:
         return {"available": True, "analysis": None}
@@ -236,7 +248,7 @@ def tool_analyze_news_sentiment(context: ChatToolContext, ticker: str, market: s
     try:
         end = date.today()
         start = end - timedelta(days=NEWS_LOOKBACK_DAYS)
-        if market == "KRX":
+        if market in KRX_MARKETS:
             articles = search_news(name, ticker, market, start, end)
         else:
             articles = search_articles(company_phrase(name), ticker, market, start, end)
@@ -349,7 +361,7 @@ def tool_find_related_companies(context: ChatToolContext, ticker: str, market: s
     오귀속을 피한다(예: DART 이름해석 실패를 "서브에이전트 실패"로 잘못 라벨링하지
     않음)."""
     try:
-        name = resolve_corp_name(ticker) if market == "KRX" else resolve_company_title(ticker)
+        name = resolve_corp_name(ticker) if market in KRX_MARKETS else resolve_company_title(ticker)
     except Exception as exc:
         return {"available": False, "error": str(exc)}
     if name is None:
@@ -430,24 +442,74 @@ def _affordable_etf_holdings(budget: QueryBudget) -> int:
     return max(0, min(ETF_DEFAULT_TOP_N, remaining // ETF_HOLDING_LLM_CALLS_PER_HOLDING))
 
 
-def _collect_holding_signals(context: ChatToolContext, holding: tuple[str, float, str]) -> dict:
-    ticker, weight, name = holding
-    disclosure = tool_analyze_disclosures(context, ticker, "KRX")
-    sentiment = tool_analyze_news_sentiment(context, ticker, "KRX")
+def _collect_holding_signals(context: ChatToolContext, holding: tuple[str, float, str, str]) -> dict:
+    ticker, weight, name, holding_market = holding
+    disclosure = tool_analyze_disclosures(context, ticker, holding_market)
+    sentiment = tool_analyze_news_sentiment(context, ticker, holding_market)
     return _holding_to_payload(ticker, weight, name, disclosure, sentiment)
+
+
+def _named_krx_holdings(ticker: str, top_n: int) -> list[tuple[str, float, str, str]]:
+    """국내 ETF holdings — pykrx가 이미 (종목코드, 비중)을 주므로 DART로 이름만
+    보충한다. 이름을 확인할 수 없는 항목(현금/채권 등)은 공시·뉴스 신호가 있을 수
+    없으므로 제외한다. 거래소는 역조회(실패 시 KOSPI로 보수적 폴백 — 공시/뉴스
+    해석 계층은 KOSPI/KOSDAQ 어느 쪽이든 동일하게 동작하므로 정확한 서브마켓
+    구분이 중요하지 않음)."""
+    holdings = fetch_etf_holdings(ticker, top_n=_ETF_HOLDING_CANDIDATE_POOL)
+    named = [
+        (code, weight, resolve_corp_name(code), resolve_market(code) or "KOSPI")
+        for code, weight in holdings
+    ]
+    return [h for h in named if h[2] is not None][:top_n]
+
+
+def _named_us_holdings(ticker: str, top_n: int) -> list[tuple[str, float, str, str]] | None:
+    """미국 ETF holdings — N-PORT는 종목코드가 아니라 이름만 주므로(CUSIP/ISIN뿐,
+    티커 필드 자체가 없음), `resolve_edgar_ticker_by_name`으로 이름→티커 역변환을
+    시도한다. N-PORT holding 이름은 거래소 표기와 다를 수 있어(예: "AES Corp/The")
+    **완전일치만** 받아들인다 — 부분일치는 보통주/우선주/채권 등 여러 후보가 섞여
+    나와 모호하므로 버린다(국내의 "이름 없으면 스킵"과 동일한 성격의 누락, 에러
+    아님). ETF가 아니거나 NPORT-P 공시가 없으면 None."""
+    cik = resolve_etf_cik(ticker)
+    if cik is None:
+        return None
+    holdings = fetch_latest_nport_holdings(cik, top_n=_ETF_HOLDING_CANDIDATE_POOL)
+    if holdings is None:
+        return None
+
+    named: list[tuple[str, float, str, str]] = []
+    for name, pct in holdings:
+        matches = resolve_edgar_ticker_by_name(name)
+        if len(matches) != 1:  # 완전일치가 정확히 하나일 때만 — 모호하거나 매칭 없으면 스킵
+            continue
+        matched_ticker, matched_name = matches[0]
+        holding_market = resolve_exchange(matched_ticker) or "NASDAQ"
+        named.append((matched_ticker, pct, matched_name, holding_market))
+    return named[:top_n]
+
+
+_US_ETF_FRESHNESS_NOTE = (
+    "SEC EDGAR Form N-PORT 분기 공시 기준 — 국내보다 데이터가 최대 2개월 묵었을 수 있습니다."
+)
 
 
 def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: str) -> dict:
     """ETF 질의("이 ETF 왜 올랐어?") 전용 — docs/design/etf-composition-analysis.md §B.
     비중 상위 구성종목마다 **이미 있는** `tool_analyze_disclosures`/
     `tool_analyze_news_sentiment`를 그대로 재호출해(새 분석 로직 없음) 신호를 모은 뒤
-    `run_etf_composition_synthesis`에 종합을 위임한다. 국내 ETF 전용(미국 ETF holdings는
-    범위 밖). 구성종목 신호 조회는 `orchestrator/deep_scan.py`와 같은 ThreadPoolExecutor
-    패턴으로 병렬화한다 — `QueryBudget`은 내부 락으로 스레드 안전하고, `.map()`이 입력
-    (비중) 순서를 보존한다. 이름을 확인할 수 없는 항목(현금/선물 등 비상장 구성요소)은
-    공시·뉴스 신호가 존재할 수 없으므로 건너뛴다."""
-    if market != "KRX":
-        return {"available": False, "error": f"ETF 구성종목 분석은 국내(KRX) ETF만 지원합니다: {market}"}
+    `run_etf_composition_synthesis`에 종합을 위임한다. 국내(KOSPI/KOSDAQ)·미국
+    (NASDAQ/NYSE) ETF 모두 지원 — 국내는 pykrx(거의 일별), 미국은 SEC EDGAR
+    Form N-PORT(분기 공시, 최대 2개월 지연)로 소스가 다르다. 구성종목 신호 조회는
+    `orchestrator/deep_scan.py`와 같은 ThreadPoolExecutor 패턴으로 병렬화한다 —
+    `QueryBudget`은 내부 락으로 스레드 안전하고, `.map()`이 입력(비중) 순서를
+    보존한다. 이름/티커를 확인할 수 없는 항목(현금/선물 등 비상장 구성요소, 또는
+    미국 holding 이름이 EDGAR와 완전일치하지 않는 경우)은 공시·뉴스 신호가 존재할
+    수 없으므로 건너뛴다."""
+    if market not in (KRX_MARKETS | US_MARKETS):
+        return {
+            "available": False,
+            "error": f"ETF 구성종목 분석은 국내(KOSPI/KOSDAQ) 또는 미국(NASDAQ/NYSE) ETF만 지원합니다: {market}",
+        }
 
     top_n = _affordable_etf_holdings(context.budget)
     if top_n == 0:
@@ -455,12 +517,13 @@ def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: 
 
     try:
         # 현금/채권 등 이름 없는 행이 상위 N개 자리를 차지하지 않도록 넉넉히 받아
-        # 이름 필터링 후에 N개로 자른다(이름 역조회는 DART 로컬 캐시라 저렴하다).
-        holdings = fetch_etf_holdings(ticker, top_n=_ETF_HOLDING_CANDIDATE_POOL)
-        named = [(code, weight, resolve_corp_name(code)) for code, weight in holdings]
+        # 이름 필터링 후에 N개로 자른다(이름 역조회는 DART 로컬 캐시/EDGAR 캐시라 저렴하다).
+        if market in KRX_MARKETS:
+            named = _named_krx_holdings(ticker, top_n)
+        else:
+            named = _named_us_holdings(ticker, top_n)
     except Exception as exc:
         return {"available": False, "error": f"ETF 구성종목 조회 실패: {exc}"}
-    named = [holding for holding in named if holding[2] is not None][:top_n]
     if not named:
         return {"available": True, "holdings": None}  # ETF가 아니거나 holdings 데이터 없음
 
@@ -470,9 +533,13 @@ def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: 
     result = run_etf_composition_synthesis(context.budget, context.agent_model, ticker, payload)
     if not result["available"]:
         return result
+    if market in US_MARKETS:
+        result = {**result, "data_as_of_note": _US_ETF_FRESHNESS_NOTE}
     return {
         **result,
-        "holdings": [{"ticker": code, "name": name, "weight_pct": weight} for code, weight, name in named],
+        "holdings": [
+            {"ticker": code, "name": name, "weight_pct": weight} for code, weight, name, _market in named
+        ],
     }
 
 

@@ -5,11 +5,11 @@ import pytest
 from auto_stock.data.models import DisclosureRecord, NewsArticle, OHLCVRecord
 
 
-def test_creates_valid_krx_record():
+def test_creates_valid_kospi_record():
     # Arrange / Act
     record = OHLCVRecord(
         ticker="005930",
-        market="KRX",
+        market="KOSPI",
         date=date(2026, 1, 2),
         open=70000.0,
         high=71000.0,
@@ -20,7 +20,7 @@ def test_creates_valid_krx_record():
 
     # Assert
     assert record.ticker == "005930"
-    assert record.market == "KRX"
+    assert record.market == "KOSPI"
     assert record.close == 70500.0
 
 
@@ -43,7 +43,7 @@ def test_rejects_unknown_market():
     with pytest.raises(ValueError, match="market"):
         OHLCVRecord(
             ticker="005930",
-            market="NYSE",
+            market="KONEX",
             date=date(2026, 1, 2),
             open=1.0,
             high=1.0,
@@ -57,7 +57,7 @@ def test_rejects_high_below_low():
     with pytest.raises(ValueError, match="high"):
         OHLCVRecord(
             ticker="005930",
-            market="KRX",
+            market="KOSPI",
             date=date(2026, 1, 2),
             open=100.0,
             high=90.0,
@@ -86,7 +86,7 @@ def test_creates_disclosure_record():
 def test_creates_news_article():
     article = NewsArticle(
         ticker="005930",
-        market="KRX",
+        market="KOSPI",
         title="삼성전자, 신규 반도체 라인 투자 발표",
         url="https://example.com/news/1",
         published_at=date(2026, 1, 15),
@@ -94,7 +94,7 @@ def test_creates_news_article():
     )
 
     assert article.ticker == "005930"
-    assert article.market == "KRX"
+    assert article.market == "KOSPI"
     assert article.title == "삼성전자, 신규 반도체 라인 투자 발표"
     assert article.url == "https://example.com/news/1"
     assert article.published_at == date(2026, 1, 15)

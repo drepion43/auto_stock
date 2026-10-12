@@ -25,8 +25,8 @@ from auto_stock.notifier.credentials import load_telegram_credentials
 from auto_stock.orchestrator.pipeline import run_recommendation_pipeline
 from auto_stock.risk_sizing.models import AccountState
 
-WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — example only
-MARKET = "KRX"
+WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — 둘 다 KOSPI 상장
+MARKET = "KOSPI"
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
 
 cache = OHLCVCache("data/ohlcv.duckdb")

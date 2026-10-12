@@ -22,6 +22,11 @@ from auto_stock.data.models import DisclosureRecord
 CIK_MAP_CACHE_PATH = Path("data/edgar_cik_map.json")
 CIK_MAP_REFRESH_DAYS = 7
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+# `company_tickers.json`에는 exchange 필드가 없다(2026-10 라이브 호출로 확인된 버그
+# 수정 — {cik_str, ticker, title} 3개 키뿐). exchange는 완전히 별도 파일인
+# `company_tickers_exchange.json`(필드: cik/name/ticker/exchange, {"fields":[...],
+# "data":[[...]]} 형태로 company_tickers.json과 스키마가 다름)에만 있다.
+COMPANY_TICKERS_EXCHANGE_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 SUBMISSIONS_URL_TEMPLATE = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 _REQUEST_TIMEOUT_SECONDS = 30
@@ -43,6 +48,11 @@ _FORM_TYPE_LABELS = {
 # (docs/design/news-disclosure.md 핵심 설계 결정 3).
 _EXCLUDED_FORM_TYPES = frozenset({"3", "4", "5"})
 
+# SEC가 보내는 원본 exchange 값은 소문자 자유 문자열("nasdaq"/"nyse"/"nyse mkt"/
+# "batsglobal" 등, 2026-10 실제 응답으로 확인됨) — 이 매핑에 없는 거래소명(ETF
+# 발행사 등)은 "NASDAQ으로 임의 단정하지 않는다"는 원칙에 따라 None으로 정규화한다.
+_EXCHANGE_TO_MARKET = {"nasdaq": "NASDAQ", "nyse": "NYSE"}
+
 
 class EdgarApiError(Exception):
     pass
@@ -53,32 +63,66 @@ def _load_edgar_user_agent() -> str:
     return os.environ["SEC_EDGAR_USER_AGENT"]
 
 
-def _download_cik_map() -> dict[str, dict[str, str]]:
-    """`company_tickers.json`을 다운로드해 {ticker: {"cik":..., "title":...}} 매핑으로
-    파싱한다. `title`(회사명)은 뉴스 감성분석(#4-뉴스) 확장에서 뉴스 검색 쿼리를 만들
-    때 쓰인다(docs/design/news-sentiment.md 핵심 설계 결정 2) — 이전에는 파싱만
-    하고 버렸다."""
-    user_agent = _load_edgar_user_agent()
+def _normalize_exchange(raw_exchange: str | None) -> str | None:
+    """SEC 원본 exchange 값을 atomic market으로 정규화한다. 모르는 거래소명이면
+    None — "NASDAQ으로 임의 단정하지 않는다"가 이 함수의 핵심 원칙이다."""
+    if not raw_exchange:
+        return None
+    return _EXCHANGE_TO_MARKET.get(raw_exchange.strip().lower())
+
+
+def _get_json(url: str, user_agent: str) -> dict:
     try:
-        response = requests.get(
-            COMPANY_TICKERS_URL,
-            headers={"User-Agent": user_agent},
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        )
+        response = requests.get(url, headers={"User-Agent": user_agent}, timeout=_REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
     except requests.exceptions.RequestException as exc:
         # dart_source.py와 동일 원칙: 원본 예외를 문자열화하지 않고 타입명만 남긴다
         # (docs/design/news-disclosure.md 핵심 설계 결정 7).
         raise EdgarApiError(f"EDGAR API 요청 실패: {type(exc).__name__}") from exc
+    return response.json()
 
-    payload = response.json()
+
+def _download_exchange_map(user_agent: str) -> dict[str, str]:
+    """`company_tickers_exchange.json`을 다운로드해 {ticker: exchange} 매핑으로
+    파싱한다. 이 파일은 `{"fields": ["cik","name","ticker","exchange"], "data": [[...]]}`
+    형태로 `company_tickers.json`(`{id: {...}}` 형태)과 스키마가 다르다 — exchange
+    컬럼의 위치는 `fields`에서 찾는다(인덱스를 하드코딩하지 않음, 필드 순서가 바뀌어도
+    안전)."""
+    payload = _get_json(COMPANY_TICKERS_EXCHANGE_URL, user_agent)
+    fields = payload.get("fields", [])
+    try:
+        ticker_idx = fields.index("ticker")
+        exchange_idx = fields.index("exchange")
+    except ValueError:
+        return {}
+    mapping: dict[str, str] = {}
+    for row in payload.get("data", []):
+        ticker = row[ticker_idx]
+        exchange = row[exchange_idx]
+        if ticker and exchange:
+            mapping[ticker] = exchange
+    return mapping
+
+
+def _download_cik_map() -> dict[str, dict[str, str]]:
+    """`company_tickers.json`을 다운로드해 {ticker: {"cik":..., "title":..., "exchange":...}}
+    매핑으로 파싱한다. `title`(회사명)은 뉴스 감성분석(#4-뉴스) 확장에서 뉴스 검색 쿼리를 만들
+    때 쓰인다(docs/design/news-sentiment.md 핵심 설계 결정 2) — 이전에는 파싱만
+    하고 버렸다. `exchange`는 `company_tickers.json` 자체에는 없으므로(2026-10 발견한
+    버그 — 이전엔 이 파일에서 바로 읽으려 했었다) `company_tickers_exchange.json`을
+    별도로 받아 합친다(`_download_exchange_map`, `_normalize_exchange` 참고)."""
+    user_agent = _load_edgar_user_agent()
+    payload = _get_json(COMPANY_TICKERS_URL, user_agent)
+    exchange_map = _download_exchange_map(user_agent)
+
     mapping: dict[str, dict[str, str]] = {}
     for entry in payload.values():
         ticker = entry.get("ticker")
         cik = entry.get("cik_str")
         title = entry.get("title") or ""
+        exchange = _normalize_exchange(exchange_map.get(ticker)) or ""
         if ticker and cik is not None:
-            mapping[ticker] = {"cik": f"{int(cik):010d}", "title": title}
+            mapping[ticker] = {"cik": f"{int(cik):010d}", "title": title, "exchange": exchange}
     return mapping
 
 
@@ -103,15 +147,16 @@ def _load_or_refresh_cik_map(cache_path: Path, refresh_days: int) -> dict:
     return mapping
 
 
-def _cik_and_title(entry) -> tuple[str | None, str | None]:
-    """캐시 항목에서 (cik, title)을 뽑는다. `entry`가 문자열이면 뉴스 감성분석 확장
-    전(title이 없던 시절)에 저장된 구 스키마 캐시다 — cik만 반환하고 title은 None
-    (하위호환, docs/design/news-sentiment.md 핵심 설계 결정 2)."""
+def _cik_title_and_exchange(entry) -> tuple[str | None, str | None, str | None]:
+    """캐시 항목에서 (cik, title, exchange)를 뽑는다. `entry`가 문자열이면 뉴스
+    감성분석 확장 전(title이 없던 시절)에 저장된 구 스키마 캐시다 — cik만 반환하고
+    나머지는 None(하위호환, docs/design/news-sentiment.md 핵심 설계 결정 2). dict인데
+    `exchange` 키가 없으면(exchange 필드 추가 이전의 중간 스키마) exchange는 None."""
     if entry is None:
-        return None, None
+        return None, None, None
     if isinstance(entry, str):
-        return entry, None
-    return entry.get("cik"), entry.get("title")
+        return entry, None, None
+    return entry.get("cik"), entry.get("title"), entry.get("exchange") or None
 
 
 def resolve_cik(
@@ -124,7 +169,7 @@ def resolve_cik(
     캐시가 없거나 `refresh_days`보다 오래되면 재다운로드 후 캐시를 갱신한다.
     한국 상장사 등 EDGAR에 등록되지 않은 티커는 None을 반환한다(에러 아님)."""
     mapping = _load_or_refresh_cik_map(Path(cache_path), refresh_days)
-    cik, _ = _cik_and_title(mapping.get(ticker))
+    cik, _, _ = _cik_title_and_exchange(mapping.get(ticker))
     return cik
 
 
@@ -139,8 +184,22 @@ def resolve_company_title(
     `resolve_cik`와 캐시를 공유한다 — 같은 티커에 대해 두 함수를 순서대로 호출해도
     EDGAR API를 두 번 부르지 않는다."""
     mapping = _load_or_refresh_cik_map(Path(cache_path), refresh_days)
-    _, title = _cik_and_title(mapping.get(ticker))
+    _, title, _ = _cik_title_and_exchange(mapping.get(ticker))
     return title
+
+
+def resolve_exchange(
+    ticker: str,
+    cache_path: Path | str = CIK_MAP_CACHE_PATH,
+    refresh_days: int = CIK_MAP_REFRESH_DAYS,
+) -> str | None:
+    """영문 심볼이 실제로 NASDAQ인지 NYSE인지 역조회한다. `resolve_cik`/
+    `resolve_company_title`과 캐시를 공유하므로 추가 API 호출이 들지 않는다. SEC가
+    모르는 거래소명을 보냈거나 캐시가 구/중간 스키마라 exchange 정보가 없으면
+    None — 호출부가 "NASDAQ/NYSE 둘 다 후보"로 보수적으로 처리해야 한다는 신호다."""
+    mapping = _load_or_refresh_cik_map(Path(cache_path), refresh_days)
+    _, _, exchange = _cik_title_and_exchange(mapping.get(ticker))
+    return exchange
 
 
 def resolve_ticker_by_name(
@@ -161,7 +220,7 @@ def resolve_ticker_by_name(
     named_entries = [
         (ticker, title)
         for ticker, entry in mapping.items()
-        for _, title in [_cik_and_title(entry)]
+        for _, title, _ in [_cik_title_and_exchange(entry)]
         if title
     ]
 

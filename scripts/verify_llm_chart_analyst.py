@@ -35,7 +35,7 @@ from auto_stock.llm_chart_analyst.snapshot import build_snapshot
 from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
 
 SAMPLE_TICKER = "005930"  # 삼성전자 — same smoke-test target as verify_pykrx.py
-SAMPLE_MARKET = "KRX"
+SAMPLE_MARKET = "KOSPI"
 
 
 def _fetch_sample_records() -> list:

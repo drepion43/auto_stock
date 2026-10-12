@@ -16,11 +16,13 @@ def get_ohlcv(cache: OHLCVCache, ticker: str, start: date, end: date, market: st
 
 
 def get_universe(market: str, as_of: date | None = None) -> list[str]:
-    """전체 상장종목 리스트. KRX는 pykrx, NASDAQ은 FDR 상장목록 기반."""
-    if market == "KRX":
-        return pykrx_source.get_ticker_list(as_of or date.today())
-    if market == "NASDAQ":
-        listing = fdr.StockListing("NASDAQ")
+    """원자 거래소 하나의 전체 상장종목 리스트. KOSPI/KOSDAQ은 pykrx, NASDAQ/NYSE는
+    FDR 상장목록 기반. "KRX"/"US" 같은 합성 scan_key는 받지 않는다 — 호출자가
+    원자 market을 명시해야 한다(`orchestrator/market_buckets.py` 참고)."""
+    if market in ("KOSPI", "KOSDAQ"):
+        return pykrx_source.get_ticker_list(as_of or date.today(), market=market)
+    if market in ("NASDAQ", "NYSE"):
+        listing = fdr.StockListing(market)
         return listing["Symbol"].tolist()
     raise ValueError(f"unsupported market: {market!r}")
 

@@ -7,7 +7,7 @@ from auto_stock.risk_sizing.models import AccountState, SizingSuggestion
 from auto_stock.rule_engine.models import Candidate
 
 
-def _records(ticker="005930", market="KRX", n=2):
+def _records(ticker="005930", market="KOSPI", n=2):
     start = date(2026, 1, 1)
     return [
         OHLCVRecord(
@@ -22,11 +22,11 @@ def _account():
     return AccountState(equity=10_000_000.0, held_tickers=frozenset(), total_exposure_pct=0.0)
 
 
-def _candidate(ticker="005930", market="KRX"):
+def _candidate(ticker="005930", market="KOSPI"):
     return Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"])
 
 
-def _sizing(ticker="005930", market="KRX"):
+def _sizing(ticker="005930", market="KOSPI"):
     return SizingSuggestion(
         ticker=ticker, market=market, action="BUY",
         suggested_quantity=10, suggested_allocation_pct=0.05,
@@ -35,7 +35,7 @@ def _sizing(ticker="005930", market="KRX"):
     )
 
 
-def _explanation(ticker="005930", market="KRX"):
+def _explanation(ticker="005930", market="KOSPI"):
     return Explanation(ticker=ticker, market=market, action="BUY", summary=f"{ticker}: RSI 과매도.")
 
 
@@ -45,7 +45,7 @@ def test_buy_candidate_produces_explanation_without_sending_notification(mocker)
     mocker.patch("auto_stock.orchestrator.market_scan.suggest_position", return_value=_sizing())
     mocker.patch("auto_stock.orchestrator.market_scan.generate_explanation", return_value=_explanation())
 
-    explanations, errors = scan_market(cache=mocker.Mock(), tickers=["005930"], market="KRX", account=_account())
+    explanations, errors = scan_market(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", account=_account())
 
     assert explanations == [_explanation()]
     assert errors == []
@@ -56,7 +56,7 @@ def test_ticker_with_no_candidates_is_skipped(mocker):
     mocker.patch("auto_stock.orchestrator.market_scan.generate_candidates", return_value=[])
     mock_sizing = mocker.patch("auto_stock.orchestrator.market_scan.suggest_position")
 
-    explanations, errors = scan_market(cache=mocker.Mock(), tickers=["005930"], market="KRX", account=_account())
+    explanations, errors = scan_market(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", account=_account())
 
     assert explanations == []
     assert errors == []
@@ -75,7 +75,7 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
     mocker.patch("auto_stock.orchestrator.market_scan.generate_explanation", return_value=_explanation())
 
     explanations, errors = scan_market(
-        cache=mocker.Mock(), tickers=["005930", "000660"], market="KRX", account=_account()
+        cache=mocker.Mock(), tickers=["005930", "000660"], market="KOSPI", account=_account()
     )
 
     assert [e.ticker for e in explanations] == ["005930"]
@@ -95,4 +95,4 @@ def test_scan_market_never_touches_telegram(mocker):
 
     assert not hasattr(market_scan_module, "send_notification")
 
-    scan_market(cache=mocker.Mock(), tickers=["005930"], market="KRX", account=_account())
+    scan_market(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", account=_account())

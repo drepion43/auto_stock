@@ -84,7 +84,7 @@
 ### 1.3 비목표
 
 - **주문 실행, 브로커 연동, 실행 측 리스크 집행(MVP-1 이후 전부)은 포함하지 않는다.** `HumanInTheLoopMiddleware`(`interrupt_on`)는 "승인 대기"가 필요한 주문 실행용이라 이번 범위에서 쓰지 않는다.
-- 새 분석 기능(미국 ETF holdings, index_quote·investor_flow 도구화, 새 데이터소스 등)을 이번 마이그레이션에 끼워 넣지 않는다. 도구의 **동작은 바꾸지 않고 등록 방식과 실행 루프만** 바꾼다.
+- 새 분석 기능(미국 ETF holdings, index_quote·investor_flow 도구화, 새 데이터소스 등)을 이번 마이그레이션에 끼워 넣지 않는다. 도구의 **동작은 바꾸지 않고 등록 방식과 실행 루프만** 바꾼다. **후속 노트(2026-10-12)**: 미국 ETF holdings는 이 마이그레이션과 별개 작업으로 완료됐다(`analyze_etf_composition`이 국내·미국 ETF 모두 지원, `docs/design/etf-composition-analysis.md` 참고) — 이 비목표 항목은 "이 마이그레이션 PR 안에 끼워 넣지 않는다"는 범위 제한이었을 뿐, 영구 비목표가 아니었다.
 - 백그라운드 배치(`recommendation_coordinator` → `deep_scan` → `synthesizer`) 경로의 구조는 바꾸지 않는다. 0단계의 이름 호환만 맞춘다. **예외(명시)**: 비용 안전장치인 배치 트리거 상한(D17)은 배치 구조가 아니라 트리거 횟수만 제한하는 별도 커밋으로 다룬다.
 - 기존 서브에이전트 5곳의 동작은 기본적으로 바꾸지 않는다. 내장 기능 비활성화를 기존 서브에이전트에도 적용할지는 별도 커밋·별도 eval 게이트로 분리한다(D2).
 - `client.py` / `ChatAgentReader`는 지우지 않는다(`sector_resolution.resolve_official_sector`가 계속 사용).
@@ -284,7 +284,7 @@ tools.py의 하위 호환 이름                      → TOOL_DISPATCH, _bind_s
 
 | 파일 | 변경 |
 |---|---|
-| `src/auto_stock/chat_agent/tool_args.py` (신규) | 인자 Pydantic 모델(`TickerMarketArgs`, `QueryArgs`, `MarketArgs`, `QueryMarketArgs`)과 `Market = Literal["KRX", "NASDAQ"]` 단일 정의 |
+| `src/auto_stock/chat_agent/tool_args.py` (신규) | 인자 Pydantic 모델(`TickerMarketArgs`, `QueryArgs`, `MarketArgs`, `QueryMarketArgs`)과 `Market = Literal["KRX", "NASDAQ"]` 단일 정의(→ 2026-10-12 시장 세분화로 `AtomicMarket`(KOSPI/KOSDAQ/NASDAQ/NYSE)·`ScanMarket`(+ KRX/US/SP500/DOW)으로 분리, 커밋 전) |
 | `src/auto_stock/chat_agent/tool_registry.py` (신규) | `ToolSpec`, `TOOL_SPECS`(13개), 파생 함수, `bind_stock_analyst_tools` |
 | `tool_schemas.py` | `TOOL_SCHEMAS`를 레지스트리에서 재export(이름 유지 → 구 루프 무변경) |
 | `tools.py` | `TOOL_DISPATCH`·`_bind_stock_analyst_tools`를 지연 위임 별칭으로 교체, `_STOCK_ANALYST_TOOL_SPECS` 제거(레지스트리로 이동), docstring 숫자 정리 |

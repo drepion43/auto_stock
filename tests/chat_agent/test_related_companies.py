@@ -26,17 +26,17 @@ from auto_stock.data.models import NewsArticle
 
 def _article(title: str = "관련 기사") -> NewsArticle:
     return NewsArticle(
-        ticker="", market="KRX", title=title, url="http://x", published_at=date.today(), source="x.com"
+        ticker="", market="KOSPI", title=title, url="http://x", published_at=date.today(), source="x.com"
     )
 
 
 class TestVerifyCompaniesCoMentionedInNews:
-    def test_krx_co_mentioned_true_when_articles_found(self):
+    def test_kospi_co_mentioned_true_when_articles_found(self):
         with patch(
             "auto_stock.chat_agent.related_companies.search_news", return_value=[_article()]
         ) as mock_search:
             result = verify_companies_co_mentioned_in_news.invoke(
-                {"company_a": "삼성전자", "company_b": "삼성SDI", "market": "KRX"}
+                {"company_a": "삼성전자", "company_b": "삼성SDI", "market": "KOSPI"}
             )
 
         assert result["co_mentioned"] is True
@@ -46,7 +46,7 @@ class TestVerifyCompaniesCoMentionedInNews:
     def test_krx_co_mentioned_false_when_no_articles(self):
         with patch("auto_stock.chat_agent.related_companies.search_news", return_value=[]):
             result = verify_companies_co_mentioned_in_news.invoke(
-                {"company_a": "삼성전자", "company_b": "없는회사", "market": "KRX"}
+                {"company_a": "삼성전자", "company_b": "없는회사", "market": "KOSPI"}
             )
 
         assert result["co_mentioned"] is False
@@ -76,7 +76,7 @@ class TestVerifyCompaniesCoMentionedInNews:
             "auto_stock.chat_agent.related_companies.search_news", side_effect=RuntimeError("boom")
         ):
             result = verify_companies_co_mentioned_in_news.invoke(
-                {"company_a": "삼성전자", "company_b": "삼성SDI", "market": "KRX"}
+                {"company_a": "삼성전자", "company_b": "삼성SDI", "market": "KOSPI"}
             )
 
         assert result["co_mentioned"] is False
@@ -89,7 +89,7 @@ class TestRunFindRelatedCompanies:
         fake_structured = RelatedCompaniesResult(
             related=[
                 RelatedCompanyItem(
-                    ticker="006400", market="KRX", name="삼성SDI", relation="계열사", confidence="confirmed"
+                    ticker="006400", market="KOSPI", name="삼성SDI", relation="계열사", confidence="confirmed"
                 )
             ]
         )
@@ -98,13 +98,13 @@ class TestRunFindRelatedCompanies:
         with patch(
             "auto_stock.chat_agent.related_companies.create_deep_agent", return_value=fake_agent
         ) as mock_create:
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert result["available"] is True
         assert result["related"] == [
             {
                 "ticker": "006400",
-                "market": "KRX",
+                "market": "KOSPI",
                 "name": "삼성SDI",
                 "relation": "계열사",
                 "confidence": "confirmed",
@@ -120,13 +120,13 @@ class TestRunFindRelatedCompanies:
     def test_truncates_to_max_tickers_per_query_minus_self(self):
         budget = QueryBudget(max_llm_calls=10)
         items = [
-            RelatedCompanyItem(ticker=str(i), market="KRX", name=f"C{i}", relation="r", confidence="inferred")
+            RelatedCompanyItem(ticker=str(i), market="KOSPI", name=f"C{i}", relation="r", confidence="inferred")
             for i in range(10)
         ]
         fake_agent = MagicMock()
         fake_agent.invoke.return_value = {"structured_response": RelatedCompaniesResult(related=items)}
         with patch("auto_stock.chat_agent.related_companies.create_deep_agent", return_value=fake_agent):
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert len(result["related"]) == MAX_TICKERS_PER_QUERY - 1
 
@@ -134,7 +134,7 @@ class TestRunFindRelatedCompanies:
         budget = QueryBudget(max_llm_calls=1)
         budget.llm_calls_made = 1
         with patch("auto_stock.chat_agent.related_companies.create_deep_agent") as mock_create:
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert result["available"] is False
         mock_create.assert_not_called()
@@ -144,7 +144,7 @@ class TestRunFindRelatedCompanies:
         fake_agent = MagicMock()
         fake_agent.invoke.side_effect = RuntimeError("recursion limit exceeded")
         with patch("auto_stock.chat_agent.related_companies.create_deep_agent", return_value=fake_agent):
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert result["available"] is False
         assert "error" in result
@@ -154,7 +154,7 @@ class TestRunFindRelatedCompanies:
         fake_agent = MagicMock()
         fake_agent.invoke.return_value = {"messages": []}
         with patch("auto_stock.chat_agent.related_companies.create_deep_agent", return_value=fake_agent):
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert result["available"] is False
 
@@ -166,7 +166,7 @@ class TestRunFindRelatedCompanies:
         fake_agent = MagicMock()
         fake_agent.invoke.return_value = {"structured_response": None}
         with patch("auto_stock.chat_agent.related_companies.create_deep_agent", return_value=fake_agent):
-            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+            result = run_find_related_companies(budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
         assert result["available"] is False
         assert "error" in result

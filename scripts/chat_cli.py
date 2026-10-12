@@ -91,7 +91,8 @@ from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoo
 from auto_stock.risk_sizing.models import AccountState
 
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
-_MARKETS = ["KRX", "NASDAQ"]
+_ML_MODEL_MARKETS = ["KRX", "NASDAQ"]  # ml_predictor 아티팩트 키 — 재학습 안 함(합성 KRX 유지)
+_SCAN_BUCKETS = ["KRX", "US"]  # 선제 스캔 트리거 — 국내(코스피+코스닥)/미국(나스닥+NYSE)
 _EXIT_COMMANDS = {"exit", "quit", "종료"}
 _RESULT_PREVIEW_MAX_CHARS = 200  # tool 결과가 길면(공시/뉴스 해석 등) 터미널을 뒤덮지 않도록 절단
 
@@ -126,7 +127,7 @@ class _ActivityPrinter:
 
 def _load_ml_models() -> dict:
     models = {}
-    for market in _MARKETS:
+    for market in _ML_MODEL_MARKETS:
         try:
             models[market] = load_model(market)
         except ModelArtifactError:
@@ -204,8 +205,8 @@ def main() -> None:
         stale_after=timedelta(hours=int(os.environ.get("RECOMMENDATION_STALE_HOURS", 24))),
         universe_size=int(os.environ.get("MARKET_SCAN_UNIVERSE_SIZE", 200)),
     )
-    for market in _MARKETS:
-        recommendation_coordinator.ensure_fresh(market)
+    for bucket in _SCAN_BUCKETS:
+        recommendation_coordinator.ensure_fresh(bucket)
 
     loop_mode = _select_loop_mode()
     deep_session = DeepChatSession(model=make_chat_model(agent_config)) if loop_mode == "deep" else None

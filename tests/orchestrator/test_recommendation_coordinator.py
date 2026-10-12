@@ -2,7 +2,14 @@
 ScanCoordinator와 동일한 "stale 체크 + in-progress 추적 + 백그라운드 스레드" 패턴을
 별도 클래스로 구현한다(scan_market의 계약을 안 건드린다는 §2 원칙과 일관). sleep 기반
 타이밍은 쓰지 않고 threading.Event로 결정적으로 제어한다(test_scan_coordinator.py와
-동일 원칙)."""
+동일 원칙).
+
+market 세분화(2026-10) 이후: `ensure_fresh`가 받는 전체시장 market은 원자(KOSPI/KOSDAQ/
+NASDAQ/NYSE)이거나 합성 버킷(KRX/US/SP500/DOW)일 수 있다. `_run`은
+`bucket_universe_by_atomic_market`로 원자 market별 유니버스를 얻어 각각
+`build_shortlist`를 호출하고 결과를 합친다 — 그래서 이 테스트는 `_fresh_universe`
+대신 `bucket_universe_by_atomic_market`를 모킹한다. 섹터 경로(`ensure_fresh_sector`)는
+①숏리스트 단계가 없어 이 분기와 무관하다."""
 
 from datetime import date, timedelta
 from threading import Event
@@ -51,7 +58,7 @@ def _coordinator(cache, scan_cache, account, **overrides):
     return RecommendationCoordinator(cache=cache, scan_cache=scan_cache, **defaults)
 
 
-def _entry(ticker, market="KRX", rule_candidate=None, probability_up=None):
+def _entry(ticker, market="KOSPI", rule_candidate=None, probability_up=None):
     ml_prediction = (
         MLPrediction(ticker=ticker, market=market, date=date(2026, 1, 2), probability_up=probability_up, top_features=[])
         if probability_up is not None else None
@@ -59,7 +66,7 @@ def _entry(ticker, market="KRX", rule_candidate=None, probability_up=None):
     return ShortlistEntry(ticker=ticker, market=market, rule_candidate=rule_candidate, ml_prediction=ml_prediction)
 
 
-def _judgment(ticker, market="KRX"):
+def _judgment(ticker, market="KOSPI"):
     return TickerJudgment(
         ticker=ticker, market=market, rule_candidate=None, ml_prediction=None,
         stock_analyst_result={"available": True, "judgment": {"summary": "ok"}},
@@ -67,22 +74,31 @@ def _judgment(ticker, market="KRX"):
 
 
 def _recommendation(ticker, rank=1):
-    return {"ticker": ticker, "market": "KRX", "action": "BUY", "rank": rank, "summary": "근거"}
+    return {"ticker": ticker, "market": "KOSPI", "action": "BUY", "rank": rank, "summary": "근거"}
+
+
+def _patch_single_atomic_market_universe(mocker, market: str, tickers: list[str]):
+    """`bucket_universe_by_atomic_market`가 단일 원자 market만 반환하도록 모킹 —
+    기존 "원자 market 하나" 테스트 시나리오와 동등하다."""
+    return mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.bucket_universe_by_atomic_market",
+        return_value={market: tickers},
+    )
 
 
 def test_ensure_fresh_noop_when_not_stale(mocker, cache, scan_cache, account):
-    scan_cache.put_recommendations("KRX", [])
+    scan_cache.put_recommendations("KOSPI", [])
     coordinator = _coordinator(cache, scan_cache, account, stale_after=timedelta(hours=999))
     mock_build_shortlist = mocker.patch("auto_stock.orchestrator.recommendation_coordinator.build_shortlist")
 
-    thread = coordinator.ensure_fresh("KRX")
+    thread = coordinator.ensure_fresh("KOSPI")
 
     assert thread is None
     mock_build_shortlist.assert_not_called()
 
 
 def test_ensure_fresh_runs_full_pipeline_and_persists_result(mocker, cache, scan_cache, account):
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=["005930"])
+    _patch_single_atomic_market_universe(mocker, "KOSPI", ["005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
         return_value=([_entry("005930", probability_up=0.7)], []),
@@ -97,21 +113,55 @@ def test_ensure_fresh_runs_full_pipeline_and_persists_result(mocker, cache, scan
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
+    thread = coordinator.ensure_fresh("KOSPI")
+    assert thread is not None
+    thread.join(timeout=5)
+
+    scanned_at, recommendations = scan_cache.get_latest_recommendations("KOSPI")
+    assert scanned_at is not None
+    assert [r["ticker"] for r in recommendations] == ["005930"]
+
+
+def test_ensure_fresh_splits_composite_bucket_into_atomic_markets_before_building_shortlist(
+    mocker, cache, scan_cache, account
+):
+    """합성 버킷("KRX"=코스피+코스닥)은 원자 market별로 쪼개 각각 build_shortlist를
+    호출하고, 결과를 합쳐 버킷 자신의 키로 캐싱한다(ScanCoordinator와 동일 원칙)."""
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.bucket_universe_by_atomic_market",
+        return_value={"KOSPI": ["005930"], "KOSDAQ": ["091990"]},
+    )
+
+    def fake_build_shortlist(cache_arg, tickers, market, ml_model, lookback_days):
+        return [_entry(tickers[0], market=market, probability_up=0.7)], []
+
+    mock_build_shortlist = mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.build_shortlist", side_effect=fake_build_shortlist
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_deep_scan", return_value=[]
+    )
+    mocker.patch(
+        "auto_stock.orchestrator.recommendation_coordinator.run_recommendation_synthesis",
+        return_value={"available": True, "recommendations": [], "provenance": "x"},
+    )
+    coordinator = _coordinator(cache, scan_cache, account)
+
     thread = coordinator.ensure_fresh("KRX")
     assert thread is not None
     thread.join(timeout=5)
 
-    scanned_at, recommendations = scan_cache.get_latest_recommendations("KRX")
-    assert scanned_at is not None
-    assert [r["ticker"] for r in recommendations] == ["005930"]
+    assert mock_build_shortlist.call_count == 2
+    scanned_markets = {c.args[2] for c in mock_build_shortlist.call_args_list}
+    assert scanned_markets == {"KOSPI", "KOSDAQ"}
 
 
 def test_shortlist_is_capped_and_ranked_before_deep_scan(mocker, cache, scan_cache, account):
     """숏리스트 캡(기본 20)보다 많으면 상위만 ②단계로 넘겨야 한다 — 규칙엔진 후보
     존재 + |probability_up - 0.5| 합산 점수 기준(recommendation-synthesis.md §2)."""
     low_score = _entry("000660", probability_up=0.51)  # 점수 거의 0
-    high_score = _entry("005930", rule_candidate=Candidate(ticker="005930", market="KRX", action="BUY", reasons=["RSI"]), probability_up=0.9)
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=["000660", "005930"])
+    high_score = _entry("005930", rule_candidate=Candidate(ticker="005930", market="KOSPI", action="BUY", reasons=["RSI"]), probability_up=0.9)
+    _patch_single_atomic_market_universe(mocker, "KOSPI", ["000660", "005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
         return_value=([low_score, high_score], []),
@@ -125,7 +175,7 @@ def test_shortlist_is_capped_and_ranked_before_deep_scan(mocker, cache, scan_cac
     )
     coordinator = _coordinator(cache, scan_cache, account, shortlist_cap=1)
 
-    thread = coordinator.ensure_fresh("KRX")
+    thread = coordinator.ensure_fresh("KOSPI")
     thread.join(timeout=5)
 
     passed_shortlist = mock_deep_scan.call_args.kwargs["shortlist"]
@@ -133,7 +183,7 @@ def test_shortlist_is_capped_and_ranked_before_deep_scan(mocker, cache, scan_cac
 
 
 def test_budget_sized_for_worst_case_and_shared_across_stages(mocker, cache, scan_cache, account):
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=["005930"])
+    _patch_single_atomic_market_universe(mocker, "KOSPI", ["005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
         return_value=([_entry("005930", probability_up=0.7)], []),
@@ -147,7 +197,7 @@ def test_budget_sized_for_worst_case_and_shared_across_stages(mocker, cache, sca
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh("KRX")
+    thread = coordinator.ensure_fresh("KOSPI")
     thread.join(timeout=5)
 
     deep_scan_budget = mock_deep_scan.call_args.kwargs["budget"]
@@ -167,7 +217,7 @@ def test_does_not_spawn_second_thread_while_in_progress(mocker, cache, scan_cach
         release.wait(timeout=5)
         return []
 
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=[])
+    _patch_single_atomic_market_universe(mocker, "KOSPI", [])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist", return_value=([], [])
     )
@@ -180,33 +230,33 @@ def test_does_not_spawn_second_thread_while_in_progress(mocker, cache, scan_cach
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    t1 = coordinator.ensure_fresh("KRX")
+    t1 = coordinator.ensure_fresh("KOSPI")
     assert started.wait(timeout=5)
-    assert coordinator.is_in_progress("KRX") is True
+    assert coordinator.is_in_progress("KOSPI") is True
 
-    t2 = coordinator.ensure_fresh("KRX")
+    t2 = coordinator.ensure_fresh("KOSPI")
     assert t2 is None
 
     release.set()
     t1.join(timeout=5)
-    assert coordinator.is_in_progress("KRX") is False
+    assert coordinator.is_in_progress("KOSPI") is False
 
 
 def test_background_failure_is_swallowed_and_leaves_market_retriable(mocker, cache, scan_cache, account, capsys):
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=[])
+    _patch_single_atomic_market_universe(mocker, "KOSPI", [])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
         side_effect=RuntimeError("네트워크 오류"),
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh("KRX")
+    thread = coordinator.ensure_fresh("KOSPI")
     thread.join(timeout=5)
 
-    assert coordinator.is_in_progress("KRX") is False
-    assert "KRX" in capsys.readouterr().err
+    assert coordinator.is_in_progress("KOSPI") is False
+    assert "KOSPI" in capsys.readouterr().err
 
-    scanned_at, _ = scan_cache.get_latest_recommendations("KRX")
+    scanned_at, _ = scan_cache.get_latest_recommendations("KOSPI")
     assert scanned_at is None  # 실패해서 캐시 안 적재 -> 여전히 stale -> 재시도 가능
 
     mocker.patch(
@@ -217,7 +267,7 @@ def test_background_failure_is_swallowed_and_leaves_market_retriable(mocker, cac
         "auto_stock.orchestrator.recommendation_coordinator.run_recommendation_synthesis",
         return_value={"available": True, "recommendations": [], "provenance": "x"},
     )
-    retry_thread = coordinator.ensure_fresh("KRX")
+    retry_thread = coordinator.ensure_fresh("KOSPI")
     assert retry_thread is not None
     retry_thread.join(timeout=5)
 
@@ -229,7 +279,7 @@ def test_ensure_fresh_sector_runs_resolution_then_deep_scan_and_persists_under_s
         "auto_stock.orchestrator.recommendation_coordinator.resolve_sector_tickers",
         return_value={
             "available": True, "source": "llm_theme_search", "matched_name": None,
-            "tickers": [{"ticker": "277810", "market": "KRX", "name": "레인보우로보틱스", "confidence": "confirmed"}],
+            "tickers": [{"ticker": "277810", "market": "KOSPI", "name": "레인보우로보틱스", "confidence": "confirmed"}],
             "provenance": "서브에이전트 자율 조사 결과",
         },
     )
@@ -243,15 +293,15 @@ def test_ensure_fresh_sector_runs_resolution_then_deep_scan_and_persists_under_s
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    thread = coordinator.ensure_fresh_sector("로봇", "KOSPI")
     assert thread is not None
     thread.join(timeout=5)
 
-    scanned_at, recommendations = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+    scanned_at, recommendations = scan_cache.get_latest_recommendations("SECTOR:로봇:KOSPI")
     assert scanned_at is not None
     assert [r["ticker"] for r in recommendations] == ["277810"]
 
-    _, cached_tickers, cached_confidence = scan_cache.get_cached_sector_tickers("로봇", "KRX")
+    _, cached_tickers, cached_confidence = scan_cache.get_cached_sector_tickers("로봇", "KOSPI")
     assert cached_tickers == ["277810"]
     assert cached_confidence == ["confirmed"]
 
@@ -261,7 +311,7 @@ def test_ensure_fresh_sector_skips_shortlist_stage(mocker, cache, scan_cache, ac
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.resolve_sector_tickers",
         return_value={
-            "available": True, "tickers": [{"ticker": "277810", "market": "KRX", "confidence": "confirmed"}],
+            "available": True, "tickers": [{"ticker": "277810", "market": "KOSPI", "confidence": "confirmed"}],
         },
     )
     mock_deep_scan = mocker.patch(
@@ -273,7 +323,7 @@ def test_ensure_fresh_sector_skips_shortlist_stage(mocker, cache, scan_cache, ac
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    thread = coordinator.ensure_fresh_sector("로봇", "KOSPI")
     thread.join(timeout=5)
 
     passed_shortlist = mock_deep_scan.call_args.kwargs["shortlist"]
@@ -289,30 +339,30 @@ def test_sector_resolution_failure_is_swallowed_and_leaves_retriable(mocker, cac
     )
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh_sector("로봇", "KRX")
+    thread = coordinator.ensure_fresh_sector("로봇", "KOSPI")
     thread.join(timeout=5)
 
-    assert coordinator.is_sector_in_progress("로봇", "KRX") is False
-    assert "SECTOR:로봇:KRX" in capsys.readouterr().err
-    scanned_at, _ = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+    assert coordinator.is_sector_in_progress("로봇", "KOSPI") is False
+    assert "SECTOR:로봇:KOSPI" in capsys.readouterr().err
+    scanned_at, _ = scan_cache.get_latest_recommendations("SECTOR:로봇:KOSPI")
     assert scanned_at is None  # 캐시 안 적재 -> 재시도 가능
 
 
 def test_sector_and_market_scan_keys_do_not_collide(mocker, cache, scan_cache, account):
-    """market="KRX" 전체 유니버스 캐시와 "SECTOR:로봇:KRX" 섹터 캐시가 같은 테이블을
-    쓰므로 서로 침범하지 않는지 확인한다(recommendation-synthesis.md §6)."""
-    scan_cache.put_recommendations("KRX", [_recommendation("005930")])
-    scan_cache.put_recommendations("SECTOR:로봇:KRX", [_recommendation("277810")])
+    """market="KOSPI" 전체 유니버스 캐시와 "SECTOR:로봇:KOSPI" 섹터 캐시가 같은
+    테이블을 쓰므로 서로 침범하지 않는지 확인한다(recommendation-synthesis.md §6)."""
+    scan_cache.put_recommendations("KOSPI", [_recommendation("005930")])
+    scan_cache.put_recommendations("SECTOR:로봇:KOSPI", [_recommendation("277810")])
 
-    _, market_wide = scan_cache.get_latest_recommendations("KRX")
-    _, sector = scan_cache.get_latest_recommendations("SECTOR:로봇:KRX")
+    _, market_wide = scan_cache.get_latest_recommendations("KOSPI")
+    _, sector = scan_cache.get_latest_recommendations("SECTOR:로봇:KOSPI")
 
     assert [r["ticker"] for r in market_wide] == ["005930"]
     assert [r["ticker"] for r in sector] == ["277810"]
 
 
 def test_run_uses_thread_local_cursor_connections(mocker, cache, scan_cache, account):
-    mocker.patch("auto_stock.orchestrator.recommendation_coordinator._fresh_universe", return_value=[])
+    _patch_single_atomic_market_universe(mocker, "KOSPI", [])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist", return_value=([], [])
     )
@@ -325,7 +375,7 @@ def test_run_uses_thread_local_cursor_connections(mocker, cache, scan_cache, acc
     scan_cache_cursor_spy = mocker.spy(scan_cache, "cursor")
     coordinator = _coordinator(cache, scan_cache, account)
 
-    thread = coordinator.ensure_fresh("KRX")
+    thread = coordinator.ensure_fresh("KOSPI")
     thread.join(timeout=5)
 
     cache_cursor_spy.assert_called_once()

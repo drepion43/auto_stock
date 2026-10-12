@@ -164,14 +164,14 @@ def test_call_isolated_returns_tool_result(mocker):
     mocker.patch("auto_stock.chat_agent.tools.tool_get_price_data", return_value={"available": True, "latest": None})
     spec = next(s for s in TOOL_SPECS if s.name == "get_price_data")
 
-    assert call_isolated(spec, _context(), {"ticker": "005930", "market": "KRX"}) == {"available": True, "latest": None}
+    assert call_isolated(spec, _context(), {"ticker": "005930", "market": "KOSPI"}) == {"available": True, "latest": None}
 
 
 def test_call_isolated_isolates_unexpected_tool_exception(mocker):
     mocker.patch("auto_stock.chat_agent.tools.tool_get_price_data", side_effect=RuntimeError("boom"))
     spec = next(s for s in TOOL_SPECS if s.name == "get_price_data")
 
-    result = call_isolated(spec, _context(), {"ticker": "005930", "market": "KRX"})
+    result = call_isolated(spec, _context(), {"ticker": "005930", "market": "KOSPI"})
 
     assert result["available"] is False
     assert "boom" in result["error"]
@@ -197,7 +197,7 @@ def test_langchain_tools_return_json_string_of_tool_result(mocker):
     )
     tool = next(t for t in as_langchain_tools(_context(), threading.Lock()) if t.name == "get_price_data")
 
-    out = tool.invoke({"ticker": "005930", "market": "KRX"})
+    out = tool.invoke({"ticker": "005930", "market": "KOSPI"})
 
     assert out == json.dumps({"available": True, "latest": {"close": 61000}}, ensure_ascii=False)
 
@@ -224,7 +224,7 @@ def test_langchain_tools_serialize_execution_under_turn_lock(mocker):
     )
     tool = next(t for t in as_langchain_tools(_context(), lock) if t.name == "get_price_data")
 
-    tool.invoke({"ticker": "005930", "market": "KRX"})
+    tool.invoke({"ticker": "005930", "market": "KOSPI"})
 
     assert seen == [True]
     assert not lock.locked()

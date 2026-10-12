@@ -16,7 +16,7 @@ from auto_stock.risk_sizing.sizing import (
 from auto_stock.rule_engine.models import Candidate
 
 
-def _records(n=20, ticker="005930", market="KRX", close=100.0):
+def _records(n=20, ticker="005930", market="KOSPI", close=100.0):
     start = date(2026, 1, 1)
     return [
         OHLCVRecord(
@@ -27,7 +27,7 @@ def _records(n=20, ticker="005930", market="KRX", close=100.0):
     ]
 
 
-def _candidate(action="BUY", ticker="005930", market="KRX"):
+def _candidate(action="BUY", ticker="005930", market="KOSPI"):
     return Candidate(ticker=ticker, market=market, action=action, reasons=["테스트 근거"])
 
 

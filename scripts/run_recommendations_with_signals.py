@@ -47,12 +47,13 @@ from auto_stock.notifier.credentials import load_telegram_credentials
 from auto_stock.orchestrator.pipeline import run_recommendation_pipeline
 from auto_stock.risk_sizing.models import AccountState
 
-WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — example only
-MARKET = "KRX"
+WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — 둘 다 KOSPI 상장
+MARKET = "KOSPI"
+ML_MODEL_MARKET = "KRX"  # ml_predictor 아티팩트 키 — 재학습 안 함(합성 KRX 유지)
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
 
 try:
-    ml_model = load_model(MARKET)
+    ml_model = load_model(ML_MODEL_MARKET)
 except ModelArtifactError as exc:
     print(str(exc))
     sys.exit(1)

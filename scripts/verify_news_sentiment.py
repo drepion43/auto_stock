@@ -47,11 +47,12 @@ from auto_stock.news_sentiment.credentials import (
 from auto_stock.news_sentiment.models import NewsSummary
 from auto_stock.news_sentiment.prompt import build_user_prompt
 
-_SAMPLE_TICKERS = {"KRX": "005930", "NASDAQ": "AAPL"}  # 삼성전자 / Apple — 각 시장의 스모크 테스트 타깃
+_SAMPLE_TICKERS = {"KOSPI": "005930", "NASDAQ": "AAPL"}  # 삼성전자 / Apple — 각 시장의 스모크 테스트 타깃
+_KRX_MARKETS = frozenset({"KOSPI"})
 
 
 def _resolve_sample_market() -> str:
-    market = os.environ.get("NEWS_SENTIMENT_VERIFY_MARKET", "KRX").upper()
+    market = os.environ.get("NEWS_SENTIMENT_VERIFY_MARKET", "KOSPI").upper()
     if market not in _SAMPLE_TICKERS:
         print(f"FAILED: NEWS_SENTIMENT_VERIFY_MARKET은 {sorted(_SAMPLE_TICKERS)} 중 하나여야 합니다 (입력값: {market!r})")
         sys.exit(1)
@@ -60,9 +61,9 @@ def _resolve_sample_market() -> str:
 
 def _fetch_sample_articles(market: str) -> tuple[list, str, date]:
     ticker = _SAMPLE_TICKERS[market]
-    name = resolve_corp_name(ticker) if market == "KRX" else resolve_company_title(ticker)
+    name = resolve_corp_name(ticker) if market in _KRX_MARKETS else resolve_company_title(ticker)
     if name is None:
-        source = "DART" if market == "KRX" else "EDGAR"
+        source = "DART" if market in _KRX_MARKETS else "EDGAR"
         print(f"FAILED: {ticker}의 회사명을 {source} 매핑에서 찾을 수 없습니다")
         sys.exit(1)
 
@@ -70,14 +71,14 @@ def _fetch_sample_articles(market: str) -> tuple[list, str, date]:
     start = end - timedelta(days=NEWS_LOOKBACK_DAYS)
     articles = (
         search_news(name, ticker, market, start, end)
-        if market == "KRX"
+        if market in _KRX_MARKETS
         else search_articles(company_phrase(name), ticker, market, start, end)
     )
     return articles, ticker, end
 
 
 def _run_dry_run(market: str) -> None:
-    source_label = "네이버뉴스" if market == "KRX" else "GDELT"
+    source_label = "네이버뉴스" if market in _KRX_MARKETS else "GDELT"
     articles, ticker, as_of = _fetch_sample_articles(market)
     print(f"SUCCESS: {source_label} 조회 완료 (OpenAI 호출 없음, 비용 0) — {len(articles)}건")
     if not articles:

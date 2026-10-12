@@ -27,15 +27,49 @@ from tqdm import tqdm
 
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.service import get_ohlcv, get_universe
+from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.ml_predictor.artifact import save_model
 from auto_stock.ml_predictor.dataset import build_training_dataset, chronological_split, to_xy
 from auto_stock.ml_predictor.training import build_estimator, evaluate, train, walk_forward_scores
+from auto_stock.orchestrator.market_buckets import bucket_markets
 
+# "KRX"/"NASDAQ" 2분류는 모델 아티팩트 라벨로 그대로 유지한다(사용자 결정 — ML은
+# 재학습하지 않고 합성 KRX를 유지, market 세분화 작업 범위 밖). 다만 유니버스
+# 조회와 OHLCV 조회는 원자 market만 받으므로(`data/models.py::VALID_MARKETS`),
+# "KRX"는 KOSPI+KOSDAQ 합집합으로 유니버스를 모으고 종목별 실제 소속 거래소를
+# 역조회해 OHLCV를 가져온다.
 MARKETS = ["KRX", "NASDAQ"]
 UNIVERSE_SIZE = int(os.environ.get("ML_TRAIN_UNIVERSE_SIZE", 200))
 LOOKBACK_YEARS = int(os.environ.get("ML_TRAIN_LOOKBACK_YEARS", 5))
 REPORT_ALGORITHMS = ("logreg", "rf", "dummy")
 PRODUCTION_ALGORITHM = "logreg"
+
+
+def _universe_for(market: str) -> list[str]:
+    """`market`이 합성 "KRX"면 `bucket_markets`(원자 market들의 합집합 정의,
+    `orchestrator/market_buckets.py`)로 KOSPI+KOSDAQ을 각각 조회해 중복 없이 합친다
+    (처음 등장한 순서 보존 — `data/service.py::get_universe_union`과 동일한 관용구,
+    그 함수는 아직 scan_coordinator 전용으로만 쓰여 여기서는 재사용하지 않고 직접
+    구현). 원자 market이면 그대로 `get_universe`."""
+    atomic_markets = bucket_markets(market)
+    if len(atomic_markets) == 1 and atomic_markets[0] == market:
+        return get_universe(market)
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for atomic_market in atomic_markets:
+        for ticker in get_universe(atomic_market):
+            if ticker not in seen:
+                seen.add(ticker)
+                tickers.append(ticker)
+    return tickers
+
+
+def _atomic_market_for(ticker: str, market: str) -> str:
+    """`market`이 합성 "KRX"면 종목의 실제 소속 거래소(KOSPI/KOSDAQ)를 역조회한다
+    (역조회 실패는 KOSPI로 보수적 폴백). 그 외는 이미 원자값이라 그대로 반환."""
+    if market != "KRX":
+        return market
+    return resolve_market(ticker) or "KOSPI"
 
 
 def _collect_universe_records(
@@ -46,7 +80,8 @@ def _collect_universe_records(
     progress = tqdm(tickers, desc="OHLCV 수집", unit="종목")
     for ticker in progress:
         try:
-            records = get_ohlcv(cache, ticker, start, end, market)
+            atomic_market = _atomic_market_for(ticker, market)
+            records = get_ohlcv(cache, ticker, start, end, atomic_market)
             if records:
                 all_records.append(records)
         except Exception as exc:  # per-ticker isolation, same principle as the orchestrator
@@ -57,7 +92,7 @@ def _collect_universe_records(
 
 
 def _train_one_market(cache: OHLCVCache, market: str) -> None:
-    tickers = get_universe(market)[:UNIVERSE_SIZE]
+    tickers = _universe_for(market)[:UNIVERSE_SIZE]
     end = date.today()
     start = end - timedelta(days=365 * LOOKBACK_YEARS)
 

@@ -12,7 +12,7 @@ from auto_stock.orchestrator.shortlist import ShortlistEntry
 from auto_stock.rule_engine.models import Candidate
 
 
-def _entry(ticker, market="KRX"):
+def _entry(ticker, market="KOSPI"):
     return ShortlistEntry(
         ticker=ticker, market=market,
         rule_candidate=Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"]),
@@ -39,7 +39,7 @@ def test_calls_run_stock_analyst_with_bound_tools_per_ticker(mocker):
         bind_tools=_bind_tools,
     )
 
-    mock_run.assert_called_once_with(budget, "gpt-5.6-luna", ["tool-for-005930-KRX"], "005930", "KRX")
+    mock_run.assert_called_once_with(budget, "gpt-5.6-luna", ["tool-for-005930-KOSPI"], "005930", "KOSPI")
 
 
 def test_result_preserves_input_order(mocker):
@@ -76,7 +76,7 @@ def test_carries_over_rule_candidate_and_ml_prediction_from_shortlist_entry(mock
 
     assert judgments == [
         TickerJudgment(
-            ticker="005930", market="KRX",
+            ticker="005930", market="KOSPI",
             rule_candidate=entry.rule_candidate, ml_prediction=entry.ml_prediction,
             stock_analyst_result={"available": True, "judgment": {"summary": "ok"}},
         )

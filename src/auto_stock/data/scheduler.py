@@ -7,9 +7,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from auto_stock.data import service
 from auto_stock.data.cache import OHLCVCache
 
+# 원자 market 4개 — 거래시간이 같아도(KOSPI/KOSDAQ는 둘 다 한국거래소 정규장,
+# NASDAQ/NYSE는 둘 다 미국 정규장) `is_market_open(market)`이 원자 market 하나만
+# 받는 계약을 유지하기 위해 각 거래소를 별도 키로 둔다(의도적 중복).
 MARKET_HOURS = {
-    "KRX": {"tz": "Asia/Seoul", "open": time(9, 0), "close": time(15, 30)},
+    "KOSPI": {"tz": "Asia/Seoul", "open": time(9, 0), "close": time(15, 30)},
+    "KOSDAQ": {"tz": "Asia/Seoul", "open": time(9, 0), "close": time(15, 30)},
     "NASDAQ": {"tz": "America/New_York", "open": time(9, 30), "close": time(16, 0)},
+    "NYSE": {"tz": "America/New_York", "open": time(9, 30), "close": time(16, 0)},
 }
 
 

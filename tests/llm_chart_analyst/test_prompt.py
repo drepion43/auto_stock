@@ -12,7 +12,7 @@ from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS
 from .conftest import make_records, random_walk_prices
 
 
-def _snapshot(ticker="005930", market="KRX"):
+def _snapshot(ticker="005930", market="KOSPI"):
     records = make_records(random_walk_prices(80), ticker=ticker, market=market)
     return build_snapshot(records)
 
@@ -26,11 +26,11 @@ def test_build_user_prompt_does_not_leak_ticker():
 
 
 def test_build_user_prompt_does_not_leak_market():
-    snapshot = _snapshot(market="KRX")
+    snapshot = _snapshot(market="KOSPI")
 
     prompt = build_user_prompt(snapshot)
 
-    assert "KRX" not in prompt
+    assert "KOSPI" not in prompt
     assert "NASDAQ" not in prompt
 
 

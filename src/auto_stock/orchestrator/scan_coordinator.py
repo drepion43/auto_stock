@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.data.service import get_universe
+from auto_stock.orchestrator.market_buckets import bucket_universe_by_atomic_market
 from auto_stock.orchestrator.market_scan import scan_market
 from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
 from auto_stock.risk_sizing.models import AccountState
@@ -30,11 +31,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _fresh_universe(
+def _fresh_universe_atomic(
     scan_cache: MarketScanCache, market: str, universe_size: int, stale_after: timedelta
 ) -> list[str]:
-    """유니버스 목록(종목 코드 리스트) 자체를 캐싱한다 — 나스닥 상장목록 조회가 실측
-    약 4분 걸려서, 매 트리거마다 다시 받아오면 낭비다. `ScanCoordinator._run`뿐 아니라
+    """원자(atomic) market 하나의 유니버스 목록(종목 코드 리스트)을 캐싱한다 — 나스닥
+    상장목록 조회가 실측 약 4분 걸려서, 매 트리거마다 다시 받아오면 낭비다. 합성
+    버킷(KRX/US/SP500/DOW)의 유니버스는 캐싱하지 않는다 — `bucket_universe_by_atomic_market`가
+    이 함수를 원자 market별로 호출해 중복 캐싱을 피한다. `ScanCoordinator._run`뿐 아니라
     `scripts/run_market_scan.py`(스레드/코디네이터 없는 수동 실행)도 재사용할 수 있도록
     모듈 레벨 함수로 둔다."""
     fetched_at, tickers = scan_cache.get_cached_universe(market)
@@ -42,6 +45,18 @@ def _fresh_universe(
         tickers = get_universe(market, date.today())
         scan_cache.put_universe(market, tickers)
     return tickers[:universe_size]
+
+
+def _fresh_universe_by_bucket(
+    scan_cache: MarketScanCache, bucket: str, universe_size: int, stale_after: timedelta
+) -> dict[str, list[str]]:
+    """스캔 버킷(원자 또는 합성)의 유니버스를 원자 market별로 쪼갠 채 반환한다 —
+    `market_buckets.bucket_universe_by_atomic_market`가 지수 필터 버킷(SP500/DOW)의
+    교집합 필터링까지 처리한다."""
+    return bucket_universe_by_atomic_market(
+        bucket,
+        fetch_universe=lambda m: _fresh_universe_atomic(scan_cache, m, universe_size, stale_after),
+    )
 
 
 class ScanCoordinator:
@@ -85,11 +100,24 @@ class ScanCoordinator:
             return market in self._in_progress
 
     def _run(self, market: str) -> None:
+        """`market`은 원자 market이거나 합성 버킷(KRX/US/SP500/DOW)일 수 있다 —
+        합성 버킷은 `_fresh_universe_by_bucket`이 원자 market별로 쪼개고, 각 원자
+        market을 기존 `scan_market` 계약(원자 market 하나 + 티커 리스트)으로 그대로
+        스캔한 뒤 결과를 합쳐 버킷 자신의 키로 캐싱한다."""
         try:
             cache = self._cache.cursor()
             scan_cache = self._scan_cache.cursor()
-            tickers = _fresh_universe(scan_cache, market, self._universe_size, self._stale_after)
-            explanations, errors = scan_market(cache, tickers, market, self._account, self._lookback_days)
+            universe_by_market = _fresh_universe_by_bucket(
+                scan_cache, market, self._universe_size, self._stale_after
+            )
+            explanations = []
+            errors = []
+            for atomic_market, tickers in universe_by_market.items():
+                market_explanations, market_errors = scan_market(
+                    cache, tickers, atomic_market, self._account, self._lookback_days
+                )
+                explanations.extend(market_explanations)
+                errors.extend(market_errors)
             scan_cache.put_scan(market, explanations)
             if errors:
                 print(

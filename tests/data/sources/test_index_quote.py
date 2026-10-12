@@ -1,5 +1,5 @@
-"""index_quote.py — 지수 자체 시세 조회(VIX/다우존스/나스닥종합/S&P500/러셀2000). fdr.DataReader를
-모킹해 실제 Yahoo Finance 호출 없이 테스트한다."""
+"""index_quote.py — 지수 자체 시세 조회(코스피/코스닥/코스피200/VIX/다우존스/나스닥종합/
+S&P500/러셀2000). fdr.DataReader를 모킹해 실제 Yahoo Finance 호출 없이 테스트한다."""
 
 from datetime import date
 
@@ -46,6 +46,17 @@ def test_fetch_index_quote_returns_none_when_no_data(mocker):
     quote = fetch_index_quote("IXIC")
 
     assert quote is None
+
+
+def test_fetch_index_quote_supports_kospi(mocker):
+    df = _ohlcv_df([("2026-01-05", 2500.0), ("2026-01-06", 2550.0)])
+    mocker.patch("auto_stock.data.sources.index_quote.fdr.DataReader", return_value=df)
+
+    quote = fetch_index_quote("KS11")
+
+    assert quote.index == "KS11"
+    assert quote.close == 2550.0
+    assert quote.change_pct == pytest.approx(2.0)
 
 
 def test_fetch_index_quote_rejects_unsupported_index():

@@ -23,6 +23,7 @@ from auto_stock.chat_agent.credentials import (
     MAX_TICKERS_PER_QUERY,
 )
 from auto_stock.chat_agent.models import QueryBudget
+from auto_stock.data.market_routing import KRX_MARKETS, US_MARKETS
 from auto_stock.data.sources.gdelt_source import company_phrase, search_articles
 from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.news_sentiment.credentials import NEWS_LOOKBACK_DAYS
@@ -46,15 +47,15 @@ class RelatedCompaniesResult(BaseModel):
 def verify_companies_co_mentioned_in_news(company_a: str, company_b: str, market: str) -> dict:
     """두 회사명이 최근 뉴스에서 함께 언급된 기사가 있는지 확인한다. DART/EDGAR 공시는
     본문을 수집하지 않으므로 관계 검증에 쓸 수 없다 — 뉴스 공동언급이 유일한 검증
-    신호다. market이 KRX면 네이버뉴스, NASDAQ이면 GDELT를 쓴다. 함께 언급된 기사가
+    신호다. market이 KOSPI/KOSDAQ이면 네이버뉴스, NASDAQ/NYSE이면 GDELT를 쓴다. 함께 언급된 기사가
     있으면 confidence를 'confirmed'로, 없으면(이 도구 실패 포함) 'inferred'로
     매기는 판단은 호출하는 에이전트의 몫이다 — 이 도구는 사실 확인만 한다."""
     end = date.today()
     start = end - timedelta(days=NEWS_LOOKBACK_DAYS)
     try:
-        if market == "KRX":
+        if market in KRX_MARKETS:
             articles = search_news(f"{company_a} {company_b}", "", market, start, end)
-        elif market == "NASDAQ":
+        elif market in US_MARKETS:
             articles = search_articles(f"{company_phrase(company_a)} {company_phrase(company_b)}", "", market, start, end)
         else:
             return {"co_mentioned": False, "error": f"지원하지 않는 시장입니다: {market}"}

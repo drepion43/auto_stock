@@ -11,10 +11,23 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Market = Literal["KRX", "NASDAQ"]
+# 종목 단위 도구(6개)는 원자(atomic) 거래소 하나만 받는다 — OHLCVRecord가 원자값만
+# 허용하므로(`data/models.py::VALID_MARKETS`) 합성 버킷을 받으면 그대로 전달했을 때
+# ValueError가 난다.
+AtomicMarket = Literal["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]
 
-_TICKER_DESC = "종목 코드 (KRX: 6자리 숫자 예 005930, NASDAQ: 티커 심볼 예 AAPL)"
-_MARKET_DESC = "시장 구분"
+# 전체 스캔/섹터 추천 도구는 원자 market뿐 아니라 합성 버킷(KRX/US/SP500/DOW)도
+# 받는다 — `orchestrator/market_buckets.ALL_SCAN_BUCKETS`와 반드시 동기화해야 한다.
+ScanMarket = Literal["KOSPI", "KOSDAQ", "KRX", "NASDAQ", "NYSE", "US", "SP500", "DOW"]
+
+_TICKER_DESC = (
+    "종목 코드 (KOSPI/KOSDAQ: 6자리 숫자 예 005930, NASDAQ/NYSE: 티커 심볼 예 AAPL)"
+)
+_MARKET_DESC = "시장 구분(원자 거래소: KOSPI/KOSDAQ/NASDAQ/NYSE)"
+_SCAN_MARKET_DESC = (
+    "시장 구분 — 원자 거래소(KOSPI/KOSDAQ/NASDAQ/NYSE) 또는 합성 버킷"
+    "(KRX=코스피+코스닥, US=나스닥+NYSE, SP500, DOW)"
+)
 
 
 class _StrictArgs(BaseModel):
@@ -24,7 +37,7 @@ class _StrictArgs(BaseModel):
 
 class TickerMarketArgs(_StrictArgs):
     ticker: str = Field(description=_TICKER_DESC)
-    market: Market = Field(description=_MARKET_DESC)
+    market: AtomicMarket = Field(description=_MARKET_DESC)
 
 
 class QueryArgs(_StrictArgs):
@@ -32,9 +45,9 @@ class QueryArgs(_StrictArgs):
 
 
 class MarketArgs(_StrictArgs):
-    market: Market = Field(description=_MARKET_DESC)
+    market: ScanMarket = Field(description=_SCAN_MARKET_DESC)
 
 
 class QueryMarketArgs(_StrictArgs):
     query: str = Field(description="섹터/업종/테마명(예: '로봇', '반도체', '2차전지')")
-    market: Market = Field(description=_MARKET_DESC)
+    market: ScanMarket = Field(description=_SCAN_MARKET_DESC)

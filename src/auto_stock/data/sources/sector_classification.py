@@ -26,18 +26,24 @@ from dotenv import load_dotenv
 with contextlib.redirect_stdout(io.StringIO()):
     from pykrx import stock
 
-_SUB_MARKETS = ("KOSPI", "KOSDAQ")  # "KRX"는 이 둘을 합친 것 — 이 프로젝트의 기존 관례
+_MARKET_SUB_MARKETS = {
+    "KRX": ("KOSPI", "KOSDAQ"),  # "KRX"는 코스피+코스닥 합성 — 이 프로젝트의 기존 관례
+    "KOSPI": ("KOSPI",),
+    "KOSDAQ": ("KOSDAQ",),
+}
 
 
 def fetch_sector_names(market: str) -> dict[str, list[str]]:
-    """업종명 -> 지수코드 목록. market이 "KRX"가 아니면 빈 dict(pykrx 대상이 아닌
-    시장은 조용히 스킵 — 호출부가 2차 LLM 폴백으로 넘어가면 됨, 에러 아님)."""
-    if market != "KRX":
+    """업종명 -> 지수코드 목록. market이 "KRX"/"KOSPI"/"KOSDAQ" 중 하나가 아니면
+    빈 dict(pykrx 대상이 아닌 시장은 조용히 스킵 — 호출부가 2차 LLM 폴백으로
+    넘어가면 됨, 에러 아님)."""
+    sub_markets = _MARKET_SUB_MARKETS.get(market)
+    if sub_markets is None:
         return {}
 
     load_dotenv()
     names: dict[str, list[str]] = {}
-    for sub_market in _SUB_MARKETS:
+    for sub_market in sub_markets:
         for code in stock.get_index_ticker_list(market=sub_market):
             name = stock.get_index_ticker_name(code)
             names.setdefault(name, []).append(code)

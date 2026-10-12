@@ -40,6 +40,44 @@ def test_fetch_sector_names_keeps_distinct_names_separate(mocker):
     assert names == {"화학": ["1008"], "금융": ["2031"]}
 
 
+def test_fetch_sector_names_kospi_only_does_not_query_kosdaq(mocker):
+    """market="KOSPI"로 명시하면 코스닥은 조회하지 않는다(market 세분화 작업)."""
+
+    def fake_ticker_list(market):
+        return {"KOSPI": ["1013"]}[market]
+
+    def fake_ticker_name(code):
+        return {"1013": "전기전자"}[code]
+
+    mock_list = mocker.patch.object(
+        sector_classification.stock, "get_index_ticker_list", side_effect=fake_ticker_list
+    )
+    mocker.patch.object(sector_classification.stock, "get_index_ticker_name", side_effect=fake_ticker_name)
+
+    names = sector_classification.fetch_sector_names("KOSPI")
+
+    assert names == {"전기전자": ["1013"]}
+    mock_list.assert_called_once_with(market="KOSPI")
+
+
+def test_fetch_sector_names_kosdaq_only_does_not_query_kospi(mocker):
+    def fake_ticker_list(market):
+        return {"KOSDAQ": ["2072"]}[market]
+
+    def fake_ticker_name(code):
+        return {"2072": "전기전자"}[code]
+
+    mock_list = mocker.patch.object(
+        sector_classification.stock, "get_index_ticker_list", side_effect=fake_ticker_list
+    )
+    mocker.patch.object(sector_classification.stock, "get_index_ticker_name", side_effect=fake_ticker_name)
+
+    names = sector_classification.fetch_sector_names("KOSDAQ")
+
+    assert names == {"전기전자": ["2072"]}
+    mock_list.assert_called_once_with(market="KOSDAQ")
+
+
 def test_fetch_sector_names_returns_empty_for_unsupported_market(mocker):
     """pykrx는 KRX 전용이다 — NASDAQ은 2차 LLM 폴백으로만 처리된다(사용자 확인,
     2026-10-05)."""

@@ -8,16 +8,17 @@ from auto_stock.explainer.models import Explanation
 
 _SCAN_TABLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS market_scan (
+    scan_key VARCHAR NOT NULL,
     ticker VARCHAR NOT NULL,
     market VARCHAR NOT NULL,
     action VARCHAR NOT NULL,
     summary VARCHAR NOT NULL,
-    PRIMARY KEY (ticker, market)
+    PRIMARY KEY (scan_key, ticker)
 );
 """
 _META_TABLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS market_scan_meta (
-    market VARCHAR PRIMARY KEY,
+    scan_key VARCHAR PRIMARY KEY,
     scanned_at TIMESTAMP NOT NULL
 );
 """
@@ -87,7 +88,7 @@ class MarketScanCache:
         clone._write_lock = self._write_lock
         return clone
 
-    def put_scan(self, market: str, explanations: list[Explanation]) -> datetime:
+    def put_scan(self, scan_key: str, explanations: list[Explanation]) -> datetime:
         # scanned_at은 후보 행과 별도인 market_scan_meta에 항상 기록한다 — 후보 0건도
         # 정상적인 스캔 결과라(대부분의 날 대부분의 종목엔 신호가 없다, 실사용 중 확인),
         # scanned_at을 후보 테이블에만 묶어두면 "한 번도 스캔 안 함"과 "스캔했지만 후보
@@ -99,24 +100,31 @@ class MarketScanCache:
         # market_scan_meta.scanned_at은 이전 값 그대로라, 이 캐시가 애초에 없애려던
         # "scanned_at과 candidates 불일치" 버그가 다른 경로로 재발한다
         # (test_put_scan_rolls_back_on_failure_leaving_previous_batch_and_scanned_at_intact
-        # 로 재현·고정). 락은 온디맨드 트리거 도입(2026-09) 이후 KRX/NASDAQ 백그라운드
-        # 스레드가 같은 파일에 동시에 커밋하는 걸 막기 위해 필요해졌다.
+        # 로 재현·고정). 락은 온디맨드 트리거 도입(2026-09) 이후 KOSPI/KOSDAQ/NASDAQ/NYSE
+        # 백그라운드 스레드가 같은 파일에 동시에 커밋하는 걸 막기 위해 필요해졌다.
+        #
+        # `scan_key`(원자 market 또는 합성 버킷)와 `market`(종목의 실제 소속 원자
+        # 거래소)는 별도 컬럼이다 — 합성 버킷("KRX"=코스피+코스닥 등)을 원자 market별로
+        # 쪼개 스캔한 뒤 버킷 하나로 합쳐 캐싱하면, 종목의 실제 market이 scan_key와
+        # 달라지는 경우가 생긴다(market 세분화 작업, `orchestrator/scan_coordinator.py`
+        # 참고) — 두 값을 하나의 컬럼으로 뭉개면(과거 설계) scan_key로 조회할 때
+        # 종목이 하나도 안 걸리는 버그가 된다.
         scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)
         with self._write_lock:
             self._con.execute("BEGIN TRANSACTION")
             try:
-                self._con.execute("DELETE FROM market_scan WHERE market = ?", [market])
+                self._con.execute("DELETE FROM market_scan WHERE scan_key = ?", [scan_key])
                 for e in explanations:
                     self._con.execute(
-                        "INSERT INTO market_scan (ticker, market, action, summary) VALUES (?, ?, ?, ?)",
-                        [e.ticker, e.market, e.action, e.summary],
+                        "INSERT INTO market_scan (scan_key, ticker, market, action, summary) VALUES (?, ?, ?, ?, ?)",
+                        [scan_key, e.ticker, e.market, e.action, e.summary],
                     )
                 self._con.execute(
                     """
-                    INSERT INTO market_scan_meta (market, scanned_at) VALUES (?, ?)
-                    ON CONFLICT (market) DO UPDATE SET scanned_at = excluded.scanned_at
+                    INSERT INTO market_scan_meta (scan_key, scanned_at) VALUES (?, ?)
+                    ON CONFLICT (scan_key) DO UPDATE SET scanned_at = excluded.scanned_at
                     """,
-                    [market, scanned_at],
+                    [scan_key, scanned_at],
                 )
             except Exception:
                 self._con.execute("ROLLBACK")
@@ -149,16 +157,16 @@ class MarketScanCache:
             return None, []
         return row[0], list(row[1])
 
-    def get_latest(self, market: str) -> tuple[datetime | None, list[Explanation]]:
+    def get_latest(self, scan_key: str) -> tuple[datetime | None, list[Explanation]]:
         meta_row = self._con.execute(
-            "SELECT scanned_at FROM market_scan_meta WHERE market = ?", [market]
+            "SELECT scanned_at FROM market_scan_meta WHERE scan_key = ?", [scan_key]
         ).fetchone()
         if meta_row is None:
             return None, []
 
         rows = self._con.execute(
-            "SELECT ticker, market, action, summary FROM market_scan WHERE market = ? ORDER BY ticker",
-            [market],
+            "SELECT ticker, market, action, summary FROM market_scan WHERE scan_key = ? ORDER BY ticker",
+            [scan_key],
         ).fetchall()
         explanations = [
             Explanation(ticker=row[0], market=row[1], action=row[2], summary=row[3]) for row in rows
@@ -166,9 +174,10 @@ class MarketScanCache:
         return meta_row[0], explanations
 
     def put_recommendations(self, scan_key: str, recommendations: list[dict]) -> datetime:
-        """recommendation-synthesis.md §6 — `scan_key`는 전체시장이면 market 값
-        그대로("KRX"/"NASDAQ"), 섹터면 합성키("SECTOR:로봇:KRX")를 그대로 재사용한다
-        (별도 컬럼 신설 대신 `market` 컬럼과 동일한 합성키 전략, 마이그레이션 최소화).
+        """recommendation-synthesis.md §6 — `scan_key`는 전체시장이면 원자 market 또는
+        합성 버킷 값 그대로("KOSPI"/"NASDAQ"/"KRX"/"US" 등, market 세분화 작업 참고),
+        섹터면 합성키("SECTOR:로봇:KRX")를 그대로 재사용한다(별도 컬럼 신설 대신 `market`
+        컬럼과 동일한 합성키 전략, 마이그레이션 최소화).
         `put_scan`과 동일하게 DELETE/INSERT×N/meta upsert를 하나의 트랜잭션+락으로
         묶어 "scanned_at과 candidates 불일치" 버그를 재발시키지 않는다."""
         scanned_at = datetime.now(timezone.utc).replace(tzinfo=None)

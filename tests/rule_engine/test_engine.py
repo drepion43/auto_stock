@@ -4,7 +4,7 @@ from auto_stock.data.models import OHLCVRecord
 from auto_stock.rule_engine import engine
 
 
-def _records(n=5, ticker="005930", market="KRX"):
+def _records(n=5, ticker="005930", market="KOSPI"):
     start = date(2026, 1, 1)
     return [
         OHLCVRecord(

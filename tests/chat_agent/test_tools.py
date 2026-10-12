@@ -57,10 +57,10 @@ def test_tool_analyze_rule_engine_returns_candidate(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     mocker.patch(
         "auto_stock.chat_agent.tools.generate_candidates",
-        return_value=[Candidate(ticker="005930", market="KRX", action="BUY", reasons=["RSI 과매도"])],
+        return_value=[Candidate(ticker="005930", market="KOSPI", action="BUY", reasons=["RSI 과매도"])],
     )
 
-    result = tool_analyze_rule_engine(_context(), "005930", "KRX")
+    result = tool_analyze_rule_engine(_context(), "005930", "KOSPI")
 
     assert result == {"available": True, "candidate": {"action": "BUY", "reasons": ["RSI 과매도"]}}
 
@@ -69,7 +69,7 @@ def test_tool_analyze_rule_engine_returns_none_candidate_when_no_signal(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     mocker.patch("auto_stock.chat_agent.tools.generate_candidates", return_value=[])
 
-    result = tool_analyze_rule_engine(_context(), "005930", "KRX")
+    result = tool_analyze_rule_engine(_context(), "005930", "KOSPI")
 
     assert result == {"available": True, "candidate": None}
 
@@ -77,7 +77,7 @@ def test_tool_analyze_rule_engine_returns_none_candidate_when_no_signal(mocker):
 def test_tool_analyze_rule_engine_isolates_ohlcv_fetch_failure(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", side_effect=RuntimeError("network down"))
 
-    result = tool_analyze_rule_engine(_context(), "005930", "KRX")
+    result = tool_analyze_rule_engine(_context(), "005930", "KOSPI")
 
     assert result["available"] is False
     assert "network down" in result["error"]
@@ -87,11 +87,13 @@ def test_tool_analyze_rule_engine_isolates_ohlcv_fetch_failure(mocker):
 
 
 def test_tool_analyze_ml_prediction_returns_prediction(mocker):
+    """ml_models 딥은 여전히 합성 "KRX" 키를 쓴다(ML은 재학습 안 함, market 세분화
+    작업 범위 밖) — KOSPI/KOSDAQ 둘 다 ML_MODEL_KEYS를 통해 그 키로 조회된다."""
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     prediction = mocker.Mock(probability_up=0.62, top_features=[("rsi_14", 0.3)])
     mocker.patch("auto_stock.chat_agent.tools.predict", return_value=prediction)
 
-    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KRX")
+    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KOSPI")
 
     assert result == {
         "available": True,
@@ -100,17 +102,26 @@ def test_tool_analyze_ml_prediction_returns_prediction(mocker):
 
 
 def test_tool_analyze_ml_prediction_unavailable_when_no_model_for_market():
-    result = tool_analyze_ml_prediction(_context(ml_models={}), "005930", "KRX")
+    result = tool_analyze_ml_prediction(_context(ml_models={}), "005930", "KOSPI")
 
     assert result["available"] is False
-    assert "KRX" in result["error"]
+    assert "KOSPI" in result["error"]
+
+
+def test_tool_analyze_ml_prediction_unavailable_for_nyse_which_has_no_model_key():
+    """NYSE는 ML_MODEL_KEYS에서 None으로 매핑된다 — 애초에 모델이 없던 것과 동일하게
+    취급(사용자 결정, ML은 재학습 안 함)."""
+    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object(), "NASDAQ": object()}), "AAPL", "NYSE")
+
+    assert result["available"] is False
+    assert "NYSE" in result["error"]
 
 
 def test_tool_analyze_ml_prediction_returns_none_when_insufficient_data(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     mocker.patch("auto_stock.chat_agent.tools.predict", return_value=None)
 
-    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KRX")
+    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KOSPI")
 
     assert result == {"available": True, "prediction": None}
 
@@ -124,7 +135,7 @@ def test_tool_analyze_chart_pattern_returns_analysis_and_consumes_budget(mocker)
         "auto_stock.chat_agent.tools.analyze_chart",
         return_value=ChartAnalysis(
             ticker="005930",
-            market="KRX",
+            market="KOSPI",
             date=__import__("datetime").date(2024, 6, 10),
             direction="UP",
             confidence="MEDIUM",
@@ -136,7 +147,7 @@ def test_tool_analyze_chart_pattern_returns_analysis_and_consumes_budget(mocker)
     )
     budget = QueryBudget(max_llm_calls=8)
 
-    result = tool_analyze_chart_pattern(_context(llm_client=object(), budget=budget), "005930", "KRX")
+    result = tool_analyze_chart_pattern(_context(llm_client=object(), budget=budget), "005930", "KOSPI")
 
     assert result["available"] is True
     assert result["analysis"]["direction"] == "UP"
@@ -144,7 +155,7 @@ def test_tool_analyze_chart_pattern_returns_analysis_and_consumes_budget(mocker)
 
 
 def test_tool_analyze_chart_pattern_unavailable_without_client():
-    result = tool_analyze_chart_pattern(_context(llm_client=None), "005930", "KRX")
+    result = tool_analyze_chart_pattern(_context(llm_client=None), "005930", "KOSPI")
 
     assert result["available"] is False
 
@@ -154,7 +165,7 @@ def test_tool_analyze_chart_pattern_unavailable_when_budget_exhausted(mocker):
     mock_analyze = mocker.patch("auto_stock.chat_agent.tools.analyze_chart")
     budget = QueryBudget(max_llm_calls=0)
 
-    result = tool_analyze_chart_pattern(_context(llm_client=object(), budget=budget), "005930", "KRX")
+    result = tool_analyze_chart_pattern(_context(llm_client=object(), budget=budget), "005930", "KOSPI")
 
     assert result["available"] is False
     mock_analyze.assert_not_called()
@@ -165,7 +176,7 @@ def test_tool_analyze_chart_pattern_isolates_llm_failure(mocker):
     mocker.patch("auto_stock.chat_agent.tools.analyze_chart", side_effect=RuntimeError("llm boom"))
 
     result = tool_analyze_chart_pattern(
-        _context(llm_client=object(), budget=QueryBudget(max_llm_calls=8)), "005930", "KRX"
+        _context(llm_client=object(), budget=QueryBudget(max_llm_calls=8)), "005930", "KOSPI"
     )
 
     assert result["available"] is False
@@ -182,7 +193,7 @@ def test_tool_analyze_disclosures_returns_analysis_for_krx(mocker):
         "auto_stock.chat_agent.tools.analyze_disclosures",
         return_value=DisclosureAnalysis(
             ticker="005930",
-            market="KRX",
+            market="KOSPI",
             as_of=__import__("datetime").date(2024, 6, 10),
             market_impact="POSITIVE",
             confidence="MEDIUM",
@@ -194,7 +205,7 @@ def test_tool_analyze_disclosures_returns_analysis_for_krx(mocker):
     )
     budget = QueryBudget(max_llm_calls=8)
 
-    result = tool_analyze_disclosures(_context(news_client=object(), budget=budget), "005930", "KRX")
+    result = tool_analyze_disclosures(_context(news_client=object(), budget=budget), "005930", "KOSPI")
 
     assert result["available"] is True
     assert result["analysis"]["market_impact"] == "POSITIVE"
@@ -205,7 +216,7 @@ def test_tool_analyze_disclosures_unregistered_ticker_is_not_an_error(mocker):
     mocker.patch("auto_stock.chat_agent.tools.resolve_corp_code", return_value=None)
     mock_fetch = mocker.patch("auto_stock.chat_agent.tools.fetch_disclosures")
 
-    result = tool_analyze_disclosures(_context(news_client=object()), "005930", "KRX")
+    result = tool_analyze_disclosures(_context(news_client=object()), "005930", "KOSPI")
 
     assert result == {"available": True, "analysis": None}
     mock_fetch.assert_not_called()
@@ -215,7 +226,7 @@ def test_tool_analyze_disclosures_labels_source_fetch_failure_correctly(mocker):
     mocker.patch("auto_stock.chat_agent.tools.resolve_corp_code", return_value="00126380")
     mocker.patch("auto_stock.chat_agent.tools.fetch_disclosures", side_effect=RuntimeError("dart down"))
 
-    result = tool_analyze_disclosures(_context(news_client=object()), "005930", "KRX")
+    result = tool_analyze_disclosures(_context(news_client=object()), "005930", "KOSPI")
 
     assert result["available"] is False
     assert "DART" in result["error"]
@@ -245,7 +256,7 @@ def test_tool_analyze_news_sentiment_returns_analysis_for_krx(mocker):
         "auto_stock.chat_agent.tools.analyze_sentiment",
         return_value=NewsSentimentAnalysis(
             ticker="005930",
-            market="KRX",
+            market="KOSPI",
             as_of=__import__("datetime").date(2024, 6, 10),
             sentiment="POSITIVE",
             confidence="MEDIUM",
@@ -257,7 +268,7 @@ def test_tool_analyze_news_sentiment_returns_analysis_for_krx(mocker):
     )
     budget = QueryBudget(max_llm_calls=8)
 
-    result = tool_analyze_news_sentiment(_context(sentiment_client=object(), budget=budget), "005930", "KRX")
+    result = tool_analyze_news_sentiment(_context(sentiment_client=object(), budget=budget), "005930", "KOSPI")
 
     assert result["available"] is True
     assert result["analysis"]["sentiment"] == "POSITIVE"
@@ -272,7 +283,7 @@ def test_tool_analyze_news_sentiment_name_resolution_failure_is_labeled_dart_not
     )
     mock_search = mocker.patch("auto_stock.chat_agent.tools.search_news")
 
-    result = tool_analyze_news_sentiment(_context(sentiment_client=object()), "005930", "KRX")
+    result = tool_analyze_news_sentiment(_context(sentiment_client=object()), "005930", "KOSPI")
 
     assert result["available"] is False
     assert "DART" in result["error"]
@@ -295,7 +306,7 @@ def test_tool_analyze_news_sentiment_uses_gdelt_for_nasdaq_and_strips_quotes(moc
 
 
 def test_tool_analyze_news_sentiment_unavailable_without_client():
-    result = tool_analyze_news_sentiment(_context(sentiment_client=None), "005930", "KRX")
+    result = tool_analyze_news_sentiment(_context(sentiment_client=None), "005930", "KOSPI")
 
     assert result["available"] is False
 
@@ -307,13 +318,13 @@ def test_tool_analyze_position_sizing_returns_suggestion(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     mocker.patch(
         "auto_stock.chat_agent.tools.generate_candidates",
-        return_value=[Candidate(ticker="005930", market="KRX", action="BUY", reasons=["RSI 과매도"])],
+        return_value=[Candidate(ticker="005930", market="KOSPI", action="BUY", reasons=["RSI 과매도"])],
     )
     mocker.patch(
         "auto_stock.chat_agent.tools.suggest_position",
         return_value=SizingSuggestion(
             ticker="005930",
-            market="KRX",
+            market="KOSPI",
             action="BUY",
             suggested_quantity=10,
             suggested_allocation_pct=0.05,
@@ -325,7 +336,7 @@ def test_tool_analyze_position_sizing_returns_suggestion(mocker):
         ),
     )
 
-    result = tool_analyze_position_sizing(_context(), "005930", "KRX")
+    result = tool_analyze_position_sizing(_context(), "005930", "KOSPI")
 
     assert result == {
         "available": True,
@@ -347,7 +358,7 @@ def test_tool_analyze_position_sizing_no_suggestion_when_no_candidate(mocker):
     mocker.patch("auto_stock.chat_agent.tools.generate_candidates", return_value=[])
     mock_suggest = mocker.patch("auto_stock.chat_agent.tools.suggest_position")
 
-    result = tool_analyze_position_sizing(_context(), "005930", "KRX")
+    result = tool_analyze_position_sizing(_context(), "005930", "KOSPI")
 
     assert result == {"available": True, "suggestion": None}
     mock_suggest.assert_not_called()
@@ -356,7 +367,7 @@ def test_tool_analyze_position_sizing_no_suggestion_when_no_candidate(mocker):
 def test_tool_analyze_position_sizing_isolates_ohlcv_fetch_failure(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", side_effect=RuntimeError("network down"))
 
-    result = tool_analyze_position_sizing(_context(), "005930", "KRX")
+    result = tool_analyze_position_sizing(_context(), "005930", "KOSPI")
 
     assert result["available"] is False
     assert "network down" in result["error"]
@@ -367,7 +378,7 @@ def test_tool_analyze_position_sizing_does_not_consume_llm_budget(mocker):
     mocker.patch("auto_stock.chat_agent.tools.generate_candidates", return_value=[])
     budget = QueryBudget(max_llm_calls=8)
 
-    tool_analyze_position_sizing(_context(budget=budget), "005930", "KRX")
+    tool_analyze_position_sizing(_context(budget=budget), "005930", "KOSPI")
 
     assert budget.llm_calls_made == 0
 
@@ -382,13 +393,13 @@ def test_tool_get_price_data_returns_latest_record_regardless_of_rule_engine_sig
     후보 유무와 무관하게 캐시된 최신 OHLCV 한 건을 그대로 반환한다."""
     records = [
         OHLCVRecord(
-            ticker="000660", market="KRX", date=date(2026, 9, 23),
+            ticker="000660", market="KOSPI", date=date(2026, 9, 23),
             open=1_899_000.0, high=1_900_000.0, low=1_836_000.0, close=1_863_000.0, volume=2_886_116,
         )
     ]
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=records)
 
-    result = tool_get_price_data(_context(), "000660", "KRX")
+    result = tool_get_price_data(_context(), "000660", "KOSPI")
 
     assert result == {
         "available": True,
@@ -406,7 +417,7 @@ def test_tool_get_price_data_returns_latest_record_regardless_of_rule_engine_sig
 def test_tool_get_price_data_returns_none_when_no_records_cached(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=[])
 
-    result = tool_get_price_data(_context(), "000660", "KRX")
+    result = tool_get_price_data(_context(), "000660", "KOSPI")
 
     assert result == {"available": True, "latest": None}
 
@@ -414,7 +425,7 @@ def test_tool_get_price_data_returns_none_when_no_records_cached(mocker):
 def test_tool_get_price_data_isolates_ohlcv_fetch_failure(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", side_effect=RuntimeError("network down"))
 
-    result = tool_get_price_data(_context(), "000660", "KRX")
+    result = tool_get_price_data(_context(), "000660", "KOSPI")
 
     assert result["available"] is False
     assert "network down" in result["error"]
@@ -431,10 +442,10 @@ def test_tool_find_related_companies_resolves_name_then_delegates(mocker):
     )
     context = _context(agent_model="gpt-5.6-luna")
 
-    result = tool_find_related_companies(context, "005930", "KRX")
+    result = tool_find_related_companies(context, "005930", "KOSPI")
 
     assert result == {"available": True, "related": []}
-    mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", "005930", "KRX", "삼성전자")
+    mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", "005930", "KOSPI", "삼성전자")
 
 
 def test_tool_find_related_companies_uses_edgar_title_for_nasdaq(mocker):
@@ -453,7 +464,7 @@ def test_tool_find_related_companies_unavailable_when_name_unresolved(mocker):
     mocker.patch("auto_stock.chat_agent.tools.resolve_corp_name", return_value=None)
     mock_run = mocker.patch("auto_stock.chat_agent.tools.run_find_related_companies")
 
-    result = tool_find_related_companies(_context(), "005930", "KRX")
+    result = tool_find_related_companies(_context(), "005930", "KOSPI")
 
     assert result["available"] is False
     mock_run.assert_not_called()
@@ -465,7 +476,7 @@ def test_tool_find_related_companies_isolates_name_resolution_failure(mocker):
     )
     mock_run = mocker.patch("auto_stock.chat_agent.tools.run_find_related_companies")
 
-    result = tool_find_related_companies(_context(), "005930", "KRX")
+    result = tool_find_related_companies(_context(), "005930", "KOSPI")
 
     assert result["available"] is False
     assert "dart down" in result["error"]
@@ -485,11 +496,11 @@ def test_tool_stock_analyst_binds_six_tools_and_delegates(mocker):
     )
     context = _context(agent_model="gpt-5.6-luna")
 
-    result = tool_stock_analyst(context, "005930", "KRX")
+    result = tool_stock_analyst(context, "005930", "KOSPI")
 
     assert result["available"] is True
-    mock_bind.assert_called_once_with(context, "005930", "KRX")
-    mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", ["t1", "t2"], "005930", "KRX")
+    mock_bind.assert_called_once_with(context, "005930", "KOSPI")
+    mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", ["t1", "t2"], "005930", "KOSPI")
 
 
 def test_bind_stock_analyst_tools_produces_six_zero_arg_tools_bound_to_ticker_and_market(mocker):
@@ -501,7 +512,7 @@ def test_bind_stock_analyst_tools_produces_six_zero_arg_tools_bound_to_ticker_an
     )
     context = _context()
 
-    bound = _bind_stock_analyst_tools(context, "005930", "KRX")
+    bound = _bind_stock_analyst_tools(context, "005930", "KOSPI")
 
     assert len(bound) == 6
     names = {t.name for t in bound}
@@ -515,7 +526,7 @@ def test_bind_stock_analyst_tools_produces_six_zero_arg_tools_bound_to_ticker_an
     }
     rule_tool = next(t for t in bound if t.name == "analyze_rule_engine")
     rule_tool.invoke({})
-    mock_rule.assert_called_once_with(context, "005930", "KRX")
+    mock_rule.assert_called_once_with(context, "005930", "KOSPI")
 
 
 # --- resolve_ticker ---
@@ -526,14 +537,14 @@ def test_tool_resolve_ticker_returns_matches_and_flags(mocker):
 
     mocker.patch(
         "auto_stock.chat_agent.tools.resolve_ticker",
-        return_value=TickerResolution(matches=[TickerMatch(ticker="005930", market="KRX", name="삼성전자")]),
+        return_value=TickerResolution(matches=[TickerMatch(ticker="005930", market="KOSPI", name="삼성전자")]),
     )
 
     result = tool_resolve_ticker(_context(), "삼성전자")
 
     assert result == {
         "available": True,
-        "matches": [{"ticker": "005930", "market": "KRX", "name": "삼성전자"}],
+        "matches": [{"ticker": "005930", "market": "KOSPI", "name": "삼성전자"}],
         "is_resolved": True,
         "is_ambiguous": False,
         "is_not_found": False,
@@ -586,13 +597,13 @@ def test_tool_get_market_scan_recommendations_returns_cached_recommendations(moc
     scan_cache = mocker.Mock()
     scan_cache.get_latest_recommendations.return_value = (
         scanned_at,
-        [{"ticker": "005930", "market": "KRX", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}],
+        [{"ticker": "005930", "market": "KOSPI", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}],
     )
     recommendation_coordinator = mocker.Mock()
     recommendation_coordinator.is_in_progress.return_value = False
 
     result = tool_get_market_scan_recommendations(
-        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KRX"
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KOSPI"
     )
 
     assert result == {
@@ -600,11 +611,11 @@ def test_tool_get_market_scan_recommendations_returns_cached_recommendations(moc
         "scanned_at": "2026-09-07T09:00:00",
         "refreshing": False,
         "recommendations": [
-            {"ticker": "005930", "market": "KRX", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}
+            {"ticker": "005930", "market": "KOSPI", "action": "BUY", "rank": 1, "summary": "RSI 과매도 + ML 상승확률 70%"}
         ],
     }
-    scan_cache.get_latest_recommendations.assert_called_once_with("KRX")
-    recommendation_coordinator.ensure_fresh.assert_called_once_with("KRX")
+    scan_cache.get_latest_recommendations.assert_called_once_with("KOSPI")
+    recommendation_coordinator.ensure_fresh.assert_called_once_with("KOSPI")
 
 
 def test_tool_get_market_scan_recommendations_handles_never_run(mocker):
@@ -614,7 +625,7 @@ def test_tool_get_market_scan_recommendations_handles_never_run(mocker):
     recommendation_coordinator.is_in_progress.return_value = True  # 방금 ensure_fresh가 트리거함
 
     result = tool_get_market_scan_recommendations(
-        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KRX"
+        _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator), "KOSPI"
     )
 
     assert result == {"available": True, "scanned_at": None, "refreshing": True, "recommendations": []}
@@ -654,24 +665,24 @@ def test_tool_get_sector_recommendations_uses_sector_scan_key(mocker):
     scan_cache = mocker.Mock()
     scan_cache.get_latest_recommendations.return_value = (
         scanned_at,
-        [{"ticker": "277810", "market": "KRX", "action": "BUY", "rank": 1, "summary": "근거"}],
+        [{"ticker": "277810", "market": "KOSPI", "action": "BUY", "rank": 1, "summary": "근거"}],
     )
     recommendation_coordinator = mocker.Mock()
     recommendation_coordinator.is_sector_in_progress.return_value = False
 
     result = tool_get_sector_recommendations(
         _context(scan_cache=scan_cache, recommendation_coordinator=recommendation_coordinator),
-        "로봇", "KRX",
+        "로봇", "KOSPI",
     )
 
     assert result == {
         "available": True,
         "scanned_at": "2026-10-07T09:00:00",
         "refreshing": False,
-        "recommendations": [{"ticker": "277810", "market": "KRX", "action": "BUY", "rank": 1, "summary": "근거"}],
+        "recommendations": [{"ticker": "277810", "market": "KOSPI", "action": "BUY", "rank": 1, "summary": "근거"}],
     }
-    scan_cache.get_latest_recommendations.assert_called_once_with("SECTOR:로봇:KRX")
-    recommendation_coordinator.ensure_fresh_sector.assert_called_once_with("로봇", "KRX")
+    scan_cache.get_latest_recommendations.assert_called_once_with("SECTOR:로봇:KOSPI")
+    recommendation_coordinator.ensure_fresh_sector.assert_called_once_with("로봇", "KOSPI")
 
 
 # --- analyze_etf_composition ---
@@ -681,6 +692,7 @@ def _patch_etf_signals(mocker, names: dict[str, str | None]):
     """구성종목 이름 역조회 + 기존 공시/뉴스감성 도구를 모킹한다 — ETF 경로는 새 분석
     로직 없이 이 두 도구를 그대로 재호출하는지만 검증하면 된다."""
     mocker.patch("auto_stock.chat_agent.tools.resolve_corp_name", side_effect=lambda t: names[t])
+    mocker.patch("auto_stock.chat_agent.tools.resolve_market", return_value="KOSPI")
     mock_disclosures = mocker.patch(
         "auto_stock.chat_agent.tools.tool_analyze_disclosures",
         side_effect=lambda ctx, t, m: {"available": True, "analysis": {"key_event": f"{t}-공시"}},
@@ -692,15 +704,87 @@ def _patch_etf_signals(mocker, names: dict[str, str | None]):
     return mock_disclosures, mock_sentiment
 
 
-def test_tool_analyze_etf_composition_unsupported_for_nasdaq(mocker):
+def test_tool_analyze_etf_composition_unsupported_for_tokyo(mocker):
+    """원자 market이 아니거나 KRX_MARKETS/US_MARKETS 둘 다에 속하지 않으면 미지원."""
     from auto_stock.chat_agent.tools import tool_analyze_etf_composition
 
-    mock_holdings = mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings")
+    mock_krx_holdings = mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings")
+    mock_us_holdings = mocker.patch("auto_stock.chat_agent.tools.resolve_etf_cik")
 
-    result = tool_analyze_etf_composition(_context(), "QQQ", "NASDAQ")
+    result = tool_analyze_etf_composition(_context(), "1234", "TOKYO")
 
     assert result["available"] is False
-    mock_holdings.assert_not_called()
+    mock_krx_holdings.assert_not_called()
+    mock_us_holdings.assert_not_called()
+
+
+def _patch_us_etf_signals(mocker, name_to_match: dict[str, tuple[str, str] | None]):
+    """미국 ETF 경로: N-PORT holding 이름 → (티커, 이름) 완전일치 역변환 + 거래소
+    역조회 + 기존 공시/뉴스감성 도구를 모킹한다."""
+    mocker.patch(
+        "auto_stock.chat_agent.tools.resolve_edgar_ticker_by_name",
+        side_effect=lambda name: [name_to_match[name]] if name_to_match.get(name) else [],
+    )
+    mocker.patch("auto_stock.chat_agent.tools.resolve_exchange", return_value="NASDAQ")
+    mock_disclosures = mocker.patch(
+        "auto_stock.chat_agent.tools.tool_analyze_disclosures",
+        side_effect=lambda ctx, t, m: {"available": True, "analysis": {"key_event": f"{t}-공시"}},
+    )
+    mock_sentiment = mocker.patch(
+        "auto_stock.chat_agent.tools.tool_analyze_news_sentiment",
+        side_effect=lambda ctx, t, m: {"available": True, "analysis": {"sentiment": "POSITIVE"}},
+    )
+    return mock_disclosures, mock_sentiment
+
+
+def test_tool_analyze_etf_composition_us_etf_delegates_to_nport_then_synthesizes(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch("auto_stock.chat_agent.tools.resolve_etf_cik", return_value="0001067839")
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_latest_nport_holdings",
+        return_value=[("Apple Inc", 12.0), ("Not Findable Co", 3.0)],
+    )
+    mock_disclosures, mock_sentiment = _patch_us_etf_signals(
+        mocker, {"Apple Inc": ("AAPL", "Apple Inc"), "Not Findable Co": None}
+    )
+    mocker.patch(
+        "auto_stock.chat_agent.tools.run_etf_composition_synthesis",
+        return_value={"available": True, "summary": "기술주 강세", "outlook": "UP", "provenance": "ETF 구성종목 집계 분석"},
+    )
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "QQQ", "NASDAQ")
+
+    # 완전일치 안 된 holding("Not Findable Co")은 신호 조회 자체를 하지 않는다
+    assert mock_disclosures.call_args.args[1] == "AAPL"
+    assert mock_sentiment.call_args.args[1] == "AAPL"
+    assert result["holdings"] == [{"ticker": "AAPL", "name": "Apple Inc", "weight_pct": 12.0}]
+    assert result["data_as_of_note"] == (
+        "SEC EDGAR Form N-PORT 분기 공시 기준 — 국내보다 데이터가 최대 2개월 묵었을 수 있습니다."
+    )
+
+
+def test_tool_analyze_etf_composition_us_etf_not_an_etf_is_not_an_error(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch("auto_stock.chat_agent.tools.resolve_etf_cik", return_value=None)
+    mock_nport = mocker.patch("auto_stock.chat_agent.tools.fetch_latest_nport_holdings")
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "AAPL", "NASDAQ")
+
+    assert result == {"available": True, "holdings": None}
+    mock_nport.assert_not_called()
+
+
+def test_tool_analyze_etf_composition_us_etf_no_nport_filing_is_not_an_error(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_etf_composition
+
+    mocker.patch("auto_stock.chat_agent.tools.resolve_etf_cik", return_value="0000320193")
+    mocker.patch("auto_stock.chat_agent.tools.fetch_latest_nport_holdings", return_value=None)
+
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "AAPL", "NASDAQ")
+
+    assert result == {"available": True, "holdings": None}
 
 
 def test_tool_analyze_etf_composition_isolates_holdings_fetch_failure(mocker):
@@ -710,7 +794,7 @@ def test_tool_analyze_etf_composition_isolates_holdings_fetch_failure(mocker):
         "auto_stock.chat_agent.tools.fetch_etf_holdings", side_effect=RuntimeError("krx down")
     )
 
-    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KOSPI")
 
     assert result["available"] is False
     assert "krx down" in result["error"]
@@ -722,7 +806,7 @@ def test_tool_analyze_etf_composition_no_holdings_is_not_an_error(mocker):
     mocker.patch("auto_stock.chat_agent.tools.fetch_etf_holdings", return_value=[])
     mock_synth = mocker.patch("auto_stock.chat_agent.tools.run_etf_composition_synthesis")
 
-    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "005930", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "005930", "KOSPI")
 
     assert result == {"available": True, "holdings": None}
     mock_synth.assert_not_called()
@@ -744,7 +828,7 @@ def test_tool_analyze_etf_composition_delegates_to_existing_tools_then_synthesiz
     )
     context = _context(budget=QueryBudget(max_llm_calls=50))
 
-    result = tool_analyze_etf_composition(context, "069500", "KRX")
+    result = tool_analyze_etf_composition(context, "069500", "KOSPI")
 
     # 이름을 확인할 수 없는 항목(현금/선물 등)은 공시·뉴스 신호가 없으므로 건너뛴다
     assert {c.args[1] for c in mock_disclosures.call_args_list} == {"005930", "000660"}
@@ -783,7 +867,7 @@ def test_tool_analyze_etf_composition_caps_holdings_to_leave_budget_for_synthesi
         return_value={"available": True, "summary": "s", "outlook": "NEUTRAL", "provenance": "p"},
     )
 
-    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KOSPI")
 
     assert {c.args[1] for c in mock_disclosures.call_args_list} == {"005930", "000660"}
     assert [h["ticker"] for h in result["holdings"]] == ["005930", "000660"]
@@ -806,7 +890,7 @@ def test_tool_analyze_etf_composition_non_stock_rows_do_not_consume_holding_slot
         return_value={"available": True, "summary": "s", "outlook": "NEUTRAL", "provenance": "p"},
     )
 
-    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=10)), "069500", "KOSPI")
 
     assert [h["ticker"] for h in result["holdings"]] == ["005930", "000660"]
 
@@ -818,7 +902,7 @@ def test_tool_analyze_etf_composition_unavailable_when_budget_cannot_cover_synth
     budget = QueryBudget(max_llm_calls=50)
     budget.llm_calls_made = 45
 
-    result = tool_analyze_etf_composition(_context(budget=budget), "069500", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=budget), "069500", "KOSPI")
 
     assert result["available"] is False
     mock_holdings.assert_not_called()
@@ -834,7 +918,7 @@ def test_tool_analyze_etf_composition_passes_through_synthesis_failure(mocker):
         return_value={"available": False, "error": "ETF 구성종목 종합 실패: boom"},
     )
 
-    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KRX")
+    result = tool_analyze_etf_composition(_context(budget=QueryBudget(max_llm_calls=50)), "069500", "KOSPI")
 
     assert result == {"available": False, "error": "ETF 구성종목 종합 실패: boom"}
 
@@ -876,7 +960,7 @@ def test_sector_tool_starts_at_most_the_per_turn_batch_limit(mocker):
     context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
 
     for query in ("로봇", "로봇 섹터", "휴머노이드"):
-        result = tool_get_sector_recommendations(context, query, "KRX")
+        result = tool_get_sector_recommendations(context, query, "KOSPI")
         assert result["available"] is True  # 상한을 넘어도 캐시 조회 자체는 정상 응답
 
     assert coordinator.ensure_fresh_sector.call_count == 1
@@ -888,8 +972,8 @@ def test_market_scan_and_sector_share_the_same_per_turn_limit(mocker):
     coordinator = _coordinator_starting_threads(mocker)
     context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
 
-    tool_get_market_scan_recommendations(context, "KRX")
-    tool_get_sector_recommendations(context, "로봇", "KRX")
+    tool_get_market_scan_recommendations(context, "KOSPI")
+    tool_get_sector_recommendations(context, "로봇", "KOSPI")
 
     assert coordinator.ensure_fresh.call_count == 1
     coordinator.ensure_fresh_sector.assert_not_called()
@@ -902,8 +986,8 @@ def test_fresh_cache_does_not_consume_the_batch_limit(mocker):
     coordinator.ensure_fresh_sector.side_effect = [None, mocker.Mock()]  # 첫 번째는 캐시 신선 → 배치 없음
     context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker), batch_trigger_limit=1)
 
-    tool_get_sector_recommendations(context, "로봇", "KRX")
-    tool_get_sector_recommendations(context, "반도체", "KRX")
+    tool_get_sector_recommendations(context, "로봇", "KOSPI")
+    tool_get_sector_recommendations(context, "반도체", "KOSPI")
 
     assert coordinator.ensure_fresh_sector.call_count == 2
 
@@ -915,7 +999,7 @@ def test_no_batch_limit_by_default_keeps_legacy_behavior(mocker):
     context = _context(recommendation_coordinator=coordinator, scan_cache=_scan_cache(mocker))
 
     for query in ("로봇", "반도체", "2차전지"):
-        tool_get_sector_recommendations(context, query, "KRX")
+        tool_get_sector_recommendations(context, query, "KOSPI")
 
     assert coordinator.ensure_fresh_sector.call_count == 3
 

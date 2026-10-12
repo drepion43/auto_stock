@@ -28,13 +28,13 @@ def test_analyze_returns_none_and_does_not_call_reader_when_data_insufficient():
 
 def test_analyze_fills_ticker_market_date_from_records_not_response():
     reader = FakeChartPatternReader()
-    records = make_records(random_walk_prices(80), ticker="000660", market="KRX")
+    records = make_records(random_walk_prices(80), ticker="000660", market="KOSPI")
 
     result = analyze(reader, records)
 
     assert result is not None
     assert result.ticker == "000660"
-    assert result.market == "KRX"
+    assert result.market == "KOSPI"
     assert result.date == records[-1].date
 
 

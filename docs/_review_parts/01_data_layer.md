@@ -2,7 +2,7 @@
 
 이 문서는 PRD #0 데이터 수집 계층을 구성하는 모든 파일의 공개 함수/클래스를 함수 단위로 상세히 정리한 것이다. 설계 배경 전반은 `docs/design/data-collection-layer.md`에 있으며, 이 문서는 그 설계가 실제 코드에서 어떻게 구현됐는지, 그리고 설계 문서 작성 이후 실제 구현 과정에서 추가/변경된 부분(DART/EDGAR/네이버/GDELT 소스, 업종 분류, market 세분화)까지 포함해 다룬다.
 
-> **실측 정정 (2026-10-11)**: 아래 market 세분화 서술은 계획 상태이며 **아직 코드에 반영되지 않았다** — `data/models.py::VALID_MARKETS`는 여전히 `{"KRX","NASDAQ"}`이고, `data/market_routing.py`·`orchestrator/market_buckets.py`·`sources/index_*`·`sources/investor_flow.py`는 untracked 상태로 연결되지 않았다. `sources/etf_source.py` 절만 2026-10-11 구현·라이브 검증 기준으로 갱신했다.
+> **실측 정정 (2026-10-12 갱신)**: 아래 market 세분화 서술은 이제 **작업 트리에 구현돼 있다(아직 커밋 전)** — `data/models.py::VALID_MARKETS` = `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}`, `data/market_routing.py`(도구·파이프라인·추천 코디네이터가 사용)와 `orchestrator/market_buckets.py`(스캔/추천 코디네이터가 사용, S&P500/다우 필터는 `sources/index_constituents.py` 경유)가 연결됐다. **아직 연결 안 됨**: `sources/index_quote.py`, `sources/investor_flow.py`(어떤 도구·모듈도 import하지 않음). 이전(2026-10-11) 메모의 "코드에 반영되지 않았다"는 더 이상 사실이 아니다.
 
 **market 세분화(2026-10 작업) 개요**: 이 계층 전체가 "KRX"/"NASDAQ" 2분류에서 "KOSPI"/"KOSDAQ"/"NASDAQ"/"NYSE" 원자(atomic) 거래소 4분류로 바뀌었다. 핵심 설계 원칙은 **"원자 market(레코드·캐시 PK에 쓰임)"과 "합성 scan_key(백그라운드 스캔 버킷에만 쓰임)"를 분리**하는 것이다 — "KRX"(코스피+코스닥)/"US"(나스닥+NYSE)/"SP500"/"DOW" 같은 합성 개념은 더 이상 `OHLCVRecord.market`에 들어가지 않고, `data/service.py::get_universe_union`과 `orchestrator/market_buckets.py`(이 문서 범위 밖, `orchestrator` 리뷰 참고) 레벨에서만 존재한다. 이렇게 분리한 이유는 합성값을 레코드/캐시 PK에 허용하면 "코스피 종목을 KRX로 캐싱했다가 KOSPI로 재조회하면 캐시미스가 나는" 식의 애매함이 생기기 때문이다.
 
@@ -30,7 +30,8 @@ src/auto_stock/data/
     ├── index_quote.py               # 지수 자체 시세(VIX/DJI/IXIC/S&P500/RUT) 조회(신규)
     ├── index_constituents.py        # S&P500/다우존스 구성종목 조회(신규)
     ├── investor_flow.py             # pykrx — 외국인/기관 순매수, 공매도 비중(신규, 국내 전용)
-    └── etf_source.py                # pykrx+FDR — 국내 ETF 구성종목(holdings)·유니버스 조회(신규)
+    ├── etf_source.py                # pykrx+FDR — 국내 ETF 구성종목(holdings)·유니버스 조회(신규)
+    └── edgar_nport_source.py        # SEC EDGAR Form N-PORT — 미국 ETF 구성종목 조회(신규, 2026-10-12)
 ```
 
 참고: `src/auto_stock/data/__init__.py`와 `src/auto_stock/data/sources/__init__.py`는 둘 다 빈 파일이다(네임스페이스 패키지 선언 역할만).
@@ -309,11 +310,13 @@ DART API는 KRX 종목코드가 아니라 자체 `corp_code`로 종목을 식별
 
 ### `_download_cik_map() -> dict[str, dict[str, str]]`
 
-`company_tickers.json`을 다운로드해 `{ticker: {"cik": "0000320193", "title": "Apple Inc.", "exchange": "NASDAQ"}}` 형태로 파싱한다(`edgar_source.py:72-101`). CIK는 `f"{int(cik):010d}"`로 10자리 0-패딩된다. `title`은 `resolve_corp_name`과 동일한 목적(뉴스 검색 쿼리 생성)으로 쓰인다.
+`company_tickers.json`을 다운로드해 `{ticker: {"cik": "0000320193", "title": "Apple Inc.", "exchange": "NASDAQ"}}` 형태로 파싱한다(`edgar_source.py`). CIK는 `f"{int(cik):010d}"`로 10자리 0-패딩된다. `title`은 `resolve_corp_name`과 동일한 목적(뉴스 검색 쿼리 생성)으로 쓰인다.
 
-**market 세분화(2026-10) — `exchange` 필드 추가**: 캐시 항목에 `exchange` 필드가 새로 추가됐다. SEC가 보내는 원본 `exchange` 값(`"nasdaq"`/`"nyse"`/`"nyse mkt"`/`"batsglobal"` 등 소문자 자유 문자열, 2026-10 실제 응답으로 확인됨)을 `_normalize_exchange()`(`edgar_source.py:62-69`)가 `_EXCHANGE_TO_MARKET = {"nasdaq": "NASDAQ", "nyse": "NYSE"}` 매핑으로 정규화한다. 매핑에 없는 거래소명(ETF 발행사 등)이면 `None`을 반환하고, 캐시에는 빈 문자열로 저장된다(`entry.get("exchange") or ""`, `edgar_source.py:98`) — **"NASDAQ으로 임의 단정하지 않는다"**는 것이 이 설계의 핵심이다(`_normalize_exchange` docstring에 명시).
+**버그 발견 및 수정(2026-10-12)**: market 세분화 작업 당시 `exchange` 필드를 `company_tickers.json` 응답에서 바로 읽으려 했으나, **라이브 호출로 확인한 결과 그 파일에는 `exchange` 필드가 전혀 없다**(실제 응답 키는 `{cik_str, ticker, title}` 3개뿐). exchange는 완전히 별도 파일인 `company_tickers_exchange.json`(`COMPANY_TICKERS_EXCHANGE_URL`, 필드: `cik`/`name`/`ticker`/`exchange`, `{"fields":[...],"data":[[...]]}` 형태로 `company_tickers.json`과 스키마가 다름)에만 있다. 즉 이 버그가 고쳐지기 전까지 `resolve_exchange`는 **항상 `None`을 반환**하고 있었다 — `ticker_resolution.py`의 "역조회 실패 시 NASDAQ/NYSE 둘 다 후보" 폴백이 사실상 모든 영문 심볼 질의에서 발동 중이었다는 뜻(틀린 단정은 안 나왔지만, 애초에 거래소를 특정하는 기능 자체가 작동하지 않았음).
 
-**에러 처리**: `requests.exceptions.RequestException`을 `EdgarApiError(f"EDGAR API 요청 실패: {type(exc).__name__}")`로 재던짐 — DART와 동일한 "원본 예외 비노출" 원칙.
+**수정된 동작**: `_download_cik_map()`이 이제 두 URL을 모두 호출한다 — `_download_exchange_map()`이 `company_tickers_exchange.json`을 받아 `{ticker: exchange}` 보조 매핑을 만들고, 그 결과를 `_normalize_exchange()`(SEC가 보내는 원본 `exchange` 값 — `"Nasdaq"`/`"NYSE"`/`"NYSE Mkt"`/`"batsglobal"` 등 자유 문자열, 2026-10 실제 응답으로 확인됨 — 를 `_EXCHANGE_TO_MARKET = {"nasdaq": "NASDAQ", "nyse": "NYSE"}` 매핑으로 정규화)에 통과시켜 캐시 항목에 합친다. 매핑에 없는 거래소명(ETF 발행사 등)이거나 두 번째 파일에 해당 티커가 없으면 `None`을 반환하고, 캐시에는 빈 문자열로 저장된다(`entry.get("exchange") or ""`) — **"NASDAQ으로 임의 단정하지 않는다"**는 것이 이 설계의 핵심이다(`_normalize_exchange` docstring에 명시). 요청이 1회에서 2회로 늘지만 7일 TTL 캐시라 영향은 작다.
+
+**에러 처리**: `requests.exceptions.RequestException`을 `EdgarApiError(f"EDGAR API 요청 실패: {type(exc).__name__}")`로 재던짐 — DART와 동일한 "원본 예외 비노출" 원칙. 공통 요청 로직은 `_get_json()` 헬퍼로 추출해 두 URL 호출이 중복되지 않게 했다.
 
 ### `_is_cache_fresh`/`_load_or_refresh_cik_map`/`_cik_title_and_exchange`
 
@@ -507,7 +510,7 @@ ETF 가격은 구성종목들의 가중평균 움직임을 그대로 반영한�
 
 **설계상 비자명한 결정(API 패밀리 혼동 주의)**: `pykrx.stock.get_etf_portfolio_deposit_file(etf_ticker)`는 `sector_classification.py`가 쓰는 `get_index_portfolio_deposit_file(index_code)`와 이름이 비슷하지만 **완전히 다른 API 패밀리**다 — 전자는 ETF 티커를 직접 받아 구성종목+비중을 한 번에 반환하므로, `fetch_sector_names`→`fetch_constituents`처럼 "업종명→지수코드→구성종목" 2단계를 거칠 필요가 없다. 모듈 docstring이 이 혼동 가능성을 명시적으로 경고한다.
 
-**국내(KOSPI/KOSDAQ) 전용** — 미국 ETF(SPY/QQQ 등) holdings는 SEC EDGAR의 Form N-PORT(분기 공시, 구조화 API 없이 raw XML 직접 파싱 필요, 신선도도 분기 단위로 국내 pykrx보다 훨씬 떨어짐)로만 무료 조회 가능하다는 조사 결과에 따라 사용자 확인 후 범위에서 명시적으로 제외됐다 — 다음 라운드 과제로 남아 있다.
+**국내(KOSPI/KOSDAQ) 전용** — 미국 ETF(SPY/QQQ 등) holdings는 pykrx 대상이 아니다. **2026-10-12부터 미국 ETF는 별도 모듈 `sources/edgar_nport_source.py`(아래 절)가 SEC EDGAR Form N-PORT로 지원한다** — 이 모듈(`etf_source.py`)은 여전히 국내 전용이고, 두 모듈을 `chat_agent/tools.py::tool_analyze_etf_composition`이 market에 따라 분기해서 호출한다.
 
 #### `fetch_etf_holdings(etf_ticker: str, top_n: int = DEFAULT_TOP_N, as_of: date | None = None) -> list[tuple[str, float]]`
 
@@ -534,6 +537,30 @@ ETF 가격은 구성종목들의 가중평균 움직임을 그대로 반영한�
 **상세 동작**: `fdr.StockListing("ETF/KR")`의 `Symbol`/`Name` 컬럼을 `zip`으로 묶어 반환(2026-10-11 실측 1,172개, `069500`→"KODEX 200" 확인). **신설 배경**: DART의 `corpCode.xml`은 상장"법인"(기업) 전용이라 ETF(운용사가 발행하는 펀드, 법인이 아님)를 포함하지 않을 가능성이 높아, `ticker_resolution.py`가 DART 역조회 실패 시 이 함수로 폴백한다 — 해당 모듈 리뷰(`06_chat_agent.md`)에서 상세히 다룬다.
 
 **캐싱**: 이 모듈 자체는 캐싱하지 않고 매 호출마다 FDR을 호출한다. 대신 소비자인 `ticker_resolution.py`가 `lru_cache`로 프로세스 수명 동안 1회만 호출한다(`resolve_ticker`는 매 대화 턴 호출되므로) — `index_constituents.py`의 7일 TTL 파일 캐시와 달리 메모리 캐시라 챗봇 프로세스를 재시작하면 갱신된다.
+
+---
+
+## `sources/edgar_nport_source.py` — 미국 ETF 구성종목(SEC EDGAR Form N-PORT) 조회(신규, 2026-10-12 미국 ETF 지원 작업)
+
+`etf_source.py`의 미국 대응. `edgar_source.py`와 같은 위치지만 별도 모듈로 둔 이유는 N-PORT가 공시 목록이 아니라 **구성종목 holdings**를 다루고, 응답 스키마(XML, `invstOrSecs`)가 공시 목록 API(JSON)와 완전히 다르기 때문이다.
+
+**설계상 비자명한 결정(두 개로 쪼개진 티커 매핑)**: 미국 ETF 티커가 서로 다른 SEC 매핑 체계 두 곳에 흩어져 있다는 사실이 라이브 호출로 확인됐다 — SPY/DIA/GLD처럼 UIT(Unit Investment Trust)형 ETF는 일반 상장기업과 같은 `edgar_source.COMPANY_TICKERS_URL`(equity 맵)에 있지만, QQQ/VOO/IVV/VTI 등은 그 맵에 전혀 없고 완전히 별도인 `MF_TICKERS_URL`(`company_tickers_mf.json`, 뮤추얼펀드 series/class 체계, 필드: `cik`/`seriesId`/`classId`/`symbol`)에만 있다.
+
+#### `resolve_etf_cik(ticker, mf_cache_path=MF_TICKER_MAP_CACHE_PATH, mf_refresh_days=MF_TICKER_MAP_REFRESH_DAYS) -> str | None`
+
+**목표/역할**: 미국 ETF 티커로 CIK를 역조회한다(`edgar_nport_source.py` 신설).
+
+**상세 동작**: `edgar_source.resolve_cik`(equity 맵)을 먼저 시도 — SPY/DIA/GLD는 여기서 해결된다. `None`이면 뮤추얼펀드 맵(`_download_mf_ticker_map`, 7일 TTL + 원자적 쓰기 캐시 `data/edgar_mf_ticker_map.json` — DART/EDGAR 캐시와 동일한 패턴)을 시도 — QQQ/VOO는 여기서 해결된다. 둘 다 없으면 `None`(ETF가 아님, 에러 아님).
+
+#### `fetch_latest_nport_holdings(cik: str, top_n: int = 10) -> list[tuple[str, float]] | None`
+
+**목표/역할**: 해당 CIK의 가장 최근 `NPORT-P` 공시에서 비중(순자산 대비 비율) 내림차순 상위 `top_n`개 구성종목을 반환한다.
+
+**상세 동작**: 2단계 — ① `edgar_source.SUBMISSIONS_URL_TEMPLATE`(공시 목록 조회가 이미 쓰는 그 엔드포인트, import해서 재사용)로 submissions를 받아 `form == "NPORT-P"`인 가장 최근 accession을 찾는다(submissions API가 최신순으로 반환하므로 별도 날짜 정렬 불필요). ② `https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_no_dashes}/primary_doc.xml`을 요청해 `defusedxml`로 파싱(`dart_source.py`와 동일한 XXE 방지 원칙)하고, `{http://www.sec.gov/edgar/nport}invstOrSec` 네임스페이스 태그마다 `name`/`pctVal`을 추출한다. NPORT-P 공시 자체가 없으면(UIT가 아닌 일반 상장기업 등) ①에서 `None`.
+
+**설계상 비자명한 결정(종목코드가 없다)**: N-PORT holding에는 CUSIP/ISIN은 있지만 ticker 필드가 전혀 없다(라이브 SPY 공시 504개 holdings 전부 확인). `name`도 거래소 표기와 다를 수 있다(라이브 샘플: `"AES Corp/The"`, `"AT&T Inc"` — 둘 다 EDGAR 완전일치 매칭 실패를 라이브로 확인). 그래서 이 함수는 `(name, pct)`만 반환하고, 이름→티커 역변환(완전일치만 허용, 모호하거나 매칭 안 되면 스킵)은 호출부(`chat_agent/tools.py`)의 책임으로 명시적으로 미뤘다 — 이 모듈 자신은 종목 식별을 하지 않는다.
+
+**신선도**: N-PORT는 분기 공시(최대 2개월 지연)다 — 국내 pykrx(거의 일별)보다 훨씬 낮다. 호출부가 이 사실을 결과에 반영한다(`06_chat_agent.md`의 `tool_analyze_etf_composition` 절 참고).
 
 ---
 

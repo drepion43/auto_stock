@@ -77,7 +77,7 @@ def fake_reader() -> FakeDisclosureReader:
 def make_disclosure_analysis(**overrides) -> DisclosureAnalysis:
     values = dict(
         ticker="005930",
-        market="KRX",
+        market="KOSPI",
         as_of=date(2024, 6, 10),
         market_impact="POSITIVE",
         confidence="MEDIUM",

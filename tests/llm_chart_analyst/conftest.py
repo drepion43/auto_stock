@@ -27,7 +27,7 @@ def _dummy_openai_api_key(monkeypatch, mocker):
 def make_records(
     prices: list[float],
     ticker: str = "005930",
-    market: str = "KRX",
+    market: str = "KOSPI",
     start: date = date(2024, 1, 1),
     volumes: list[int] | None = None,
 ) -> list[OHLCVRecord]:
@@ -100,7 +100,7 @@ def fake_reader() -> FakeChartPatternReader:
 def make_chart_analysis(**overrides) -> ChartAnalysis:
     values = dict(
         ticker="005930",
-        market="KRX",
+        market="KOSPI",
         date=date(2024, 6, 1),
         direction="UP",
         confidence="MEDIUM",

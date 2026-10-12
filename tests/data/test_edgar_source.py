@@ -1,5 +1,6 @@
 """edgar_source.py 테스트 — requests를 모킹해 실제 SEC EDGAR API를 호출하지 않는다."""
 
+import json
 from datetime import date
 
 import pytest
@@ -7,10 +8,13 @@ import requests
 
 from auto_stock.data.models import DisclosureRecord
 from auto_stock.data.sources.edgar_source import (
+    COMPANY_TICKERS_EXCHANGE_URL,
+    COMPANY_TICKERS_URL,
     EdgarApiError,
     fetch_filings,
     resolve_cik,
     resolve_company_title,
+    resolve_exchange,
     resolve_ticker_by_name,
 )
 
@@ -23,11 +27,38 @@ def _dummy_edgar_user_agent(monkeypatch, mocker):
 
 
 def _company_tickers_payload(entries: list[tuple[str, int, str]]) -> dict:
-    """entries: (ticker, cik_int, title) 목록으로 company_tickers.json 형태를 만든다."""
+    """entries: (ticker, cik_int, title) 목록으로 company_tickers.json 형태를 만든다.
+    (실제 SEC 응답과 동일하게) exchange 필드는 포함하지 않는다 — exchange는 별도
+    company_tickers_exchange.json에서만 온다."""
     return {
         str(i): {"cik_str": cik, "ticker": ticker, "title": title}
         for i, (ticker, cik, title) in enumerate(entries)
     }
+
+
+def _exchange_payload(exchanges: dict[str, str]) -> dict:
+    """{ticker: exchange} 목록으로 company_tickers_exchange.json 형태(fields/data
+    배열)를 만든다 — 실제 SEC 응답과 동일한 스키마."""
+    return {
+        "fields": ["cik", "name", "ticker", "exchange"],
+        "data": [[0, "", ticker, exchange] for ticker, exchange in exchanges.items()],
+    }
+
+
+def _mock_edgar_get(mocker, company_tickers_payload: dict, exchange_payload: dict | None = None):
+    """`requests.get`을 URL별로 분기하는 FakeResponse로 모킹한다 —
+    `_download_cik_map`이 company_tickers.json과 company_tickers_exchange.json을
+    각각 호출하므로 둘 다 응답해야 한다."""
+    exchange_payload = exchange_payload if exchange_payload is not None else _exchange_payload({})
+
+    def fake_get(url, **kwargs):
+        if url == COMPANY_TICKERS_URL:
+            return _FakeResponse(json_data=company_tickers_payload)
+        if url == COMPANY_TICKERS_EXCHANGE_URL:
+            return _FakeResponse(json_data=exchange_payload)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    return mocker.patch("auto_stock.data.sources.edgar_source.requests.get", side_effect=fake_get)
 
 
 def _submissions_payload(ticker: str, filings: list[tuple[str, str]]) -> dict:
@@ -59,21 +90,19 @@ class _FakeResponse:
 def test_resolve_cik_downloads_and_caches_when_cache_missing(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc."), ("NVDA", 1045810, "NVIDIA CORP")])
-    mock_get = mocker.patch(
-        "auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload)
-    )
+    mock_get = _mock_edgar_get(mocker, payload)
 
     result = resolve_cik("AAPL", cache_path=cache_path)
 
     assert result == "0000320193"
     assert cache_path.exists()
-    mock_get.assert_called_once()
+    assert mock_get.call_count == 2  # company_tickers.json + company_tickers_exchange.json
 
 
 def test_resolve_cik_pads_cik_to_ten_digits(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("NVDA", 1045810, "NVIDIA CORP")])
-    mocker.patch("auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload))
+    _mock_edgar_get(mocker, payload)
 
     result = resolve_cik("NVDA", cache_path=cache_path)
 
@@ -84,7 +113,7 @@ def test_resolve_cik_pads_cik_to_ten_digits(mocker, tmp_path):
 def test_resolve_cik_returns_none_for_ticker_not_in_edgar(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
-    mocker.patch("auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload))
+    _mock_edgar_get(mocker, payload)
 
     result = resolve_cik("005930", cache_path=cache_path)  # 한국 상장사 — EDGAR 미등록
 
@@ -115,7 +144,7 @@ def test_resolve_cik_redownloads_when_cache_is_stale(mocker, tmp_path):
     os.utime(cache_path, (stale_time, stale_time))
 
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
-    mocker.patch("auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload))
+    _mock_edgar_get(mocker, payload)
 
     result = resolve_cik("AAPL", cache_path=cache_path)
 
@@ -125,7 +154,7 @@ def test_resolve_cik_redownloads_when_cache_is_stale(mocker, tmp_path):
 def test_resolve_cik_leaves_no_leftover_temp_file_after_cache_write(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
-    mocker.patch("auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload))
+    _mock_edgar_get(mocker, payload)
 
     resolve_cik("AAPL", cache_path=cache_path)
 
@@ -260,6 +289,67 @@ def test_fetch_filings_wraps_malformed_filing_date_as_edgar_api_error(mocker):
         fetch_filings("0000320193", date(2026, 1, 1), date(2026, 1, 31))
 
 
+# --- market 세분화(2026-10) 확장: resolve_exchange — 영문 심볼이 실제로 NASDAQ인지
+# NYSE인지 역조회한다. resolve_cik/resolve_company_title와 캐시를 공유한다. ---
+
+
+def test_resolve_exchange_normalizes_nasdaq(mocker, tmp_path):
+    cache_path = tmp_path / "edgar_cik_map.json"
+    payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
+    _mock_edgar_get(mocker, payload, _exchange_payload({"AAPL": "Nasdaq"}))
+
+    assert resolve_exchange("AAPL", cache_path=cache_path) == "NASDAQ"
+
+
+def test_resolve_exchange_normalizes_nyse(mocker, tmp_path):
+    """JPM은 실제로 NYSE 상장이다 — ticker_resolution.py의 한글 별칭표가 과거
+    NASDAQ으로 하드코딩했던 오분류 사례(market 세분화 작업에서 발견)."""
+    cache_path = tmp_path / "edgar_cik_map.json"
+    payload = _company_tickers_payload([("JPM", 19617, "JPMORGAN CHASE & CO")])
+    _mock_edgar_get(mocker, payload, _exchange_payload({"JPM": "NYSE"}))
+
+    assert resolve_exchange("JPM", cache_path=cache_path) == "NYSE"
+
+
+def test_resolve_exchange_returns_none_for_unrecognized_exchange_name(mocker, tmp_path):
+    cache_path = tmp_path / "edgar_cik_map.json"
+    payload = _company_tickers_payload([("SPY", 884394, "SPDR S&P 500 ETF TRUST")])
+    _mock_edgar_get(mocker, payload, _exchange_payload({"SPY": "batsglobal"}))
+
+    assert resolve_exchange("SPY", cache_path=cache_path) is None
+
+
+def test_resolve_exchange_returns_none_when_ticker_missing_from_exchange_map(mocker, tmp_path):
+    """`company_tickers.json`에는 있지만 `company_tickers_exchange.json`에는 없는
+    티커(두 파일의 커버리지가 완전히 같지 않을 수 있음)는 조용히 None — 2026-10
+    버그 수정(exchange가 애초에 다른 파일에 있었다는 사실이 드러난 계기)."""
+    cache_path = tmp_path / "edgar_cik_map.json"
+    payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
+    _mock_edgar_get(mocker, payload, _exchange_payload({}))  # exchange 맵에 AAPL 없음
+
+    assert resolve_exchange("AAPL", cache_path=cache_path) is None
+
+
+def test_resolve_exchange_returns_none_for_legacy_flat_cache_schema(mocker, tmp_path):
+    cache_path = tmp_path / "edgar_cik_map.json"
+    cache_path.write_text(json.dumps({"AAPL": "0000320193"}), encoding="utf-8")  # 구 스키마
+    mock_get = mocker.patch("auto_stock.data.sources.edgar_source.requests.get")
+
+    assert resolve_exchange("AAPL", cache_path=cache_path) is None
+    mock_get.assert_not_called()
+
+
+def test_resolve_exchange_returns_none_for_intermediate_schema_without_exchange_field(mocker, tmp_path):
+    cache_path = tmp_path / "edgar_cik_map.json"
+    cache_path.write_text(
+        json.dumps({"AAPL": {"cik": "0000320193", "title": "Apple Inc."}}), encoding="utf-8"
+    )  # exchange 필드 추가 이전의 중간 스키마
+    mock_get = mocker.patch("auto_stock.data.sources.edgar_source.requests.get")
+
+    assert resolve_exchange("AAPL", cache_path=cache_path) is None
+    mock_get.assert_not_called()
+
+
 # --- 뉴스 감성분석(#4-뉴스) 확장: resolve_company_title — 뉴스 검색 쿼리를 만들기
 # 위한 회사명 조회. resolve_cik와 캐시를 공유한다(docs/design/news-sentiment.md
 # 핵심 설계 결정 2). ---
@@ -268,20 +358,18 @@ def test_fetch_filings_wraps_malformed_filing_date_as_edgar_api_error(mocker):
 def test_resolve_company_title_downloads_and_caches_when_cache_missing(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
-    mock_get = mocker.patch(
-        "auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload)
-    )
+    mock_get = _mock_edgar_get(mocker, payload)
 
     result = resolve_company_title("AAPL", cache_path=cache_path)
 
     assert result == "Apple Inc."
-    mock_get.assert_called_once()
+    assert mock_get.call_count == 2
 
 
 def test_resolve_company_title_returns_none_for_ticker_not_in_edgar(mocker, tmp_path):
     cache_path = tmp_path / "edgar_cik_map.json"
     payload = _company_tickers_payload([("AAPL", 320193, "Apple Inc.")])
-    mocker.patch("auto_stock.data.sources.edgar_source.requests.get", return_value=_FakeResponse(json_data=payload))
+    _mock_edgar_get(mocker, payload)
 
     result = resolve_company_title("005930", cache_path=cache_path)
 

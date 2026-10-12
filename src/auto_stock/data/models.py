@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 
-VALID_MARKETS = frozenset({"KRX", "NASDAQ"})
+VALID_MARKETS = frozenset({"KOSPI", "KOSDAQ", "NASDAQ", "NYSE"})
 
 
 @dataclass(frozen=True, slots=True)

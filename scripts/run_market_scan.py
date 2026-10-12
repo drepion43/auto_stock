@@ -40,10 +40,10 @@ from datetime import timedelta
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.orchestrator.market_scan import scan_market
-from auto_stock.orchestrator.scan_coordinator import DEFAULT_STALE_AFTER, _fresh_universe
+from auto_stock.orchestrator.scan_coordinator import DEFAULT_STALE_AFTER, _fresh_universe_atomic
 from auto_stock.risk_sizing.models import AccountState
 
-MARKETS = ["KRX", "NASDAQ"]
+MARKETS = ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]
 SCAN_UNIVERSE_SIZE = int(os.environ.get("MARKET_SCAN_UNIVERSE_SIZE", 200))
 STALE_AFTER = timedelta(hours=int(os.environ.get("MARKET_SCAN_STALE_HOURS", DEFAULT_STALE_AFTER.total_seconds() // 3600)))
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
@@ -57,7 +57,7 @@ account = AccountState(
 )
 
 for market in MARKETS:
-    tickers = _fresh_universe(scan_cache, market, SCAN_UNIVERSE_SIZE, STALE_AFTER)
+    tickers = _fresh_universe_atomic(scan_cache, market, SCAN_UNIVERSE_SIZE, STALE_AFTER)
     print(f"[{market}] 유니버스: {len(tickers)}종목")
 
     explanations, errors = scan_market(cache=cache, tickers=tickers, market=market, account=account)

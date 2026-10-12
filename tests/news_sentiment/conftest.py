@@ -25,7 +25,7 @@ def _dummy_openai_api_key(monkeypatch, mocker):
 def make_articles(
     n: int,
     ticker: str = "005930",
-    market: str = "KRX",
+    market: str = "KOSPI",
     start: date = date(2024, 6, 1),
     title: str = "삼성전자 관련 기사",
     source: str = "example.com",
@@ -78,7 +78,7 @@ def fake_reader() -> FakeNewsSentimentReader:
 def make_news_sentiment_analysis(**overrides) -> NewsSentimentAnalysis:
     values = dict(
         ticker="005930",
-        market="KRX",
+        market="KOSPI",
         as_of=date(2024, 6, 10),
         sentiment="POSITIVE",
         confidence="MEDIUM",
