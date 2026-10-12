@@ -48,9 +48,16 @@ def _is_cache_fresh(cache_path: Path, refresh_days: int) -> bool:
 
 
 def _load_or_refresh(cache_path: Path, refresh_days: int, download) -> list[str]:
+    # 빈 목록은 정상 결과일 수 없다(S&P500 약 500개, 다우 30개) — 일시적 소스 실패의 흔적이다.
+    # 캐시하면 refresh_days 동안 해당 지수 버킷이 통째로 비므로(pykrx_source의 빈 매핑 캐시
+    # 사고와 같은 종류, 2026-10-13), 빈 캐시는 다시 받고 빈 다운로드는 저장하지 않고 실패시킨다.
     if _is_cache_fresh(cache_path, refresh_days):
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached:
+            return cached
     tickers = download()
+    if not tickers:
+        raise IndexConstituentsError(f"구성종목 목록이 비어 있습니다: {cache_path.name}")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     # DART/EDGAR 캐시와 동일한 원자적 쓰기 패턴(임시파일 + os.replace).
     tmp_path = cache_path.with_name(cache_path.name + ".tmp")

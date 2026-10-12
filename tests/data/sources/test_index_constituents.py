@@ -4,7 +4,6 @@
 import pandas as pd
 import pytest
 
-from auto_stock.data.sources import index_constituents
 from auto_stock.data.sources.index_constituents import (
     IndexConstituentsError,
     fetch_dow_constituents,
@@ -20,14 +19,16 @@ class _FakeResponse:
         pass
 
 
-_DOW_TABLE_HTML = """
-<table>
-<tr><th>Company</th><th>Symbol</th></tr>
-<tr><td>Apple</td><td>AAPL</td></tr>
-<tr><td>Boeing</td><td>BA</td></tr>
-</table>
-""" + "\n".join(f"<tr><td>Company{i}</td><td>SYM{i}</td></tr>" for i in range(28))
-# 30개(헤더 2 + 28 생성)로 20~40 범위 내에 들어오도록 패딩.
+_DOW_TABLE_HTML = (
+    "<table>\n"
+    "<tr><th>Company</th><th>Symbol</th></tr>\n"
+    "<tr><td>Apple</td><td>AAPL</td></tr>\n"
+    "<tr><td>Boeing</td><td>BA</td></tr>\n"
+    + "\n".join(f"<tr><td>Company{i}</td><td>SYM{i}</td></tr>" for i in range(28))
+    + "\n</table>\n"
+)
+# 실제 다우존스 30개와 같은 크기 — 생성 행도 반드시 </table> 안에 있어야 한다(이전 픽스처는 28개
+# 행을 </table> 뒤에 붙여 표가 2행뿐이었고, 20~40 검증에 걸려 테스트가 늘 실패했다).
 
 
 def test_fetch_sp500_constituents_downloads_and_caches(mocker, tmp_path):
@@ -98,3 +99,32 @@ def test_fetch_dow_constituents_raises_when_no_matching_table_found(mocker, tmp_
 
     with pytest.raises(IndexConstituentsError):
         fetch_dow_constituents()
+
+
+
+# --- 빈 결과 캐시 방지(2026-10-13, pykrx_source의 빈 매핑 캐시 사고와 같은 종류) ---
+
+
+def test_empty_sp500_listing_is_not_cached_and_raises(mocker, tmp_path):
+    cache_path = tmp_path / "sp500.json"
+    mocker.patch("auto_stock.data.sources.index_constituents.SP500_CACHE_PATH", cache_path)
+    mocker.patch(
+        "auto_stock.data.sources.index_constituents.fdr.StockListing",
+        return_value=pd.DataFrame({"Symbol": []}),
+    )
+
+    with pytest.raises(IndexConstituentsError):
+        fetch_sp500_constituents()
+    assert not cache_path.exists()
+
+
+def test_fresh_but_empty_cache_is_refreshed(mocker, tmp_path):
+    cache_path = tmp_path / "sp500.json"
+    cache_path.write_text("[]", encoding="utf-8")
+    mocker.patch("auto_stock.data.sources.index_constituents.SP500_CACHE_PATH", cache_path)
+    mocker.patch(
+        "auto_stock.data.sources.index_constituents.fdr.StockListing",
+        return_value=pd.DataFrame({"Symbol": ["AAPL", "MSFT"]}),
+    )
+
+    assert fetch_sp500_constituents() == {"AAPL", "MSFT"}
