@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Code exists (updated 2026-10-12)**: Python 3.12 package under `src/auto_stock/` (setuptools src layout, `pyproject.toml`, `uv.lock`). Active work is on branch `feat/main-agent-registry` (pushed to origin, not yet merged to `master`). ~760 pytest tests under `tests/`; run fast tests with `.venv/Scripts/python -m pytest -q -m "not slow" --continue-on-collection-errors tests/` (`slow` = model-fitting smoke tests). Known baseline failures: `test_fetch_dow_constituents_downloads_and_caches` and a collection error in `tests/rule_engine/test_technical_context.py`. LLM provider is OpenAI (`openai`, `langchain-openai`, `deepagents`). Chat entry point: `scripts/chat_cli.py`; legacy-vs-deep eval: `scripts/eval_main_agent.py` (real API calls). `docs/` is git-tracked (removed from `.gitignore` in 7b9533d).
+**Code exists (updated 2026-10-12)**: Python 3.12 package under `src/auto_stock/` (setuptools src layout, `pyproject.toml`, `uv.lock`). Active work is on branch `feat/main-agent-registry` (pushed to origin, not yet merged to `master`). ~760 pytest tests under `tests/`; run fast tests with `.venv/Scripts/python -m pytest -q -m "not slow" --continue-on-collection-errors tests/` (`slow` = model-fitting smoke tests). Known baseline failure: `test_fetch_dow_constituents_downloads_and_caches`. LLM provider is OpenAI (`openai`, `langchain-openai`, `deepagents`). Chat entry point: `scripts/chat_cli.py`; legacy-vs-deep eval: `scripts/eval_main_agent.py` (real API calls). `docs/` is git-tracked (removed from `.gitignore` in 7b9533d).
 
 `docs/PRD.md` defines the product: a Python system that recommends and semi-automatically executes stock trades (코스피/코스닥 + 나스닥), gated by a confirmed risk policy (§6) and a paper-trading-first broker strategy (§7). Read `docs/PRD.md` before writing any code — it is the source of truth for scope, architecture, risk limits, and broker roles. Remaining open items are tracked in its §11.
 
@@ -32,7 +32,7 @@ Key facts from the PRD that code MUST respect:
 
 ## Next steps
 
-- Still unfinished: `rule_engine/technical_context.py` (needs `adx` etc. in `indicators.py`), `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools), per-exchange ML models (only `KRX` artifact exists).
+- Still unfinished: `rule_engine/technical_context.py` works (indicators added in db1576e) but is not exposed as a chat tool yet; `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools), per-exchange ML models (only `KRX` artifact exists).
 - Main-loop trial: the deepagents loop is the default since 2026-10-12; remove legacy `loop.py`, its tests and the `CHAT_AGENT_LOOP` flag after ~2026-10-26 (decision D12). Still open from the plan: global concurrent-batch cap (second half of D17).
 - US news (GDELT) is heavily rate-limited (HTTP 429) and slow; throttling/retry and legal-suffix-free queries were added but it remains unreliable — options and pending decisions in `docs/design/us-news-source-reliability.md`.
 - Rotate the Naver Open API client secret: a real client ID was committed in `.env.example` in history (commit f788c18, now blanked).
