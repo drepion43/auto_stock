@@ -92,12 +92,13 @@ def test_registry_descriptions_are_nonempty():
     assert all(len(s.description) > 10 for s in TOOL_SPECS)
 
 
-def test_exactly_the_seven_signal_tools_are_bound_to_stock_analyst():
+def test_exactly_the_eight_signal_tools_are_bound_to_stock_analyst():
     assert [s.name for s in TOOL_SPECS if s.subagent_description is not None] == [
         "analyze_rule_engine",
         "analyze_ml_prediction",
         "analyze_chart_pattern",
         "analyze_technical_context",
+        "analyze_supply_demand",
         "analyze_disclosures",
         "analyze_news_sentiment",
         "analyze_position_sizing",

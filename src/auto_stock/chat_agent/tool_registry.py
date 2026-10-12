@@ -111,6 +111,19 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         subagent_description="ADX·볼린저밴드·스토캐스틱·OBV·Aroon·스퀴즈·RSI 다이버전스 기술지표 수치를 조회한다.",
     ),
     ToolSpec(
+        name="analyze_supply_demand",
+        description=(
+            "국내(KOSPI/KOSDAQ) 종목의 수급을 조회한다 — 최근 1주 외국인·기관 순매수(거래량·거래대금, "
+            "원 단위, 음수는 순매도)와 가장 최근에 공개된 공매도 잔고(주식 수·금액·시가총액 대비 %). "
+            "KRX는 공매도 잔고를 며칠 늦게 공개하므로 shorting.as_of(기준일)를 반드시 함께 밝혀라. "
+            "미국 종목은 지원하지 않는다(available=false). 한쪽 데이터만 실패하면 그 부분이 null이고 "
+            "errors에 사유가 있다."
+        ),
+        args_model=TickerMarketArgs,
+        fn_name="tool_analyze_supply_demand",
+        subagent_description="외국인·기관 순매수와 최근 공매도 잔고(국내 종목 수급)를 조회한다.",
+    ),
+    ToolSpec(
         name="analyze_disclosures",
         description=(
             "최근 공식 공시(KOSPI/KOSDAQ: DART, NASDAQ/NYSE: SEC EDGAR)를 LLM으로 해석해 시장 영향(POSITIVE/"

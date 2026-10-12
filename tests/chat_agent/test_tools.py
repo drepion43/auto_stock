@@ -503,7 +503,7 @@ def test_tool_stock_analyst_binds_six_tools_and_delegates(mocker):
     mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", ["t1", "t2"], "005930", "KOSPI")
 
 
-def test_bind_stock_analyst_tools_produces_seven_zero_arg_tools_bound_to_ticker_and_market(mocker):
+def test_bind_stock_analyst_tools_produces_eight_zero_arg_tools_bound_to_ticker_and_market(mocker):
     from auto_stock.chat_agent.tools import _bind_stock_analyst_tools
 
     mock_rule = mocker.patch(
@@ -514,13 +514,14 @@ def test_bind_stock_analyst_tools_produces_seven_zero_arg_tools_bound_to_ticker_
 
     bound = _bind_stock_analyst_tools(context, "005930", "KOSPI")
 
-    assert len(bound) == 7
+    assert len(bound) == 8
     names = {t.name for t in bound}
     assert names == {
         "analyze_rule_engine",
         "analyze_ml_prediction",
         "analyze_chart_pattern",
         "analyze_technical_context",
+        "analyze_supply_demand",
         "analyze_disclosures",
         "analyze_news_sentiment",
         "analyze_position_sizing",
@@ -1104,3 +1105,66 @@ def test_tool_get_index_quote_isolates_failures(mocker):
 
     assert result["available"] is False
     assert "yahoo down" in result["error"]
+
+
+
+# --- analyze_supply_demand ---
+
+
+def test_tool_analyze_supply_demand_returns_net_purchases_and_latest_shorting(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_supply_demand
+
+    mock_net = mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_net_purchases",
+        return_value={"foreign_net_volume": -5, "foreign_net_value": -50, "institution_net_volume": 3, "institution_net_value": 30},
+    )
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_latest_shorting_balance",
+        return_value=(date(2026, 10, 6), {"balance_shares": 10, "balance_value": 100, "market_cap_ratio_pct": 0.1}),
+    )
+
+    result = tool_analyze_supply_demand(_context(), "005930", "KOSPI")
+
+    assert result["available"] is True
+    assert result["net_purchases"]["foreign_net_value"] == -50
+    assert result["net_purchases_period"]["end"] >= result["net_purchases_period"]["start"]
+    assert result["shorting"] == {"as_of": "2026-10-06", "balance_shares": 10, "balance_value": 100, "market_cap_ratio_pct": 0.1}
+    start, end = mock_net.call_args.args[2], mock_net.call_args.args[3]
+    assert (end - start).days == 7
+
+
+def test_tool_analyze_supply_demand_is_domestic_only(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_supply_demand
+
+    mock_net = mocker.patch("auto_stock.chat_agent.tools.fetch_net_purchases")
+
+    result = tool_analyze_supply_demand(_context(), "AAPL", "NASDAQ")
+
+    assert result["available"] is False
+    mock_net.assert_not_called()
+
+
+def test_tool_analyze_supply_demand_keeps_one_part_when_the_other_fails(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_supply_demand
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_net_purchases", side_effect=RuntimeError("KRX down"))
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_latest_shorting_balance",
+        return_value=(date(2026, 10, 6), {"balance_shares": 10, "balance_value": 100, "market_cap_ratio_pct": 0.1}),
+    )
+
+    result = tool_analyze_supply_demand(_context(), "005930", "KOSPI")
+
+    assert result["available"] is True
+    assert result["net_purchases"] is None
+    assert "KRX down" in result["errors"]["net_purchases"]
+    assert result["shorting"]["as_of"] == "2026-10-06"
+
+
+def test_tool_analyze_supply_demand_unavailable_when_both_parts_fail(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_supply_demand
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_net_purchases", side_effect=RuntimeError("a"))
+    mocker.patch("auto_stock.chat_agent.tools.fetch_latest_shorting_balance", side_effect=RuntimeError("b"))
+
+    assert tool_analyze_supply_demand(_context(), "005930", "KOSPI")["available"] is False

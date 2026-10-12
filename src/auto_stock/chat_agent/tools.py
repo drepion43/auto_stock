@@ -74,6 +74,7 @@ from auto_stock.risk_sizing.sizing import suggest_position
 from auto_stock.rule_engine.engine import generate_candidates
 from auto_stock.rule_engine.technical_context import build_technical_context
 from auto_stock.data.sources.index_quote import fetch_index_quote
+from auto_stock.data.sources.investor_flow import fetch_latest_shorting_balance, fetch_net_purchases
 
 class ChatToolContext:
     """6개 도구가 공유하는 의존성 묶음. dataclass가 아닌 일반 클래스인 이유는 `budget`
@@ -348,6 +349,42 @@ def tool_analyze_technical_context(context: ChatToolContext, ticker: str, market
         return {"available": True, "context": None}
     values = {k: getattr(technical, k) for k in technical.__dataclass_fields__ if k not in ("ticker", "market")}
     return {"available": True, "context": values}
+
+
+_SUPPLY_DEMAND_WINDOW_DAYS = 7  # 순매수 집계 기간(달력일 기준 약 5거래일)
+
+
+def tool_analyze_supply_demand(context: ChatToolContext, ticker: str, market: str) -> dict:
+    """외국인·기관 순매수(최근 1주)와 가장 최근에 공개된 공매도 잔고. 국내(KOSPI/KOSDAQ) 전용 —
+    미국은 기관 보유가 분기 13F뿐이라 범위 밖. LLM/QueryBudget 미사용. 두 부분은 서로 다른 KRX
+    API라 한쪽이 실패해도 다른 쪽은 돌려주고 실패 사유를 `errors`에 남긴다(둘 다 실패해야 unavailable)."""
+    if market not in KRX_MARKETS:
+        return {"available": False, "error": f"수급 데이터는 국내(KOSPI/KOSDAQ) 종목만 지원합니다: {market}"}
+    end = date.today()
+    start = end - timedelta(days=_SUPPLY_DEMAND_WINDOW_DAYS)
+    errors: dict[str, str] = {}
+    try:
+        net_purchases = fetch_net_purchases(ticker, market, start, end)
+    except Exception as exc:
+        net_purchases = None
+        errors["net_purchases"] = str(exc)
+    try:
+        latest_shorting = fetch_latest_shorting_balance(ticker, market, end)
+    except Exception as exc:
+        latest_shorting = None
+        errors["shorting"] = str(exc)
+    if len(errors) == 2:
+        return {"available": False, "error": f"수급 데이터 조회 실패: {errors}"}
+
+    result = {
+        "available": True,
+        "net_purchases": net_purchases,
+        "net_purchases_period": {"start": start.isoformat(), "end": end.isoformat()},
+        "shorting": {"as_of": latest_shorting[0].isoformat(), **latest_shorting[1]} if latest_shorting else None,
+    }
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def tool_get_index_quote(context: ChatToolContext, index: str) -> dict:

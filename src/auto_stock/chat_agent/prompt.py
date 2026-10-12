@@ -54,6 +54,8 @@ SYSTEM_PROMPT = (
     "의미는 직접 해석해 설명하라\n"
     "- get_index_quote: 코스피·코스닥·코스피200·VIX·다우·나스닥·S&P500·러셀2000 등 지수 자체의 "
     "최근 종가와 전일대비 변화율 조회 — 지수를 물을 때 쓰며 resolve_ticker는 필요 없다\n"
+    "- analyze_supply_demand: 국내 종목의 외국인·기관 순매수(최근 1주)와 최근 공매도 잔고 조회 "
+    "— 공매도 잔고는 공시가 며칠 늦으니 기준일(shorting.as_of)을 함께 밝혀라\n"
     "- analyze_position_sizing: 매수/매도 사이징 참고 제안 — 규칙엔진 매매 후보가 "
     "없으면(candidate 없음) suggestion과 함께 reference_price도 null이 된다. 가격 자체가 "
     "필요하면 get_price_data를 대신/추가로 호출하라.\n"

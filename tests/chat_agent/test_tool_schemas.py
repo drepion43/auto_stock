@@ -20,6 +20,7 @@ EXPECTED_TOOL_NAMES = {
     "analyze_etf_composition",
     "analyze_technical_context",
     "get_index_quote",
+    "analyze_supply_demand",
 }
 
 _TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {

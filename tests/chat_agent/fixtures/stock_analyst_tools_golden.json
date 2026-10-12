@@ -20,6 +20,11 @@
     "args": {}
   },
   {
+    "name": "analyze_supply_demand",
+    "description": "외국인·기관 순매수와 최근 공매도 잔고(국내 종목 수급)를 조회한다.",
+    "args": {}
+  },
+  {
     "name": "analyze_disclosures",
     "description": "최근 공식 공시(DART/EDGAR)에 대한 LLM 해석을 조회한다.",
     "args": {}
