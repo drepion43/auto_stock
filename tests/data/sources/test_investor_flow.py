@@ -115,3 +115,45 @@ def test_fetch_shorting_balance_returns_none_when_ticker_not_in_response(mocker)
     result = investor_flow.fetch_shorting_balance("005930", "KOSPI", date(2026, 1, 2))
 
     assert result is None
+
+
+
+# --- 최근 공매도 잔고(공시 지연 대응, 2026-10-13 실측: 최근 며칠은 KRX가 아직 공개하지 않음) ---
+
+
+def test_latest_shorting_balance_walks_back_to_first_published_date(mocker):
+    empty = pd.DataFrame()
+    published = _shorting_balance_df("005930", 5_765_855, 1_568_312_560_000, 0.0999)
+    mock_balance = mocker.patch.object(
+        investor_flow.stock, "get_shorting_balance_by_ticker", side_effect=[empty, empty, empty, published]
+    )
+
+    result = investor_flow.fetch_latest_shorting_balance("005930", "KOSPI", date(2026, 10, 9))
+
+    assert result == (date(2026, 10, 6), {"balance_shares": 5_765_855, "balance_value": 1_568_312_560_000, "market_cap_ratio_pct": 0.0999})
+    assert [c.args[0] for c in mock_balance.call_args_list] == ["20261009", "20261008", "20261007", "20261006"]
+
+
+def test_latest_shorting_balance_survives_pykrx_errors_on_unpublished_dates(mocker):
+    published = _shorting_balance_df("005930", 1, 2, 0.1)
+    mocker.patch.object(
+        investor_flow.stock, "get_shorting_balance_by_ticker", side_effect=[KeyError("BAL_QTY"), published]
+    )
+
+    result = investor_flow.fetch_latest_shorting_balance("005930", "KOSPI", date(2026, 10, 9))
+
+    assert result[0] == date(2026, 10, 8)
+
+
+def test_latest_shorting_balance_none_after_lookback_exhausted(mocker):
+    mock_balance = mocker.patch.object(investor_flow.stock, "get_shorting_balance_by_ticker", return_value=pd.DataFrame())
+
+    assert investor_flow.fetch_latest_shorting_balance("005930", "KOSPI", date(2026, 10, 9), max_lookback_days=3) is None
+    assert mock_balance.call_count == 4  # 당일 + 3일
+
+
+def test_latest_shorting_balance_skips_unsupported_market(mocker):
+    mock_balance = mocker.patch.object(investor_flow.stock, "get_shorting_balance_by_ticker")
+
+    assert investor_flow.fetch_latest_shorting_balance("AAPL", "NASDAQ", date(2026, 10, 9)) is None
+    mock_balance.assert_not_called()

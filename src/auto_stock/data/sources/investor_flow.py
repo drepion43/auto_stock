@@ -22,7 +22,7 @@ KRX 서버가 파싱 불가능한 응답을 줘 "Expecting value"로 실패)가 
 
 import contextlib
 import io
-from datetime import date
+from datetime import date, timedelta
 
 from dotenv import load_dotenv
 
@@ -35,6 +35,10 @@ _SUPPORTED_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
 # investor만 조회한다(동시조회 옵션 없음) — "외국인"/"기관합계" 각각 별도 호출.
 _FOREIGN_INVESTOR = "외국인"
 _INSTITUTION_INVESTOR = "기관합계"
+
+# KRX는 공매도 잔고를 며칠 늦게 공개한다(2026-10-13 실측: 10/8~10/13은 아직 없고 10/6이 최신) —
+# 연휴·주말을 넘길 만큼 거슬러 올라가 "가장 최근에 공개된 날"을 찾는다.
+_SHORTING_LOOKBACK_DAYS = 10
 
 
 def fetch_net_purchases(ticker: str, market: str, start: date, end: date) -> dict[str, int] | None:
@@ -85,3 +89,24 @@ def fetch_shorting_balance(ticker: str, market: str, as_of: date) -> dict | None
         "balance_value": int(row["공매도금액"]),
         "market_cap_ratio_pct": float(row["비중"]),
     }
+
+
+def fetch_latest_shorting_balance(
+    ticker: str, market: str, as_of: date, max_lookback_days: int = _SHORTING_LOOKBACK_DAYS
+) -> tuple[date, dict] | None:
+    """`as_of`부터 하루씩 거슬러 올라가 가장 최근에 공개된 공매도 잔고를 `(기준일, 값)`으로
+    반환한다. 공시 지연으로 아직 공개되지 않은 날은 pykrx가 빈 결과를 주거나 내부 컬럼 오류를
+    낸다(출력도 찍는다) — 둘 다 "그날은 데이터 없음"으로 보고 다음 날로 넘어간다. 끝까지 없거나
+    미지원 시장이면 None."""
+    if market not in _SUPPORTED_MARKETS:
+        return None
+    for offset in range(max_lookback_days + 1):
+        day = as_of - timedelta(days=offset)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                balance = fetch_shorting_balance(ticker, market, day)
+        except Exception:
+            balance = None
+        if balance is not None:
+            return day, balance
+    return None
