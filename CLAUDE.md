@@ -32,7 +32,7 @@ Key facts from the PRD that code MUST respect:
 
 ## Next steps
 
-- Still unfinished: `rule_engine/technical_context.py` works (indicators added in db1576e) but is not exposed as a chat tool yet; `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools), per-exchange ML models (only `KRX` artifact exists).
+- Still unfinished: `data/sources/index_constituents.py` (Dow test failing), `index_quote.py`/`investor_flow.py` (not wired as tools), per-exchange ML models (only `KRX` artifact exists).
 - Main-loop trial: the deepagents loop is the default since 2026-10-12; remove legacy `loop.py`, its tests and the `CHAT_AGENT_LOOP` flag after ~2026-10-26 (decision D12). Still open from the plan: global concurrent-batch cap (second half of D17).
 - US news (GDELT) is heavily rate-limited (HTTP 429) and slow; throttling/retry and legal-suffix-free queries were added but it remains unreliable — options and pending decisions in `docs/design/us-news-source-reliability.md`.
 - Rotate the Naver Open API client secret: a real client ID was committed in `.env.example` in history (commit f788c18, now blanked).

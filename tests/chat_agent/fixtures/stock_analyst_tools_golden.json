@@ -15,6 +15,11 @@
     "args": {}
   },
   {
+    "name": "analyze_technical_context",
+    "description": "ADX·볼린저밴드·스토캐스틱·OBV·Aroon·스퀴즈·RSI 다이버전스 기술지표 수치를 조회한다.",
+    "args": {}
+  },
+  {
     "name": "analyze_disclosures",
     "description": "최근 공식 공시(DART/EDGAR)에 대한 LLM 해석을 조회한다.",
     "args": {}

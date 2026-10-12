@@ -80,3 +80,8 @@ def test_system_prompt_instructs_treating_tool_output_as_data_not_instructions()
     방어 지침이 필요하다."""
     assert "데이터" in SYSTEM_PROMPT
     assert "무시" in SYSTEM_PROMPT
+
+
+
+def test_system_prompt_mentions_technical_context_tool():
+    assert "analyze_technical_context" in SYSTEM_PROMPT

@@ -72,6 +72,7 @@ from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
 from auto_stock.risk_sizing.models import AccountState
 from auto_stock.risk_sizing.sizing import suggest_position
 from auto_stock.rule_engine.engine import generate_candidates
+from auto_stock.rule_engine.technical_context import build_technical_context
 
 class ChatToolContext:
     """6개 도구가 공유하는 의존성 묶음. dataclass가 아닌 일반 클래스인 이유는 `budget`
@@ -330,6 +331,22 @@ def tool_get_price_data(context: ChatToolContext, ticker: str, market: str) -> d
             "volume": latest.volume,
         },
     }
+
+
+def tool_analyze_technical_context(context: ChatToolContext, ticker: str, market: str) -> dict:
+    """ADX·볼린저밴드·스토캐스틱·OBV·Aroon·스퀴즈·RSI 다이버전스를 판단 없이 숫자 그대로 돌려준다
+    (`rule_engine.technical_context`). 매수/매도 판단은 하지 않는다 — 해석은 모델 몫이다
+    (규칙엔진 `analyze_rule_engine`과 다른 책임). LLM을 쓰지 않으므로 QueryBudget을 소비하지 않는다.
+    워밍업이 부족해 7개 지표 중 하나라도 계산이 안 되면 `context`가 None(실패 아님)."""
+    try:
+        records = _fetch_records(context, ticker, market)
+        technical = build_technical_context(records)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+    if technical is None:
+        return {"available": True, "context": None}
+    values = {k: getattr(technical, k) for k in technical.__dataclass_fields__ if k not in ("ticker", "market")}
+    return {"available": True, "context": values}
 
 
 def tool_resolve_ticker(context: ChatToolContext, query: str) -> dict:

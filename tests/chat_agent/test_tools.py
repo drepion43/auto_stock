@@ -503,7 +503,7 @@ def test_tool_stock_analyst_binds_six_tools_and_delegates(mocker):
     mock_run.assert_called_once_with(context.budget, "gpt-5.6-luna", ["t1", "t2"], "005930", "KOSPI")
 
 
-def test_bind_stock_analyst_tools_produces_six_zero_arg_tools_bound_to_ticker_and_market(mocker):
+def test_bind_stock_analyst_tools_produces_seven_zero_arg_tools_bound_to_ticker_and_market(mocker):
     from auto_stock.chat_agent.tools import _bind_stock_analyst_tools
 
     mock_rule = mocker.patch(
@@ -514,12 +514,13 @@ def test_bind_stock_analyst_tools_produces_six_zero_arg_tools_bound_to_ticker_an
 
     bound = _bind_stock_analyst_tools(context, "005930", "KOSPI")
 
-    assert len(bound) == 6
+    assert len(bound) == 7
     names = {t.name for t in bound}
     assert names == {
         "analyze_rule_engine",
         "analyze_ml_prediction",
         "analyze_chart_pattern",
+        "analyze_technical_context",
         "analyze_disclosures",
         "analyze_news_sentiment",
         "analyze_position_sizing",
@@ -1014,3 +1015,52 @@ def test_tool_analyze_news_sentiment_searches_gdelt_without_legal_suffix(mocker)
     tool_analyze_news_sentiment(_context(sentiment_client=object(), budget=QueryBudget(max_llm_calls=8)), "NVDA", "NASDAQ")
 
     assert mock_search.call_args.args[0] == '"NVIDIA"'
+
+
+
+# --- analyze_technical_context ---
+
+
+def test_tool_analyze_technical_context_returns_raw_indicator_numbers(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_technical_context
+    from auto_stock.rule_engine.technical_context import TechnicalContext
+
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
+    mocker.patch(
+        "auto_stock.chat_agent.tools.build_technical_context",
+        return_value=TechnicalContext(
+            ticker="005930", market="KOSPI", adx=25.0, plus_di=30.0, minus_di=15.0, bb_percent_b=0.8,
+            bb_bandwidth=5.0, stoch_k=70.0, stoch_d=65.0, obv_trend="RISING", aroon_up=100.0, aroon_down=0.0,
+            aroon_oscillator=100.0, squeeze_on=False, rsi_divergence="bullish",
+        ),
+    )
+
+    result = tool_analyze_technical_context(_context(), "005930", "KOSPI")
+
+    assert result["available"] is True
+    assert result["context"]["adx"] == 25.0
+    assert result["context"]["obv_trend"] == "RISING"
+    assert result["context"]["rsi_divergence"] == "bullish"
+    assert "ticker" not in result["context"]  # 호출자가 이미 아는 값은 반복하지 않는다
+
+
+def test_tool_analyze_technical_context_none_when_history_too_short(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_technical_context
+
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
+    mocker.patch("auto_stock.chat_agent.tools.build_technical_context", return_value=None)
+
+    assert tool_analyze_technical_context(_context(), "005930", "KOSPI") == {"available": True, "context": None}
+
+
+def test_tool_analyze_technical_context_isolates_fetch_failure_and_uses_no_llm_budget(mocker):
+    from auto_stock.chat_agent.tools import tool_analyze_technical_context
+
+    mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", side_effect=RuntimeError("network down"))
+    budget = QueryBudget(max_llm_calls=8)
+
+    result = tool_analyze_technical_context(_context(budget=budget), "005930", "KOSPI")
+
+    assert result["available"] is False
+    assert "network down" in result["error"]
+    assert budget.llm_calls_made == 0

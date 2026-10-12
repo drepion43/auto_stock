@@ -97,6 +97,19 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         subagent_description="LLM 차트 패턴 해석(방향성/신뢰도/근거)을 조회한다.",
     ),
     ToolSpec(
+        name="analyze_technical_context",
+        description=(
+            "ADX(+DI/-DI, 추세 강도·방향), 볼린저밴드(%B·밴드폭), 스토캐스틱(%K/%D), OBV 방향, "
+            "Aroon(up/down/oscillator), TTM 스퀴즈(변동성 수축 여부), RSI 다이버전스 등 7개 기술지표를 "
+            "판단 없이 숫자 그대로 조회한다 — 매수/매도 판단은 하지 않으니 수치를 직접 해석해 설명하라. "
+            "LLM을 쓰지 않는 계산이며 최근 종가 기준(실시간 아님)이다. 가격 이력이 부족하면 context가 "
+            "null이다(실패 아님)."
+        ),
+        args_model=TickerMarketArgs,
+        fn_name="tool_analyze_technical_context",
+        subagent_description="ADX·볼린저밴드·스토캐스틱·OBV·Aroon·스퀴즈·RSI 다이버전스 기술지표 수치를 조회한다.",
+    ),
+    ToolSpec(
         name="analyze_disclosures",
         description=(
             "최근 공식 공시(KOSPI/KOSDAQ: DART, NASDAQ/NYSE: SEC EDGAR)를 LLM으로 해석해 시장 영향(POSITIVE/"

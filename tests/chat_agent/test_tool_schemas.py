@@ -18,6 +18,7 @@ EXPECTED_TOOL_NAMES = {
     "get_market_scan_recommendations",
     "get_sector_recommendations",
     "analyze_etf_composition",
+    "analyze_technical_context",
 }
 
 _TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {

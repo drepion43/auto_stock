@@ -110,6 +110,36 @@
   },
   {
     "type": "function",
+    "name": "analyze_technical_context",
+    "strict": true,
+    "description": "ADX(+DI/-DI, 추세 강도·방향), 볼린저밴드(%B·밴드폭), 스토캐스틱(%K/%D), OBV 방향, Aroon(up/down/oscillator), TTM 스퀴즈(변동성 수축 여부), RSI 다이버전스 등 7개 기술지표를 판단 없이 숫자 그대로 조회한다 — 매수/매도 판단은 하지 않으니 수치를 직접 해석해 설명하라. LLM을 쓰지 않는 계산이며 최근 종가 기준(실시간 아님)이다. 가격 이력이 부족하면 context가 null이다(실패 아님).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "종목 코드 (KOSPI/KOSDAQ: 6자리 숫자 예 005930, NASDAQ/NYSE: 티커 심볼 예 AAPL)"
+        },
+        "market": {
+          "type": "string",
+          "enum": [
+            "KOSPI",
+            "KOSDAQ",
+            "NASDAQ",
+            "NYSE"
+          ],
+          "description": "시장 구분(원자 거래소: KOSPI/KOSDAQ/NASDAQ/NYSE)"
+        }
+      },
+      "required": [
+        "ticker",
+        "market"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
     "name": "analyze_disclosures",
     "strict": true,
     "description": "최근 공식 공시(KOSPI/KOSDAQ: DART, NASDAQ/NYSE: SEC EDGAR)를 LLM으로 해석해 시장 영향(POSITIVE/NEGATIVE/NEUTRAL)·핵심 이벤트·근거를 조회한다. 최근 90일 내 공시가 없으면 analysis가 null이다.",
