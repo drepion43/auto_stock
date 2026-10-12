@@ -1,6 +1,22 @@
+import math
+
 import pytest
 
-from auto_stock.rule_engine.indicators import atr, ema, macd, rsi, sma, volume_ratio
+from auto_stock.rule_engine.indicators import (
+    adx,
+    aroon,
+    atr,
+    bbands,
+    ema,
+    macd,
+    obv,
+    rsi,
+    rsi_divergence,
+    sma,
+    squeeze,
+    stoch,
+    volume_ratio,
+)
 
 
 def test_sma_matches_hand_computed_values():
@@ -112,3 +128,118 @@ def test_volume_ratio_is_none_when_mean_volume_is_zero():
     result = volume_ratio(volumes, window=3)
 
     assert result[2] is None
+
+
+# --- technical_context용 지표 7종 (rule_engine/technical_context.py가 조립) ---
+
+
+def _uptrend(n=80):
+    closes = [100.0 + i * 1.5 + 3 * math.sin(i / 3) for i in range(n)]
+    return [c + 1.0 for c in closes], [c - 1.0 for c in closes], closes
+
+
+def test_new_indicators_are_index_aligned_with_input():
+    highs, lows, closes = _uptrend()
+    n = len(closes)
+    volumes = [1000 + (i % 5) * 100 for i in range(n)]
+
+    for series in (*adx(highs, lows, closes), *bbands(closes), *stoch(highs, lows, closes),
+                   obv(closes, volumes), *aroon(highs, lows), squeeze(highs, lows, closes)):
+        assert len(series) == n
+
+
+def test_new_indicators_are_all_none_when_input_too_short():
+    highs, lows, closes = [101.0] * 5, [99.0] * 5, [100.0] * 5
+
+    for series in (*adx(highs, lows, closes), *bbands(closes), *stoch(highs, lows, closes),
+                   *aroon(highs, lows), squeeze(highs, lows, closes)):
+        assert all(v is None for v in series)
+
+
+def test_adx_plus_di_dominates_in_uptrend():
+    highs, lows, closes = _uptrend()
+
+    adx_values, plus_di, minus_di = adx(highs, lows, closes)
+
+    assert adx_values[-1] is not None
+    assert plus_di[-1] > minus_di[-1]
+
+
+def test_bbands_returns_percent_b_bandwidth_lower_upper():
+    _, _, closes = _uptrend()
+
+    percent_b, bandwidth, lower, upper = bbands(closes)
+
+    assert lower[-1] < upper[-1]
+    assert bandwidth[-1] > 0
+    assert percent_b[-1] > 0.5  # 상승 추세 끝은 밴드 중심보다 위
+
+
+def test_stoch_values_stay_within_0_and_100():
+    highs, lows, closes = _uptrend()
+
+    k, d = stoch(highs, lows, closes)
+
+    assert all(0.0 <= v <= 100.0 for v in k + d if v is not None)
+    assert k[-1] is not None and d[-1] is not None
+
+
+def test_obv_accumulates_volume_on_up_days():
+    closes = [10.0, 11.0, 12.0, 13.0, 14.0]
+    volumes = [100, 100, 100, 100, 100]
+
+    result = obv(closes, volumes)
+
+    assert result[-1] > result[1]
+
+
+def test_aroon_up_is_100_on_a_fresh_high():
+    highs, lows, _ = _uptrend()
+    highs = highs[:-1] + [max(highs) + 10.0]
+
+    up, down, osc = aroon(highs, lows)
+
+    assert up[-1] == pytest.approx(100.0)
+    assert osc[-1] == pytest.approx(up[-1] - down[-1])
+
+
+def test_squeeze_is_flag_valued():
+    highs, lows, closes = _uptrend()
+
+    result = squeeze(highs, lows, closes)
+
+    assert {v for v in result if v is not None} <= {0.0, 1.0}
+    assert result[-1] is not None
+
+
+def test_rsi_divergence_bullish_when_price_makes_lower_low_but_rsi_does_not():
+    closes = [100.0, 95.0, 98.0, 99.0, 94.0]   # 마지막이 직전 구간 최저(95)보다 낮음
+    rsi_values = [50.0, 25.0, 40.0, 45.0, 32.0]  # 그런데 RSI는 그때(25)보다 높음
+
+    result = rsi_divergence(closes, rsi_values, lookback=4)
+
+    assert result[-1] == "bullish"
+
+
+def test_rsi_divergence_bearish_when_price_makes_higher_high_but_rsi_does_not():
+    closes = [100.0, 105.0, 102.0, 101.0, 106.0]
+    rsi_values = [50.0, 75.0, 60.0, 55.0, 68.0]
+
+    result = rsi_divergence(closes, rsi_values, lookback=4)
+
+    assert result[-1] == "bearish"
+
+
+def test_rsi_divergence_none_without_new_extreme_or_enough_history():
+    closes = [100.0, 95.0, 98.0, 99.0, 97.0]   # 새 고점/저점 아님
+    rsi_values = [50.0, 25.0, 40.0, 45.0, 42.0]
+
+    assert rsi_divergence(closes, rsi_values, lookback=4)[-1] is None
+    assert rsi_divergence(closes, rsi_values, lookback=10) == [None] * 5
+
+
+def test_rsi_divergence_skips_points_with_missing_rsi():
+    closes = [100.0, 95.0, 98.0, 99.0, 94.0]
+    rsi_values = [None, None, None, None, 32.0]
+
+    assert rsi_divergence(closes, rsi_values, lookback=4)[-1] is None

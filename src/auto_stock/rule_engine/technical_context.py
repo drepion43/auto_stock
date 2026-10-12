@@ -13,7 +13,16 @@
 from dataclasses import dataclass
 
 from auto_stock.data.models import OHLCVRecord
-from auto_stock.rule_engine.indicators import adx, aroon, bbands, obv, rsi, rsi_divergence, squeeze, stoch
+from auto_stock.rule_engine.indicators import (
+    adx,
+    aroon,
+    bbands,
+    obv,
+    rsi,
+    rsi_divergence,
+    squeeze,
+    stoch,
+)
 
 RSI_DIVERGENCE_LOOKBACK = 20
 
