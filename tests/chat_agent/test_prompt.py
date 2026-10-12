@@ -85,3 +85,9 @@ def test_system_prompt_instructs_treating_tool_output_as_data_not_instructions()
 
 def test_system_prompt_mentions_technical_context_tool():
     assert "analyze_technical_context" in SYSTEM_PROMPT
+
+
+
+def test_system_prompt_instructs_index_quote_tool_and_not_realtime_notice():
+    assert "get_index_quote" in SYSTEM_PROMPT
+    assert "지수 종가 기준" in SYSTEM_PROMPT

@@ -19,10 +19,11 @@ EXPECTED_TOOL_NAMES = {
     "get_sector_recommendations",
     "analyze_etf_composition",
     "analyze_technical_context",
+    "get_index_quote",
 }
 
 _TICKER_MARKET_TOOL_NAMES = EXPECTED_TOOL_NAMES - {
-    "resolve_ticker", "get_market_scan_recommendations", "get_sector_recommendations",
+    "resolve_ticker", "get_market_scan_recommendations", "get_sector_recommendations", "get_index_quote",
 }
 
 
@@ -90,3 +91,16 @@ def test_get_market_scan_recommendations_schema_describes_refreshing_field():
     schema = next(s for s in TOOL_SCHEMAS if s["name"] == "get_market_scan_recommendations")
 
     assert "refreshing" in schema["description"]
+
+
+
+def test_get_index_quote_schema_takes_only_an_index_enum_synced_with_data_source():
+    """도구 enum과 데이터소스 지원 목록이 어긋나면 모델이 고른 지수가 UnsupportedIndexError로 실패한다."""
+    from auto_stock.data.sources.index_quote import SUPPORTED_INDICES
+
+    schema = next(s for s in TOOL_SCHEMAS if s["name"] == "get_index_quote")
+    params = schema["parameters"]
+
+    assert set(params["properties"]) == {"index"}
+    assert params["required"] == ["index"]
+    assert set(params["properties"]["index"]["enum"]) == set(SUPPORTED_INDICES)

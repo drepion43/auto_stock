@@ -29,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 
 from auto_stock.chat_agent import tools as _tools
 from auto_stock.chat_agent.tool_args import (
+    IndexArgs,
     MarketArgs,
     QueryArgs,
     QueryMarketArgs,
@@ -235,6 +236,18 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         ),
         args_model=TickerMarketArgs,
         fn_name="tool_analyze_etf_composition",
+    ),
+    ToolSpec(
+        name="get_index_quote",
+        description=(
+            "종목이 아니라 지수 자체의 최근 종가와 전일대비 변화율을 조회한다 — '코스피 지금 어때', "
+            "'VIX 어때', '나스닥 지수 얼마야'처럼 지수를 물을 때 쓴다. ticker/market 기반 종목 "
+            "도구들과 혼동하지 말 것(resolve_ticker도 필요 없다). **지수 종가 기준이며 실시간 "
+            "시세가 아니다** — 답변에서 date와 함께 밝혀라. 데이터가 없거나 너무 오래됐으면 quote가 "
+            "null이다(실패 아님)."
+        ),
+        args_model=IndexArgs,
+        fn_name="tool_get_index_quote",
     ),
 )
 

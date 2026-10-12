@@ -73,6 +73,7 @@ from auto_stock.risk_sizing.models import AccountState
 from auto_stock.risk_sizing.sizing import suggest_position
 from auto_stock.rule_engine.engine import generate_candidates
 from auto_stock.rule_engine.technical_context import build_technical_context
+from auto_stock.data.sources.index_quote import fetch_index_quote
 
 class ChatToolContext:
     """6개 도구가 공유하는 의존성 묶음. dataclass가 아닌 일반 클래스인 이유는 `budget`
@@ -347,6 +348,28 @@ def tool_analyze_technical_context(context: ChatToolContext, ticker: str, market
         return {"available": True, "context": None}
     values = {k: getattr(technical, k) for k in technical.__dataclass_fields__ if k not in ("ticker", "market")}
     return {"available": True, "context": values}
+
+
+def tool_get_index_quote(context: ChatToolContext, index: str) -> dict:
+    """지수 자체(코스피/코스닥/코스피200/VIX/다우/나스닥/S&P500/러셀2000)의 최근 종가와 전일대비
+    변화율. 종목 도구가 아니라 ticker/market이 없다 — `context`는 도구 호출 계약
+    (`fn(context, **arguments)`)을 맞추려고 받을 뿐 쓰지 않는다. LLM/QueryBudget 미사용.
+    데이터가 없거나 너무 오래됐으면 `quote`가 None(실패 아님)."""
+    try:
+        quote = fetch_index_quote(index)
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+    if quote is None:
+        return {"available": True, "quote": None}
+    return {
+        "available": True,
+        "quote": {
+            "index": quote.index,
+            "date": quote.date.isoformat(),
+            "close": quote.close,
+            "change_pct": quote.change_pct,
+        },
+    }
 
 
 def tool_resolve_ticker(context: ChatToolContext, query: str) -> dict:

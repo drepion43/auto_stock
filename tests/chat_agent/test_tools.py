@@ -1064,3 +1064,43 @@ def test_tool_analyze_technical_context_isolates_fetch_failure_and_uses_no_llm_b
     assert result["available"] is False
     assert "network down" in result["error"]
     assert budget.llm_calls_made == 0
+
+
+
+# --- get_index_quote ---
+
+
+def test_tool_get_index_quote_returns_latest_close_and_change(mocker):
+    from auto_stock.chat_agent.tools import tool_get_index_quote
+    from auto_stock.data.sources.index_quote import IndexQuote
+
+    mocker.patch(
+        "auto_stock.chat_agent.tools.fetch_index_quote",
+        return_value=IndexQuote(index="KS11", date=date(2026, 10, 12), close=6384.24, change_pct=-3.65),
+    )
+
+    result = tool_get_index_quote(_context(), "KS11")
+
+    assert result == {
+        "available": True,
+        "quote": {"index": "KS11", "date": "2026-10-12", "close": 6384.24, "change_pct": -3.65},
+    }
+
+
+def test_tool_get_index_quote_none_quote_is_not_an_error(mocker):
+    from auto_stock.chat_agent.tools import tool_get_index_quote
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_index_quote", return_value=None)
+
+    assert tool_get_index_quote(_context(), "VIX") == {"available": True, "quote": None}
+
+
+def test_tool_get_index_quote_isolates_failures(mocker):
+    from auto_stock.chat_agent.tools import tool_get_index_quote
+
+    mocker.patch("auto_stock.chat_agent.tools.fetch_index_quote", side_effect=RuntimeError("yahoo down"))
+
+    result = tool_get_index_quote(_context(), "DJI")
+
+    assert result["available"] is False
+    assert "yahoo down" in result["error"]

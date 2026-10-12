@@ -51,3 +51,17 @@ class MarketArgs(_StrictArgs):
 class QueryMarketArgs(_StrictArgs):
     query: str = Field(description="섹터/업종/테마명(예: '로봇', '반도체', '2차전지')")
     market: ScanMarket = Field(description=_SCAN_MARKET_DESC)
+
+
+# 지수 자체 시세 도구(get_index_quote) — `data/sources/index_quote.SUPPORTED_INDICES`와 반드시 같아야 한다
+# (tests/chat_agent/test_tool_schemas.py가 고정).
+IndexName = Literal["KS11", "KQ11", "KS200", "VIX", "DJI", "IXIC", "S&P500", "RUT"]
+
+
+class IndexArgs(_StrictArgs):
+    index: IndexName = Field(
+        description=(
+            "지수 코드 — KS11=코스피, KQ11=코스닥, KS200=코스피200, VIX=변동성지수, DJI=다우존스, "
+            "IXIC=나스닥종합, S&P500=S&P500, RUT=러셀2000"
+        )
+    )
