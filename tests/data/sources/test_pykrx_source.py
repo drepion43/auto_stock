@@ -74,3 +74,29 @@ def test_resolve_market_reads_fresh_cache_without_calling_pykrx(mocker, tmp_path
 
     assert result == "KOSPI"
     mock_list.assert_not_called()
+
+
+# --- 빈 매핑 캐시 회귀(2026-10-13 발견) ---
+# 일시적 KRX 실패로 빈 목록을 받은 결과가 `{}`로 7일간 캐시돼, 그동안 모든 국내 종목의 소속
+# 시장을 모른다고 판단했다(삼성전자가 KOSPI/KOSDAQ 양쪽 후보로 나와 챗봇이 매번 되물음).
+
+
+def test_resolve_market_does_not_cache_an_empty_mapping(mocker, tmp_path):
+    cache_path = tmp_path / "krx_ticker_market.json"
+    mocker.patch.object(pykrx_source.stock, "get_market_ticker_list", return_value=[])
+
+    assert pykrx_source.resolve_market("005930", cache_path=cache_path) is None
+    assert not cache_path.exists()
+
+
+def test_resolve_market_refreshes_a_fresh_but_empty_cache(mocker, tmp_path):
+    cache_path = tmp_path / "krx_ticker_market.json"
+    cache_path.write_text("{}", encoding="utf-8")
+
+    def fake_ticker_list(as_of_str, market):
+        return {"KOSPI": ["005930"], "KOSDAQ": ["091990"]}[market]
+
+    mocker.patch.object(pykrx_source.stock, "get_market_ticker_list", side_effect=fake_ticker_list)
+
+    assert pykrx_source.resolve_market("005930", cache_path=cache_path) == "KOSPI"
+    assert json.loads(cache_path.read_text(encoding="utf-8")) == {"005930": "KOSPI", "091990": "KOSDAQ"}

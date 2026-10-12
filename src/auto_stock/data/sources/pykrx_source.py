@@ -60,9 +60,17 @@ def _is_cache_fresh(cache_path: Path, refresh_days: int) -> bool:
 
 
 def _load_or_refresh_ticker_market_map(cache_path: Path, refresh_days: int) -> dict[str, str]:
+    # 빈 매핑은 정상 결과일 수 없다(KOSPI+KOSDAQ 상장종목은 늘 수천 개) — 일시적 KRX 실패(로그인
+    # 실패·서버 장애)의 흔적이다. 캐시하면 refresh_days 동안 모든 국내 종목의 소속 시장을 모르게
+    # 되므로(2026-10-13 실제 발생: 삼성전자가 KOSPI/KOSDAQ 양쪽 후보로 나옴), 빈 캐시는 오래된
+    # 것으로 보고 다시 받고, 빈 다운로드 결과는 저장하지 않는다(다음 호출이 다시 시도).
     if _is_cache_fresh(cache_path, refresh_days):
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached:
+            return cached
     mapping = _download_ticker_market_map()
+    if not mapping:
+        return mapping
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     # DART/EDGAR 캐시와 동일한 원자적 쓰기 패턴(임시파일 + os.replace) — 쓰기 도중
     # 프로세스가 죽어도 손상된 캐시가 refresh_days 동안 남지 않는다.
