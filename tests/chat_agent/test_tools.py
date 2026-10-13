@@ -36,7 +36,7 @@ def _account() -> AccountState:
 def _context(**overrides) -> ChatToolContext:
     values = dict(
         cache=object(),
-        ml_models={},
+        ml_model=None,
         llm_client=None,
         news_client=None,
         sentiment_client=None,
@@ -87,41 +87,33 @@ def test_tool_analyze_rule_engine_isolates_ohlcv_fetch_failure(mocker):
 
 
 def test_tool_analyze_ml_prediction_returns_prediction(mocker):
-    """ml_models 딥은 여전히 합성 "KRX" 키를 쓴다(ML은 재학습 안 함, market 세분화
-    작업 범위 밖) — KOSPI/KOSDAQ 둘 다 ML_MODEL_KEYS를 통해 그 키로 조회된다."""
+    """통합 단일 모델이라 market별 키 조회 없이 `context.ml_model` 하나만 쓴다
+    (사용자 결정 — market/종목별 모델 분리 안 함)."""
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
-    prediction = mocker.Mock(probability_up=0.62, top_features=[("rsi_14", 0.3)])
+    mocker.patch("auto_stock.chat_agent.tools.build_fundamentals_by_date", return_value=None)
+    prediction = mocker.Mock(predicted_return=0.012)
     mocker.patch("auto_stock.chat_agent.tools.predict", return_value=prediction)
 
-    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KOSPI")
+    result = tool_analyze_ml_prediction(_context(ml_model=object()), "005930", "KOSPI")
 
     assert result == {
         "available": True,
-        "prediction": {"probability_up": 0.62, "top_features": [("rsi_14", 0.3)]},
+        "prediction": {"predicted_return": 0.012},
     }
 
 
-def test_tool_analyze_ml_prediction_unavailable_when_no_model_for_market():
-    result = tool_analyze_ml_prediction(_context(ml_models={}), "005930", "KOSPI")
+def test_tool_analyze_ml_prediction_unavailable_when_no_model():
+    result = tool_analyze_ml_prediction(_context(ml_model=None), "005930", "KOSPI")
 
     assert result["available"] is False
-    assert "KOSPI" in result["error"]
-
-
-def test_tool_analyze_ml_prediction_unavailable_for_nyse_which_has_no_model_key():
-    """NYSE는 ML_MODEL_KEYS에서 None으로 매핑된다 — 애초에 모델이 없던 것과 동일하게
-    취급(사용자 결정, ML은 재학습 안 함)."""
-    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object(), "NASDAQ": object()}), "AAPL", "NYSE")
-
-    assert result["available"] is False
-    assert "NYSE" in result["error"]
 
 
 def test_tool_analyze_ml_prediction_returns_none_when_insufficient_data(mocker):
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
+    mocker.patch("auto_stock.chat_agent.tools.build_fundamentals_by_date", return_value=None)
     mocker.patch("auto_stock.chat_agent.tools.predict", return_value=None)
 
-    result = tool_analyze_ml_prediction(_context(ml_models={"KRX": object()}), "005930", "KOSPI")
+    result = tool_analyze_ml_prediction(_context(ml_model=object()), "005930", "KOSPI")
 
     assert result == {"available": True, "prediction": None}
 

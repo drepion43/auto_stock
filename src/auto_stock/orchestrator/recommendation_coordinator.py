@@ -30,7 +30,6 @@ from auto_stock.chat_agent.models import ChatAgentReader, QueryBudget
 from auto_stock.chat_agent.sector_resolution import resolve_sector_tickers
 from auto_stock.chat_agent.tools import ChatToolContext, _bind_stock_analyst_tools
 from auto_stock.data.cache import OHLCVCache
-from auto_stock.data.market_routing import ML_MODEL_KEYS
 from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
 from auto_stock.ml_predictor.models import ModelBundle
@@ -63,11 +62,9 @@ def _sector_scan_key(sector_query: str, market: str) -> str:
 
 
 def _shortlist_score(entry: ShortlistEntry) -> float:
-    """§2 — 규칙엔진 후보 존재 여부 + ML 확률이 0.5에서 먼 정도를 합친 점수."""
+    """§2 — 규칙엔진 후보 존재 여부 + ML 예측 수익률의 절대값(0에서 먼 정도)을 합친 점수."""
     rule_score = 1.0 if entry.rule_candidate is not None else 0.0
-    ml_score = (
-        abs(entry.ml_prediction.probability_up - 0.5) if entry.ml_prediction is not None else 0.0
-    )
+    ml_score = abs(entry.ml_prediction.predicted_return) if entry.ml_prediction is not None else 0.0
     return rule_score + ml_score
 
 
@@ -76,7 +73,7 @@ class RecommendationCoordinator:
         self,
         cache: OHLCVCache,
         scan_cache: MarketScanCache,
-        ml_models: dict[str, ModelBundle | None],
+        ml_model: ModelBundle | None,
         llm_client: ChartPatternReader | None,
         news_client: DisclosureReader | None,
         sentiment_client: NewsSentimentReader | None,
@@ -92,7 +89,7 @@ class RecommendationCoordinator:
     ) -> None:
         self._cache = cache
         self._scan_cache = scan_cache
-        self._ml_models = ml_models
+        self._ml_model = ml_model
         self._llm_client = llm_client
         self._news_client = news_client
         self._sentiment_client = sentiment_client
@@ -155,7 +152,7 @@ class RecommendationCoordinator:
         def bind_tools(ticker: str, market: str) -> list:
             context = ChatToolContext(
                 cache=self._cache.cursor(),
-                ml_models=self._ml_models,
+                ml_model=self._ml_model,
                 llm_client=self._llm_client,
                 news_client=self._news_client,
                 sentiment_client=self._sentiment_client,
@@ -214,10 +211,8 @@ class RecommendationCoordinator:
             shortlist: list[ShortlistEntry] = []
             build_errors: list[tuple[str, str]] = []
             for atomic_market, tickers in universe_by_market.items():
-                ml_key = ML_MODEL_KEYS.get(atomic_market)
-                ml_model = self._ml_models.get(ml_key) if ml_key is not None else None
                 market_shortlist, market_errors = build_shortlist(
-                    cache, tickers, atomic_market, ml_model, self._lookback_days
+                    cache, tickers, atomic_market, self._ml_model, self._lookback_days
                 )
                 shortlist.extend(market_shortlist)
                 build_errors.extend(market_errors)

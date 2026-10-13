@@ -1,5 +1,15 @@
 # `orchestrator/` + `recommendation_synthesis/` 상세 리뷰
 
+> **2026-10-13 정정 노트**: ML 예측기가 scikit-learn LogisticRegression에서 Mamba(PyTorch
+> SSM, 통합 단일 모델)로 교체됐다(`docs/design/ml-predictor-mamba-plan.md`). 이 문서
+> 전체에서 `probability_up`/`ML_AGREE_THRESHOLD(0.55)`/`ML_CONFLICT_THRESHOLD(0.45)`를
+> 언급하는 부분은 각각 `predicted_return`/`ML_AGREE_RETURN_THRESHOLD(0.003)`/
+> `ML_CONFLICT_RETURN_THRESHOLD(-0.003)`로 바뀌었다. `data/market_routing.py::ML_MODEL_KEYS`
+> 매핑(원자 market → 아티팩트 키)은 **삭제**됐다 — market/종목별 모델 분리가 없는 통합
+> 단일 모델이라 `RecommendationCoordinator`/`chat_agent/tools.py`가 `ml_models: dict`
+> 대신 `ml_model: ModelBundle | None` 필드 하나만 받는다. `_shortlist_score`의 ML 항목도
+> `abs(probability_up - 0.5)`에서 `abs(predicted_return)`로 바뀌었다.
+>
 > 이 문서는 "배선(wiring) 계층" — `src/auto_stock/orchestrator/`와 그 위에서 세 번째 `deepagents` 서브에이전트를 구성하는 `src/auto_stock/recommendation_synthesis/` — 를 함수/클래스 단위로 상세히 정리한다. 상위 요약은 `docs/CODEBASE_REVIEW.md`, 최초 MVP-0 설계 근거는 `docs/design/orchestrator.md`를 참고하되, 이 문서는 그 이후 추가된 "전체 유니버스 추천 파이프라인"(숏리스트→딥다이브→종합)과, 이후 market 세분화 작업(아래 핵심 설계 원칙)까지 포함해 현재 코드 상태를 기준으로 다시 정리한 것이다.
 
 ## 핵심 설계 원칙 — "원자 market"과 "합성 scan_key"의 분리
@@ -445,7 +455,7 @@ worst_case = shortlist_size × STOCK_ANALYST_LLM_CALL_ESTIMATE
 1. 스레드 전용 커서 획득(`cache.cursor()`/`scan_cache.cursor()`).
 2. 내부 클로저 `fetch_universe(atomic_market)`을 정의 — `_fresh_universe(scan_cache, atomic_market, universe_size, stale_after)`를 그대로 호출하는 콜백.
 3. `bucket_universe_by_atomic_market(bucket, fetch_universe)`(`orchestrator/market_buckets.py`)를 호출해 `{원자market: tickers}` dict를 얻는다. `bucket`이 원자 market이면 이 dict는 `{bucket: tickers}` 하나뿐이고, 합성 버킷이면 2개(KRX→KOSPI+KOSDAQ, US→NASDAQ+NYSE) 또는 SP500/DOW 필터링을 거친 2개(NASDAQ+NYSE 중 지수 구성종목만)가 된다.
-4. 이 dict를 순회하며 **원자 market마다 각각** `build_shortlist(cache, tickers, atomic_market, self._ml_models.get(atomic_market), lookback_days)`(①)를 호출하고, 반환된 `ShortlistEntry`들과 에러들을 하나의 리스트로 누적한다. **`self._ml_models.get(atomic_market)`가 핵심** — `ml_models` dict의 키는 원자 4개(KOSPI/KOSDAQ/NASDAQ/NYSE)뿐이므로(ML은 원자시장별로만 학습됨, `scripts/train_ml_model.py` 참고), 합성 버킷을 스캔할 때도 각 원자 market 자신의 ML 모델을 올바르게 조회해 쓴다.
+4. 이 dict를 순회하며 **원자 market마다 각각** `build_shortlist(cache, tickers, atomic_market, ml_model, lookback_days)`(①)를 호출하고, 반환된 `ShortlistEntry`들과 에러들을 하나의 리스트로 누적한다. **ML 모델 조회는 `self._ml_models.get(atomic_market)`로 직접 하지 않는다** — `data/market_routing.py::ML_MODEL_KEYS = {"KOSPI": "KRX", "KOSDAQ": "KRX", "NASDAQ": "NASDAQ", "NYSE": None}` 매핑을 먼저 거쳐 `ml_key = ML_MODEL_KEYS.get(atomic_market)` → `self._ml_models.get(ml_key) if ml_key is not None else None`으로 조회한다(`recommendation_coordinator.py:217-218`). 사용자 결정으로 ML은 재학습하지 않고 합성 "KRX" 아티팩트(2026-09-28 학습분, KOSPI/KOSDAQ 공용)와 "NASDAQ" 아티팩트(미학습)만 유지하기로 했기 때문 — NYSE는 매핑 자체가 `None`이라 조회 시도조차 하지 않고 바로 ML 신호가 꺼진다. 상세: `03_ml_predictor.md` §10b/§11.
 5. 누적된 전체 숏리스트를 `_shortlist_score` 기준 내림차순 정렬 → `shortlist[:self._shortlist_cap]`(상위 20개로 절단) — 이 단계는 세분화 이전과 동일, 여러 원자 market에서 모인 종목들이 점수 하나의 기준으로 함께 경쟁한다.
 6. `_run_deep_scan_and_synthesize(shortlist, bucket, scan_cache)`(②③) — 이 단계는 세분화 이전과 동일한 코드다. 숏리스트에 여러 market의 종목이 섞여 있어도 문제없다 — 각 `ShortlistEntry`가 자기 `market` 필드를 들고 있어서 ②단계(`run_deep_scan`)가 종목별로 올바른 market을 사용한다. 결과는 `scan_key=bucket`(합성 버킷 이름 그대로, 예: "KRX")으로 캐시에 적재된다.
 7. 숏리스트 빌드 중 생긴 종목별 에러는 `stderr` 경고로만 남김(합쳐진 `build_errors` 전체 건수).

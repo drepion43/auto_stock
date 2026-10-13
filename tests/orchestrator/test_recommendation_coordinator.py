@@ -50,7 +50,7 @@ def _coordinator(cache, scan_cache, account, **overrides):
     import unittest.mock as _mock
 
     defaults = dict(
-        ml_models={"KRX": None, "NASDAQ": None}, llm_client=None, news_client=None,
+        ml_model=None, llm_client=None, news_client=None,
         sentiment_client=None, account=account, agent_model="gpt-5.6-luna",
         reader=_mock.Mock(), stale_after=timedelta(hours=24), universe_size=200,
     )
@@ -58,10 +58,10 @@ def _coordinator(cache, scan_cache, account, **overrides):
     return RecommendationCoordinator(cache=cache, scan_cache=scan_cache, **defaults)
 
 
-def _entry(ticker, market="KOSPI", rule_candidate=None, probability_up=None):
+def _entry(ticker, market="KOSPI", rule_candidate=None, predicted_return=None):
     ml_prediction = (
-        MLPrediction(ticker=ticker, market=market, date=date(2026, 1, 2), probability_up=probability_up, top_features=[])
-        if probability_up is not None else None
+        MLPrediction(ticker=ticker, market=market, date=date(2026, 1, 2), predicted_return=predicted_return)
+        if predicted_return is not None else None
     )
     return ShortlistEntry(ticker=ticker, market=market, rule_candidate=rule_candidate, ml_prediction=ml_prediction)
 
@@ -101,7 +101,7 @@ def test_ensure_fresh_runs_full_pipeline_and_persists_result(mocker, cache, scan
     _patch_single_atomic_market_universe(mocker, "KOSPI", ["005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
-        return_value=([_entry("005930", probability_up=0.7)], []),
+        return_value=([_entry("005930", predicted_return=0.01)], []),
     )
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.run_deep_scan",
@@ -133,7 +133,7 @@ def test_ensure_fresh_splits_composite_bucket_into_atomic_markets_before_buildin
     )
 
     def fake_build_shortlist(cache_arg, tickers, market, ml_model, lookback_days):
-        return [_entry(tickers[0], market=market, probability_up=0.7)], []
+        return [_entry(tickers[0], market=market, predicted_return=0.01)], []
 
     mock_build_shortlist = mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist", side_effect=fake_build_shortlist
@@ -158,9 +158,9 @@ def test_ensure_fresh_splits_composite_bucket_into_atomic_markets_before_buildin
 
 def test_shortlist_is_capped_and_ranked_before_deep_scan(mocker, cache, scan_cache, account):
     """숏리스트 캡(기본 20)보다 많으면 상위만 ②단계로 넘겨야 한다 — 규칙엔진 후보
-    존재 + |probability_up - 0.5| 합산 점수 기준(recommendation-synthesis.md §2)."""
-    low_score = _entry("000660", probability_up=0.51)  # 점수 거의 0
-    high_score = _entry("005930", rule_candidate=Candidate(ticker="005930", market="KOSPI", action="BUY", reasons=["RSI"]), probability_up=0.9)
+    존재 + |predicted_return| 합산 점수 기준(recommendation-synthesis.md §2)."""
+    low_score = _entry("000660", predicted_return=0.001)  # 점수 거의 0
+    high_score = _entry("005930", rule_candidate=Candidate(ticker="005930", market="KOSPI", action="BUY", reasons=["RSI"]), predicted_return=0.03)
     _patch_single_atomic_market_universe(mocker, "KOSPI", ["000660", "005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
@@ -186,7 +186,7 @@ def test_budget_sized_for_worst_case_and_shared_across_stages(mocker, cache, sca
     _patch_single_atomic_market_universe(mocker, "KOSPI", ["005930"])
     mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.build_shortlist",
-        return_value=([_entry("005930", probability_up=0.7)], []),
+        return_value=([_entry("005930", predicted_return=0.01)], []),
     )
     mock_deep_scan = mocker.patch(
         "auto_stock.orchestrator.recommendation_coordinator.run_deep_scan", return_value=[]

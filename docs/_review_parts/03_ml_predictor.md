@@ -1,11 +1,23 @@
 # `src/auto_stock/ml_predictor/` — ML 예측 모듈 (#2, 보조 신호) 상세 리뷰
 
+> **2026-10-13 정정 노트**: 이 문서 전체(§2~§11)가 설명하는 scikit-learn `LogisticRegression`
+> 기반 설계는 **2026-10-13부로 Mamba(PyTorch SSM) 기반으로 교체됐다** — 계수 기반
+> 설명가능성(`_top_contributing_features`)은 더 이상 존재하지 않고, 레이블은 5일 방향
+> 분류에서 1일 수익률 regression으로 바뀌었으며, market/종목별 모델 분리 없이 통합
+> 단일 모델 하나만 학습한다. 아래 §2~§11은 **교체 이전의 역사적 설계 기록**으로 남겨두되,
+> 현재 코드와 설계 결정은 `docs/design/ml-predictor-mamba-plan.md`를 참고할 것 — 특히
+> `FeatureVector.values`가 11개가 아니라 17개(코어 11 + 펀더멘털 5 + 결측플래그 1), `MLPrediction`이
+> `probability_up`/`top_features` 대신 `predicted_return` 하나만 가진다는 점, `ModelBundle.estimator`가
+> sklearn Pipeline이 아니라 PyTorch state_dict라는 점이 가장 큰 차이다.
+
 ## 0. 이 모듈의 위치와 역할
 
-`ml_predictor`는 규칙엔진(`rule_engine`)이 이미 만들어낸 BUY/SELL `Candidate`에 대해 "앞으로 5거래일 뒤 종가가 오를 확률"을 계산해 **보조 근거 문장**을 하나 더 추가하는 모듈이다. 중요한 전제 두 가지를 먼저 짚어야 한다.
+`ml_predictor`는 "앞으로 5거래일 뒤 종가가 오를 확률"을 계산하는 모듈이다. **이 확률을 어떻게 쓰는지는 호출하는 오케스트레이터 경로에 따라 다르다** — 이 모듈 자신은 두 경로 중 어느 쪽에서 불려도 똑같이 동작하고, "규칙엔진 후보에 종속된 보조문장"이라는 역할만 하는 게 아니다. 아래 두 경로가 **둘 다 현재 살아있는 코드**다(한쪽이 다른 쪽을 대체한 게 아님).
 
-1. **ML은 자체적으로 매수/매도 후보를 만들지 않는다.** 규칙엔진이 이미 후보로 판단한 종목에 대해서만 ML 예측이 실행된다(`orchestrator/pipeline.py`가 `generate_candidates`로 후보를 만든 "다음"에 ML을 호출하는 순서로 배선돼 있다). ML이 알림 발송 여부를 바꾸지 않는다 — 이것은 PRD §10("보조 시그널로만 사용")과 직결된 설계 제약이다.
-2. **ML 예측이 실패해도 추천 발송은 막히지 않는다.** 오케스트레이터의 `_ml_reasons` 헬퍼(`orchestrator/pipeline.py`)가 예외를 흡수하고 `PipelineResult.errors`에만 기록한다. `predictor.py` 자신도 데이터 부족 시 예외 대신 `None`을 반환하는 보수적 관례를 따른다.
+1. **(구/레거시) `orchestrator/pipeline.py::run_recommendation_pipeline`** — 규칙엔진이 이미 만들어낸 BUY/SELL `Candidate`에 대해서만 ML을 추가로 돌려 "보조 근거 문장"을 붙인다(AND 방식: 규칙엔진 후보가 없으면 ML 자체를 호출하지 않음). `scripts/run_recommendations_with_ml.py` 등 수동 스크립트, 그리고 `scripts/run_market_scan.py`/`ScanCoordinator`(둘 다 ML 없이 규칙엔진만 쓰는 더 단순한 "무료 스캔" 경로)가 이 계열이다. ML이 알림 발송 여부를 바꾸지 않는다는 PRD §10("보조 시그널로만 사용") 제약이 이 경로에서 그대로 적용된다.
+2. **(현재 챗봇이 실제로 쓰는 경로) `orchestrator/shortlist.py::build_shortlist`** — 전체 유니버스 종목마다 규칙엔진과 ML을 **독립적으로 둘 다** 돌리고, **둘 중 하나라도 방향성 신호를 내면**(OR) 그 종목을 1차 숏리스트에 올린다. "규칙엔진 후보에만 종속"이 아니라, **ML이 규칙엔진과 별개로 종목을 추천 숏리스트에 올릴 수 있다** — 이 모듈 docstring(`shortlist.py:1-7`)이 그 이유를 명시: "규칙엔진 후보만 숏리스트로 쓰면 AND 게이트가 되어 ML만 잡는 종목을 영구히 놓친다." `chat_agent`의 `get_market_scan_recommendations`/`get_sector_recommendations` tool이 트리거하는 `RecommendationCoordinator`(`05_orchestrator_and_synthesis.md` 참고)가 이 경로를 쓴다. 숏리스트에 오른 종목만 ②단계(심층분석, LLM 비용 발생)로 넘어가므로, ML 쪽에서 신호를 냈다는 사실 자체가 "그 종목에 LLM 심층분석을 쓸지"를 좌우한다 — 알림 발송(1번 경로)보다 한 단계 더 직접적인 영향력을 ML이 갖는다.
+
+두 경로 모두에서 공통인 전제: **ML 예측이 실패해도 상위 파이프라인은 막히지 않는다.** 1번 경로는 `_ml_reasons` 헬퍼가 예외를 흡수해 `PipelineResult.errors`에만 기록, 2번 경로는 `build_shortlist`의 티커 단위 `try/except`가 흡수한다. `predictor.py` 자신도 데이터 부족 시 예외 대신 `None`을 반환하는 보수적 관례를 양쪽 경로 모두에서 따른다.
 
 모듈 구조는 `rule_engine/`과 동일한 패턴(models.py + 순수 계산 함수들 + 오케스트레이션 지점)을 따른다.
 
@@ -428,22 +440,33 @@ ml_predictor 패키지 자체(`models.py`/`features.py`/`labeling.py`/`dataset.p
 
 ---
 
-## 10. `explainer/generator.py`와의 연결 (오케스트레이터 통합 요약)
+## 10. 오케스트레이터 통합 — 두 경로 상세
 
-`ml_predictor` 자체는 오케스트레이터 코드를 포함하지 않는다 — 실제 호출은 `orchestrator/pipeline.py`에서 일어난다(상세는 orchestrator 섹션 참고). 여기서는 ML 모듈 입장에서 알아야 할 계약만 요약한다.
+`ml_predictor` 자체는 오케스트레이터 코드를 포함하지 않는다 — §0에서 소개한 두 경로가 각각 이 모듈을 어떻게 호출하는지 정리한다(상세는 `05_orchestrator_and_synthesis.md` 참고).
+
+### 10a. `orchestrator/pipeline.py::run_recommendation_pipeline` — `explainer/generator.py`와의 연결 (구/레거시 경로)
 
 - `pipeline.py`는 `ml_model: ModelBundle | None = None` 선택 인자를 받는다.
 - `ml_model=None`(기본값)이면 ML 코드 경로를 **전혀 타지 않는다** — `generate_explanation(candidate, sizing)`를 기존과 동일하게 2개 위치 인자만으로 호출한다. 이는 ML 도입 전 코드와 100% 동일한 동작을 보장하기 위한 회귀 방지 장치다.
-- `ml_model`이 주어지면 내부 헬퍼 `_ml_reasons(ml_model, records, action)`가 `predict`/`to_reasons`를 호출해 결과를 `extra_reasons`로 전달한다. 이 헬퍼는 **절대 예외를 밖으로 던지지 않는다** — ML 예측이 실패해도 `(ticker, "ML 예측 실패: ...")` 형태로 `PipelineResult.errors`에 기록될 뿐, 알림 발송 자체는 계속된다.
+- `ml_model`이 주어지면 내부 헬퍼 `_ml_reasons(ml_model, records, action)`가 **규칙엔진이 이미 만든 `Candidate`에 대해서만** `predict`/`to_reasons`를 호출해 결과를 `extra_reasons`로 전달한다(AND — 규칙엔진 후보가 없으면 이 헬퍼 자체가 호출되지 않는다). 이 헬퍼는 **절대 예외를 밖으로 던지지 않는다** — ML 예측이 실패해도 `(ticker, "ML 예측 실패: ...")` 형태로 `PipelineResult.errors`에 기록될 뿐, 알림 발송 자체는 계속된다.
 - `explainer/generator.py`는 ML 도입 과정에서 **한 줄도 수정되지 않았다** — 애초에 `extra_reasons`라는 확장 포인트를 염두에 두고 설계된 덕분이다.
+- 이 경로는 `scripts/run_recommendations_with_ml.py`/`run_recommendations_with_signals.py` 같은 수동 스크립트에서만 실제로 쓰인다 — **현재 챗봇의 실시간 추천 경로(`scripts/chat_cli.py`)는 이 함수를 호출하지 않는다.**
+
+### 10b. `orchestrator/shortlist.py::build_shortlist` — 챗봇이 실제로 쓰는 경로
+
+- `build_shortlist(cache, tickers, market, ml_model, lookback_days)`가 전체 유니버스 종목을 순회하며, **종목마다 규칙엔진(`generate_candidates`)과 ML(`predict`)을 독립적으로 둘 다 호출**한다 — 어느 한쪽이 다른 쪽의 입력이나 게이트가 아니다.
+- `_ml_has_directional_opinion(prediction)`이 `probability_up >= ML_AGREE_THRESHOLD(0.55)` 또는 `<= ML_CONFLICT_THRESHOLD(0.45)`를 "방향성 의견 있음"으로 판정한다(0.45~0.55 중립 구간은 의견 없음). `rule_candidate is not None or _ml_has_directional_opinion(ml_prediction)` — **OR** 조건 하나만 통과하면 `ShortlistEntry`로 숏리스트에 들어간다.
+- 이렇게 설계한 이유가 `shortlist.py` 모듈 docstring에 명시돼 있다: "규칙엔진 후보만 숏리스트로 쓰면 AND 게이트가 되어 ML만 잡는 종목을 영구히 놓친다." 규칙엔진·ML 둘 다 LLM을 안 쓰는 공짜 계산이라 전체 유니버스에 돌려도 비용 문제가 없고, 비싼 LLM 신호(차트/공시/뉴스감성, `stock_analyst`)는 이 숏리스트에 걸린 종목에만 ②단계에서 쓴다.
+- 호출부는 `RecommendationCoordinator._run`(`orchestrator/recommendation_coordinator.py`)이다. **market이 합성 버킷(예: "KRX"=코스피+코스닥)일 수 있는데**, `ml_model` 인자는 `self._ml_models.get(ml_key)`로 넘기기 전에 `ML_MODEL_KEYS`(`data/market_routing.py`) 매핑을 거친다 — `{"KOSPI":"KRX", "KOSDAQ":"KRX", "NASDAQ":"NASDAQ", "NYSE":None}`. 즉 **KOSPI/KOSDAQ 종목은 둘 다 합성 "KRX" 모델 아티팩트를 조회하고(§11에서 설명하듯 재학습 없이 2026-09-28 학습분을 그대로 재사용), NYSE는 아예 모델이 없어 `None`이 전달돼 ML 신호가 조용히 꺼진다.**
+- 실패 격리는 `scan_market`과 동일한 티커 단위 `try/except` — 한 종목에서 예외가 나도 다른 종목 처리는 계속된다.
 
 ---
 
 ## 11. 현재 한계 (2026-10-07 기준, market 세분화 반영)
 
-- **`MARKETS`는 이제 `["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]` 원자 거래소 4개를 순회하지만, 실제로 학습이 완료되어 커밋된 아티팩트는 `models/ml_predictor/KRX_h5_logreg.metadata.json` 하나뿐이다.** `models/ml_predictor/` 디렉터리를 Glob으로 직접 확인한 결과 이 파일 외에는 아무것도 없다.
-- **중요: 이 "KRX" 아티팩트는 market 세분화 이후 더 이상 유효한 market 이름이 아니다.** `data/models.py::VALID_MARKETS`가 `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}` 원자값으로 바뀌면서 "KRX"는 `OHLCVRecord.market`에 쓸 수 없는 합성 scan 버킷 전용 값이 됐다(`orchestrator/market_buckets.py`). `ml_predictor/artifact.py::artifact_path(market)`는 `{market}_h{LABEL_HORIZON_DAYS}_logreg.joblib` 패턴으로 market 이름을 파일명에 그대로 쓰므로, `KRX_h5_logreg.metadata.json`은 이제 `scripts/train_ml_model.py`의 신규 `MARKETS` 리스트(`["KOSPI","KOSDAQ","NASDAQ","NYSE"]`)에 더 이상 등장하지 않는 레거시 아티팩트가 됐다 — **KOSPI와 KOSDAQ 각각에 대한 재학습이 필요하며, 아직 실행되지 않았다**(이번 세션 범위 밖). `chat_agent/tools.py`/`scripts/chat_cli.py`가 `ml_models.get(market)`으로 조회할 때 market이 "KOSPI"/"KOSDAQ"이면 이 레거시 파일을 찾지 못해 `None`(ML 신호 비활성)으로 저하된다 — 에러는 아니지만 재학습 전까지는 KRX 계열 종목에 대한 ML 보조신호가 조용히 꺼진 상태라는 뜻이다.
-- NASDAQ/NYSE 모델도 마찬가지로 아직 학습된 적이 없다(이 한계는 세분화 이전부터 있던 것과 동일 — NASDAQ 쪽 유니버스/데이터 소스가 정상 동작하는 환경에서 `scripts/train_ml_model.py`를 실행하면 된다, 코드 추가 작업은 필요 없음).
+- **`scripts/train_ml_model.py::MARKETS`는 `["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]` 원자 거래소 4개를 순회하지만, 실제로 학습이 완료되어 커밋된 아티팩트는 `models/ml_predictor/KRX_h5_logreg.metadata.json` 하나뿐이다**(Glob으로 직접 확인). 즉 이 스크립트의 `MARKETS` 리스트와 실제 커밋된 아티팩트 집합이 지금 일치하지 않는다 — 스크립트를 그 리스트 그대로 돌리면 "KOSPI"/"KOSDAQ"/"NASDAQ"/"NYSE" 4개 아티팩트가 각각 생성되어야 하는데, 아직 실행되지 않았다.
+- **"KRX" 아티팩트는 재학습 없이 재사용되도록 사용자가 명시적으로 결정했다(market 세분화 작업, 별도 세션).** `data/models.py::VALID_MARKETS`가 원자값(`{"KOSPI","KOSDAQ","NASDAQ","NYSE"}`)으로 바뀌면서 "KRX"는 `OHLCVRecord.market`에 직접 쓸 수 없는 합성 scan 버킷 전용 값이 됐지만, **ML 모델 조회만큼은 별도의 매핑 테이블 `data/market_routing.py::ML_MODEL_KEYS = {"KOSPI": "KRX", "KOSDAQ": "KRX", "NASDAQ": "NASDAQ", "NYSE": None}`을 거친다** — `ml_predictor/artifact.py`의 아티팩트 경로/파일명 자체는 전혀 바뀌지 않았고, 호출부(`orchestrator/recommendation_coordinator.py`, `chat_agent/tools.py`)가 조회 직전에 이 매핑으로 "원자 market → 아티팩트 키"를 변환한다. 결과: **KOSPI/KOSDAQ 종목은 둘 다 기존 `KRX_h5_logreg` 모델을 그대로 재사용**(2026-09-28 학습분, 재학습 안 함), **NASDAQ은 자신의 "NASDAQ" 키로 조회**(아티팩트 없으므로 역시 `None`으로 저하), **NYSE는 매핑 자체가 `None`이라 애초에 조회를 안 하고 바로 ML 신호가 꺼진다.**
+- NASDAQ/NYSE 모델은 아직 학습된 적이 없다(세분화 이전부터 있던 한계와 동일) — NASDAQ 쪽 유니버스/데이터 소스가 정상 동작하는 환경에서 `scripts/train_ml_model.py`를 실행하면 된다(코드 추가 작업 불필요).
 - **실제 학습 결과 수치** (`models/ml_predictor/KRX_h5_logreg.metadata.json`, 2026-09-28 학습):
   - `market: KRX`, `algorithm: logreg`, `horizon_days: 5`
   - `universe_size: 200`종목

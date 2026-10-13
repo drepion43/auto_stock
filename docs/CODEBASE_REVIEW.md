@@ -134,6 +134,12 @@ PRD §6 리스크 정책을 코드화하되, **1차 목표 범위는 참고용 �
 
 ## `src/auto_stock/ml_predictor/` — ML 예측 모듈 (#2, 보조 신호)
 
+> **2026-10-13 정정 노트**: 아래 표(scikit-learn LogisticRegression 기반)는 역사적 기록이다 —
+> production 모델이 Mamba(PyTorch SSM, 통합 단일 모델, regression)로 교체됐다. 상세:
+> `docs/design/ml-predictor-mamba-plan.md`. 레이블은 5일 방향분류→1일 수익률, `MLPrediction`은
+> `probability_up`/`top_features` 대신 `predicted_return` 하나, 피처는 11개→17개(국내전용
+> 펀더멘털 5개+결측플래그 1개 추가), 아티팩트는 `.joblib`→`.pt`, market별 분리 폐지.
+
 규칙엔진 후보에 대해 "N거래일 후 상승 확률"을 계산해 **보조 근거**로만 추가. 자체 후보를 만들지도, 알림을 필터링하지도 않는다.
 
 | 파일 | 역할 |
@@ -248,7 +254,7 @@ MVP-0+신호 소스 확장(#1~#4)의 4개 분석 함수 + 신규 사이징 tool�
 - LLM 차트분석(#3) — Phase 0~4(문서화 + `code-reviewer`/`security-reviewer` 리뷰까지) 전부 완료. 실제 API 최초 호출만 `OPENAI_API_KEY` 발급 후 사용자가 직접 수행 필요(위 "완료" 섹션 참고).
 - 뉴스/공시 분석(#4) — Phase 0~4(문서화 + `code-reviewer`/`security-reviewer` 리뷰까지) 전부 완료. 실제 API 최초 호출만 `DART_API_KEY`/`SEC_EDGAR_USER_AGENT` 발급 후 사용자가 직접 수행 필요(위 "완료" 섹션 참고).
 - 뉴스 감성분석(#4-뉴스) — 국내(네이버)+미국(GDELT) 양쪽 리뷰까지 전부 완료. 실제 API 최초 호출만 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 발급 후 사용자가 직접 수행 필요, 추가로 네이버 이용약관·GDELT 응답 형식 라이브 재확인도 필요(위 "완료" 섹션 참고).
-- ML 모듈의 나스닥 모델 확장(현재 `MARKET="KRX"` 하드코딩) — 실제 200종목 KRX 학습은 완료됨(`models/ml_predictor/KRX_h5_logreg.metadata.json`, AUC 0.528)
+- ML 모듈 — 2026-10-13 Mamba(통합 단일 모델)로 교체 완료(`docs/design/ml-predictor-mamba-plan.md`). 통합 모델이라 시장별 확장 자체가 더 이상 의미 없음. 실제 아티팩트(`models/ml_predictor/unified_h1_mamba.pt`)는 아직 학습·커밋 전 — `scripts/train_ml_model.py` 실행 필요.
 - `scheduler.py`(장중 폴링)를 실제 실행 경로에 연결
 - 리스크 에이전트의 일일/월간 손실한도 자동중단(집행 로직, MVP-1과 함께)
 - 대화형 에이전트 챗봇(Stage A~E) — 구현 완료(위 "완료: 대화형 챗봇 에이전트" 섹션 참고). 실제 `OPENAI_API_KEY`+`deepagents` 설치 환경에서의 수동 검증(관련기업 탐색·딥다이브·멀티턴·`resolve_ticker` 동작)만 남음

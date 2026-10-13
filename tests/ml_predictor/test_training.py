@@ -1,99 +1,94 @@
 import pytest
-from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+import torch
 
 from auto_stock.ml_predictor.dataset import chronological_split
 from auto_stock.ml_predictor.models import ModelBundle, ModelMetadata
-from auto_stock.ml_predictor.training import RANDOM_STATE, build_estimator, evaluate, train, walk_forward_scores
+from auto_stock.ml_predictor.training import (
+    RANDOM_STATE,
+    MambaRegressor,
+    evaluate,
+    persistence_baseline_metrics,
+    train,
+)
 
 
 def test_random_state_constant_is_zero():
     assert RANDOM_STATE == 0
 
 
-def test_build_estimator_logreg_is_a_scaler_plus_logreg_pipeline():
-    estimator = build_estimator("logreg")
+def test_mamba_regressor_forward_shape():
+    model = MambaRegressor(in_dim=16, hidden_dim=8, n_layers=1)
+    x = torch.randn(3, 20, 16)
 
-    assert isinstance(estimator, Pipeline)
-    assert "scaler" in estimator.named_steps
-    assert "clf" in estimator.named_steps
-    clf = estimator.named_steps["clf"]
-    # penalty is intentionally left at its default (L2) rather than passed explicitly —
-    # scikit-learn 1.8+ deprecates the "l2" string value and removes it in 1.10.
-    assert isinstance(clf, LogisticRegression)
-    assert clf.solver == "lbfgs"
-    assert clf.max_iter == 1000
-    assert clf.random_state == RANDOM_STATE
+    y = model(x)
+
+    assert y.shape == (3, 20)
 
 
-def test_build_estimator_rf_returns_random_forest_with_expected_hyperparams():
-    estimator = build_estimator("rf")
+def test_mamba_regressor_backward_pass_updates_weights():
+    model = MambaRegressor(in_dim=4, hidden_dim=4, n_layers=1)
+    x = torch.randn(2, 10, 4)
+    before = model.output_proj.weight.clone()
 
-    assert isinstance(estimator, RandomForestClassifier)
-    assert estimator.n_estimators == 200
-    assert estimator.max_depth == 6
-    assert estimator.random_state == RANDOM_STATE
+    y = model(x)
+    loss = y.sum()
+    loss.backward()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    optimizer.step()
 
-
-def test_build_estimator_dummy_returns_prior_strategy_classifier():
-    estimator = build_estimator("dummy")
-
-    assert isinstance(estimator, DummyClassifier)
-    assert estimator.strategy == "prior"
-
-
-def test_build_estimator_rejects_unknown_algorithm():
-    with pytest.raises(ValueError):
-        build_estimator("not-a-real-algorithm")
+    assert not torch.allclose(before, model.output_proj.weight)
 
 
 @pytest.mark.slow
-def test_train_fits_logreg_and_returns_bundle_with_metadata(synthetic_training_dataset):
-    split = chronological_split(synthetic_training_dataset, test_ratio=0.2)
+def test_train_fits_mamba_and_returns_bundle_with_metadata(synthetic_sequence_dataset):
+    split = chronological_split(synthetic_sequence_dataset, test_ratio=0.2)
 
-    bundle = train(split, market="KRX", universe_size=1, algorithm="logreg")
+    bundle = train(split, universe_size=2, epochs=2, hidden_dim=4, n_layers=1)
 
     assert isinstance(bundle, ModelBundle)
     assert isinstance(bundle.metadata, ModelMetadata)
-    assert bundle.metadata.market == "KRX"
-    assert bundle.metadata.algorithm == "logreg"
-    assert bundle.metadata.horizon_days == 5
-    assert bundle.metadata.train_samples == len(split.train.samples)
-    assert bundle.metadata.test_samples == len(split.test.samples)
-    assert 0.0 <= bundle.metadata.test_base_rate <= 1.0
-    # Wiring check: the fitted pipeline can score a real feature row.
-    proba = bundle.estimator.predict_proba([[0.0] * len(split.train.feature_names)])
-    assert proba.shape == (1, 2)
+    assert bundle.metadata.market == "UNIFIED"
+    assert bundle.metadata.algorithm == "mamba"
+    assert bundle.metadata.horizon_days == 1
+    assert bundle.metadata.model_config == {"in_dim": len(split.train.feature_names), "hidden_dim": 4, "n_layers": 1}
+    # Wiring check: the state_dict can rebuild a working model.
+    model = MambaRegressor(in_dim=len(split.train.feature_names), hidden_dim=4, n_layers=1)
+    model.load_state_dict(bundle.estimator)
+    with torch.no_grad():
+        out = model(torch.zeros(1, 5, len(split.train.feature_names)))
+    assert out.shape == (1, 5)
 
 
 @pytest.mark.slow
-def test_evaluate_reports_roc_auc_accuracy_and_base_rate(synthetic_training_dataset):
-    split = chronological_split(synthetic_training_dataset, test_ratio=0.2)
-    estimator = build_estimator("logreg")
-    from auto_stock.ml_predictor.dataset import to_xy
+def test_evaluate_reports_mse_rmse_mae_r2(synthetic_sequence_dataset):
+    split = chronological_split(synthetic_sequence_dataset, test_ratio=0.2)
+    model = MambaRegressor(in_dim=len(split.train.feature_names), hidden_dim=4, n_layers=1)
 
-    X_train, y_train = to_xy(split.train)
-    estimator.fit(X_train, y_train)
+    metrics = evaluate(model, split.test, split.train.feature_names)
 
-    metrics = evaluate(estimator, split.test)
-
-    assert set(metrics.keys()) == {"roc_auc", "accuracy", "base_rate"}
-    assert 0.0 <= metrics["accuracy"] <= 1.0
-    assert 0.0 <= metrics["base_rate"] <= 1.0
+    assert set(metrics.keys()) == {"mse", "rmse", "mae", "r2"}
 
 
-@pytest.mark.slow
-def test_walk_forward_scores_uses_time_series_split_and_returns_auc_per_fold(synthetic_training_dataset):
-    scores = walk_forward_scores(synthetic_training_dataset, n_splits=5, algorithm="logreg")
+def test_persistence_baseline_uses_return_1d_feature(synthetic_sequence_dataset):
+    # 전체 데이터셋(두 종목 다 포함, split 없이)에 대해 계산해 "표본이 2개 미만"
+    # 가드에 걸리지 않도록 한다 — chronological_split 적용 후의 작은 test 세트는
+    # 종목이 1개뿐이라 nan을 반환할 수 있다(그 자체가 의도된 방어 동작).
+    metrics = persistence_baseline_metrics(synthetic_sequence_dataset, synthetic_sequence_dataset.feature_names)
 
-    assert isinstance(scores, list)
-    assert len(scores) <= 5
-    assert all(0.0 <= s <= 1.0 for s in scores)
+    assert set(metrics.keys()) == {"mse", "rmse", "mae", "r2"}
+    assert metrics["mse"] >= 0.0
 
 
-def test_walk_forward_scores_never_uses_random_shuffle_split():
+def test_persistence_baseline_returns_nan_when_fewer_than_two_sequences():
+    import auto_stock.ml_predictor.training as training_module
+    from auto_stock.ml_predictor.models import SequenceDataset
+
+    empty = SequenceDataset(sequences=[], feature_names=["return_1d"])
+    metrics = persistence_baseline_metrics(empty, empty.feature_names)
+    assert metrics["mse"] != metrics["mse"]  # nan != nan
+
+
+def test_training_module_never_uses_random_shuffle_split():
     import auto_stock.ml_predictor.training as training_module
 
     assert "train_test_split" not in dir(training_module)

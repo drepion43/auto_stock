@@ -11,7 +11,7 @@ import pytest
 
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.features import FEATURE_NAMES
-from auto_stock.ml_predictor.models import FeatureVector, LabeledSample, TrainingDataset
+from auto_stock.ml_predictor.models import FeatureVector, LabeledSample, SequenceDataset, TickerSequence
 
 
 def make_records(
@@ -60,18 +60,23 @@ def long_records(long_prices) -> list[OHLCVRecord]:
 
 
 @pytest.fixture
-def synthetic_training_dataset() -> TrainingDataset:
-    """LogReg가 배선을 검증할 수 있을 정도로 학습 가능한 관계를 갖는 합성 데이터셋.
+def synthetic_sequence_dataset() -> SequenceDataset:
+    """Mamba가 배선을 검증할 수 있을 정도로 학습 가능한 관계를 갖는 합성 데이터셋.
 
     실제 피처 계산 경로(pandas-ta)를 타지 않고 FeatureVector를 직접 구성한다 —
     training.py 테스트는 "학습 파이프라인이 올바르게 배선됐는가"만 검증하면 충분하다.
-    """
-    rng = random.Random(0)
-    samples: list[LabeledSample] = []
+    종목 2개(길이가 다름)로 가변 길이 배치 패딩/마스킹까지 함께 검증한다."""
     start = date(2020, 1, 1)
-    for i in range(200):
-        values = {name: rng.uniform(-1, 1) for name in FEATURE_NAMES}
-        label = 1 if values["return_1d"] + values["return_5d"] > 0 else 0
-        feature = FeatureVector(ticker="TEST", market="KOSPI", date=start + timedelta(days=i), values=values)
-        samples.append(LabeledSample(feature=feature, label=label))
-    return TrainingDataset(samples=samples, feature_names=FEATURE_NAMES)
+
+    def _sequence(ticker: str, n: int, seed: int) -> TickerSequence:
+        local_rng = random.Random(seed)
+        samples: list[LabeledSample] = []
+        for i in range(n):
+            values = {name: local_rng.uniform(-1, 1) for name in FEATURE_NAMES}
+            label = 0.01 if values["return_1d"] + values["return_5d"] > 0 else -0.01
+            feature = FeatureVector(ticker=ticker, market="KOSPI", date=start + timedelta(days=i), values=values)
+            samples.append(LabeledSample(feature=feature, label=label))
+        return TickerSequence(ticker=ticker, market="KOSPI", samples=samples)
+
+    sequences = [_sequence("AAA", 200, seed=1), _sequence("BBB", 160, seed=2)]
+    return SequenceDataset(sequences=sequences, feature_names=FEATURE_NAMES)

@@ -15,8 +15,14 @@ from datetime import date, timedelta
 
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.service import get_ohlcv
+from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import MLPrediction, ModelBundle
-from auto_stock.ml_predictor.predictor import ML_AGREE_THRESHOLD, ML_CONFLICT_THRESHOLD, predict
+from auto_stock.ml_predictor.predictor import (
+    ML_AGREE_RETURN_THRESHOLD,
+    ML_CONFLICT_RETURN_THRESHOLD,
+    ML_LOOKBACK_DAYS,
+    predict,
+)
 from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
 from auto_stock.rule_engine.engine import generate_candidates
 from auto_stock.rule_engine.models import Candidate
@@ -33,7 +39,10 @@ class ShortlistEntry:
 def _ml_has_directional_opinion(prediction: MLPrediction | None) -> bool:
     if prediction is None:
         return False
-    return prediction.probability_up >= ML_AGREE_THRESHOLD or prediction.probability_up <= ML_CONFLICT_THRESHOLD
+    return (
+        prediction.predicted_return >= ML_AGREE_RETURN_THRESHOLD
+        or prediction.predicted_return <= ML_CONFLICT_RETURN_THRESHOLD
+    )
 
 
 def build_shortlist(
@@ -46,6 +55,8 @@ def build_shortlist(
     end = date.today()
     start = end - timedelta(days=lookback_days)
 
+    ml_start = end - timedelta(days=ML_LOOKBACK_DAYS)
+
     shortlist: list[ShortlistEntry] = []
     errors: list[tuple[str, str]] = []
     for ticker in tickers:
@@ -54,7 +65,14 @@ def build_shortlist(
             candidates = generate_candidates(records)
             rule_candidate = candidates[0] if candidates else None
 
-            ml_prediction = predict(ml_model, records) if ml_model is not None else None
+            if ml_model is not None:
+                # Mamba는 종목 전체 히스토리를 시퀀스로 받는다(MambaStock 원본 방식) —
+                # 규칙엔진용 짧은 lookback(records)과 별도로 더 긴 기간을 다시 조회한다.
+                ml_records = get_ohlcv(cache, ticker, ml_start, end, market)
+                fundamentals = build_fundamentals_by_date(ticker, market, ml_start, end)
+                ml_prediction = predict(ml_model, ml_records, fundamentals)
+            else:
+                ml_prediction = None
 
             if rule_candidate is not None or _ml_has_directional_opinion(ml_prediction):
                 shortlist.append(

@@ -27,7 +27,7 @@ def _judgment(ticker="005930", market="KRX"):
         rule_candidate=None,
         ml_prediction=MLPrediction(
             ticker=ticker, market=market, date=date(2026, 1, 2),
-            probability_up=0.7, top_features=[],
+            predicted_return=0.01,
         ),
         stock_analyst_result={
             "available": True,

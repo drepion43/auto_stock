@@ -5,10 +5,17 @@
 
 from datetime import date, timedelta
 
+import pytest
+
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.models import MLPrediction
 from auto_stock.orchestrator.shortlist import ShortlistEntry, build_shortlist
 from auto_stock.rule_engine.models import Candidate
+
+
+@pytest.fixture(autouse=True)
+def _stub_fundamentals(mocker):
+    mocker.patch("auto_stock.orchestrator.shortlist.build_fundamentals_by_date", return_value=None)
 
 
 def _records(ticker="005930", market="KOSPI", n=2):
@@ -26,17 +33,17 @@ def _candidate(ticker="005930", market="KOSPI"):
     return Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"])
 
 
-def _prediction(ticker="005930", market="KOSPI", probability_up=0.5):
+def _prediction(ticker="005930", market="KOSPI", predicted_return=0.0):
     return MLPrediction(
         ticker=ticker, market=market, date=date(2026, 1, 2),
-        probability_up=probability_up, top_features=[],
+        predicted_return=predicted_return,
     )
 
 
 def test_rule_signal_only_is_included(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records())
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=0.0))
 
     shortlist, errors = build_shortlist(
         cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
@@ -46,17 +53,17 @@ def test_rule_signal_only_is_included(mocker):
     assert shortlist == [
         ShortlistEntry(
             ticker="005930", market="KOSPI",
-            rule_candidate=_candidate(), ml_prediction=_prediction(probability_up=0.5),
+            rule_candidate=_candidate(), ml_prediction=_prediction(predicted_return=0.0),
         )
     ]
 
 
 def test_ml_signal_only_is_included_even_without_rule_candidate(mocker):
-    """규칙엔진이 후보를 못 냈어도 ML이 방향성 있는 의견(상승확률 >= 0.55)을 내면
+    """규칙엔진이 후보를 못 냈어도 ML이 방향성 있는 의견(예상 수익률 >= +0.3%)을 내면
     숏리스트에 들어가야 한다 — AND 게이트 방지가 이 모듈의 핵심 목적."""
     mocker.patch("auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records())
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.7))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=0.01))
 
     shortlist, errors = build_shortlist(
         cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
@@ -65,13 +72,13 @@ def test_ml_signal_only_is_included_even_without_rule_candidate(mocker):
     assert errors == []
     assert len(shortlist) == 1
     assert shortlist[0].rule_candidate is None
-    assert shortlist[0].ml_prediction.probability_up == 0.7
+    assert shortlist[0].ml_prediction.predicted_return == 0.01
 
 
 def test_both_signals_present_included_once(mocker):
     mocker.patch("auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records())
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.1))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=-0.01))
 
     shortlist, errors = build_shortlist(
         cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
@@ -82,11 +89,11 @@ def test_both_signals_present_included_once(mocker):
 
 
 def test_neither_signal_is_excluded(mocker):
-    """규칙엔진 후보 없음 + ML이 중립 구간(0.45~0.55)이면 숏리스트에서 빠져야 비용이
-    통제된다."""
+    """규칙엔진 후보 없음 + ML이 중립 구간(-0.3%~+0.3%)이면 숏리스트에서 빠져야
+    비용이 통제된다."""
     mocker.patch("auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records())
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=0.0))
 
     shortlist, errors = build_shortlist(
         cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock()
@@ -137,7 +144,7 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
 
     mocker.patch("auto_stock.orchestrator.shortlist.get_ohlcv", side_effect=fake_get_ohlcv)
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=0.0))
 
     shortlist, errors = build_shortlist(
         cache=mocker.Mock(), tickers=["005930", "000660"], market="KOSPI", ml_model=mocker.Mock()
@@ -148,14 +155,27 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
     assert errors[0][0] == "000660"
 
 
-def test_fetches_ohlcv_only_once_per_ticker(mocker):
-    """규칙엔진·ML 둘 다 같은 records를 쓰므로 get_ohlcv를 종목당 2번 부르면 낭비다."""
+def test_fetches_ohlcv_twice_per_ticker_when_ml_model_present(mocker):
+    """규칙엔진은 짧은 lookback, ML(Mamba)은 종목 전체 히스토리(ML_LOOKBACK_DAYS)가
+    필요해 서로 다른 기간을 조회한다 — 1회 호출로 공유할 수 없다(MambaStock 원본
+    방식, 사용자 결정)."""
     mock_get_ohlcv = mocker.patch(
         "auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records()
     )
     mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
-    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(probability_up=0.5))
+    mocker.patch("auto_stock.orchestrator.shortlist.predict", return_value=_prediction(predicted_return=0.0))
 
     build_shortlist(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=mocker.Mock())
+
+    assert mock_get_ohlcv.call_count == 2
+
+
+def test_skips_ml_ohlcv_fetch_when_no_model(mocker):
+    mock_get_ohlcv = mocker.patch(
+        "auto_stock.orchestrator.shortlist.get_ohlcv", return_value=_records()
+    )
+    mocker.patch("auto_stock.orchestrator.shortlist.generate_candidates", return_value=[_candidate()])
+
+    build_shortlist(cache=mocker.Mock(), tickers=["005930"], market="KOSPI", ml_model=None)
 
     assert mock_get_ohlcv.call_count == 1

@@ -58,10 +58,10 @@ def build_shortlist(
     돌려도 비용 문제 없음 — scan_market과 동일한 티커별 실패격리 원칙."""
 ```
 
-- "ML이 방향성 있는 의견을 냈다"의 기준은 `predictor.py`가 이미 쓰는 `probability_up >= ML_AGREE_THRESHOLD or probability_up <= ML_CONFLICT_THRESHOLD`를 재사용한다(중립 구간 [0.45, 0.55]는 제외).
+- "ML이 방향성 있는 의견을 냈다"의 기준은 `predictor.py`가 이미 쓰는 `probability_up >= ML_AGREE_THRESHOLD or probability_up <= ML_CONFLICT_THRESHOLD`를 재사용한다(중립 구간 [0.45, 0.55]는 제외). **[2026-10-13 갱신]** ML 모델이 Mamba(regression)로 교체되며 이 기준은 `predicted_return >= ML_AGREE_RETURN_THRESHOLD(0.003) or predicted_return <= ML_CONFLICT_RETURN_THRESHOLD(-0.003)`로 바뀌었다 — 상세: `docs/design/ml-predictor-mamba-plan.md`.
 - `ScanCoordinator._run`이 지금 `scan_market`을 호출하는 자리를, 전체 유니버스 질의 플로우에서는 `build_shortlist`로 교체(또는 신규 코디네이터가 담당 — §5 참고). **`scripts/run_market_scan.py`가 쓰는 무료 경로(`scan_market`)는 그대로 유지** — 텔레그램 발송 등 다른 소비자가 있을 수 있어 하위 호환을 건드리지 않는다.
 
-**[확정, 2026-10-05]** 숏리스트 크기 상한 `N=20` — ML 확률이 0.5에서 먼 정도(|probability_up - 0.5|)와 규칙엔진 후보 존재 여부를 합친 점수로 상위 20개만. 다른 "초기값, 실사용 관찰 후 조정" 상수들과 동일한 성격이라 실사용 후 조정 가능.
+**[확정, 2026-10-05]** 숏리스트 크기 상한 `N=20` — ML 확률이 0.5에서 먼 정도(|probability_up - 0.5|)와 규칙엔진 후보 존재 여부를 합친 점수로 상위 20개만. 다른 "초기값, 실사용 관찰 후 조정" 상수들과 동일한 성격이라 실사용 후 조정 가능. **[2026-10-13 갱신]** Mamba 교체 후 이 점수는 `abs(predicted_return)`로 바뀌었다(`recommendation_coordinator.py::_shortlist_score`).
 
 ### 3. ②단계(심층분석) — `stock_analyst`를 종목별로 재사용, agent 자율성을 우선한다
 

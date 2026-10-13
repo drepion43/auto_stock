@@ -1,6 +1,6 @@
 """MVP-0 + ML 보조 신호(#2) 실행 스크립트 — scripts/run_recommendations.py의 변형.
 
-KRX 로컬 모델 아티팩트(models/ml_predictor/KRX_h5_logreg.joblib)를 로드해
+통합(unified) 단일 모델 아티팩트(models/ml_predictor/unified_h1_mamba.pt)를 로드해
 run_recommendation_pipeline에 ml_model로 전달한다. 아티팩트가 없으면 안내
 메시지를 출력하고 종료한다 — 먼저 scripts/train_ml_model.py를 실행해야 한다.
 
@@ -26,11 +26,10 @@ from auto_stock.risk_sizing.models import AccountState
 
 WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — 둘 다 KOSPI 상장
 MARKET = "KOSPI"
-ML_MODEL_MARKET = "KRX"  # ml_predictor 아티팩트 키 — 재학습 안 함(합성 KRX 유지)
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
 
 try:
-    ml_model = load_model(ML_MODEL_MARKET)
+    ml_model = load_model()
 except ModelArtifactError as exc:
     print(str(exc))
     sys.exit(1)

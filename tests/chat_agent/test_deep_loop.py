@@ -67,7 +67,7 @@ def _price_call(call_id: str = "c1", ticker: str = "005930") -> dict:
 
 def _context(**overrides) -> ChatToolContext:
     values = dict(
-        cache=object(), ml_models={}, llm_client=None, news_client=None, sentiment_client=None,
+        cache=object(), ml_model=None, llm_client=None, news_client=None, sentiment_client=None,
         budget=QueryBudget(max_llm_calls=50), account=None, agent_model="gpt-5.6-luna",
         scan_cache=object(), recommendation_coordinator=object(),
     )

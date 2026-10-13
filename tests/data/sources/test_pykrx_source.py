@@ -17,12 +17,20 @@ def test_get_ticker_list_delegates_to_pykrx(mocker):
     mock_list.assert_called_once_with("20260102", market="KOSPI")
 
 
-def test_get_market_cap_returns_latest_value(mocker):
-    df = pd.DataFrame(
-        {"시가총액": [450_000_000_000_000], "거래량": [10_000_000]},
+def _market_cap_df(market_cap=450_000_000_000_000, volume=10_000_000, trading_value=5_000_000_000, shares=5_969_782_550):
+    return pd.DataFrame(
+        {
+            "시가총액": [market_cap],
+            "거래량": [volume],
+            "거래대금": [trading_value],
+            "상장주식수": [shares],
+        },
         index=pd.to_datetime(["2026-01-02"]),
     )
-    mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=df)
+
+
+def test_get_market_cap_returns_latest_value(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=_market_cap_df())
 
     cap = pykrx_source.get_market_cap("005930", date(2026, 1, 2))
 
@@ -35,6 +43,103 @@ def test_get_market_cap_returns_none_when_no_data(mocker):
     cap = pykrx_source.get_market_cap("000000", date(2026, 1, 2))
 
     assert cap is None
+
+
+def test_get_market_cap_detail_returns_all_fields(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=_market_cap_df())
+
+    detail = pykrx_source.get_market_cap_detail("005930", date(2026, 1, 2))
+
+    assert detail == {
+        "market_cap": 450_000_000_000_000,
+        "volume": 10_000_000,
+        "trading_value": 5_000_000_000,
+        "shares_outstanding": 5_969_782_550,
+    }
+
+
+def test_get_market_cap_detail_returns_none_when_no_data(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=pd.DataFrame())
+
+    assert pykrx_source.get_market_cap_detail("000000", date(2026, 1, 2)) is None
+
+
+def test_get_market_fundamental_returns_all_fields(mocker):
+    df = pd.DataFrame(
+        {
+            "BPS": [37528],
+            "PER": [26.21875],
+            "PBR": [2.210938],
+            "EPS": [3166],
+            "DIV": [1.709961],
+            "DPS": [1416],
+        },
+        index=pd.to_datetime(["2026-01-02"]),
+    )
+    mocker.patch.object(pykrx_source.stock, "get_market_fundamental", return_value=df)
+
+    fundamental = pykrx_source.get_market_fundamental("005930", date(2026, 1, 2))
+
+    assert fundamental == {
+        "per": 26.21875,
+        "pbr": 2.210938,
+        "eps": 3166.0,
+        "bps": 37528.0,
+        "div": 1.709961,
+        "dps": 1416.0,
+    }
+
+
+def test_get_market_fundamental_returns_none_when_no_data(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_fundamental", return_value=pd.DataFrame())
+
+    assert pykrx_source.get_market_fundamental("000000", date(2026, 1, 2)) is None
+
+
+def test_get_market_fundamental_range_keys_by_date(mocker):
+    df = pd.DataFrame(
+        {
+            "BPS": [37528, 37528],
+            "PER": [26.21875, 26.5],
+            "PBR": [2.210938, 2.240234],
+            "EPS": [3166, 3166],
+            "DIV": [1.709961, 1.690430],
+            "DPS": [1416, 1416],
+        },
+        index=pd.to_datetime(["2026-01-02", "2026-01-05"]),
+    )
+    mocker.patch.object(pykrx_source.stock, "get_market_fundamental_by_date", return_value=df)
+
+    result = pykrx_source.get_market_fundamental_range("005930", date(2026, 1, 2), date(2026, 1, 5))
+
+    assert set(result.keys()) == {date(2026, 1, 2), date(2026, 1, 5)}
+    assert result[date(2026, 1, 2)]["per"] == 26.21875
+
+
+def test_get_market_fundamental_range_returns_empty_when_no_data(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_fundamental_by_date", return_value=pd.DataFrame())
+
+    result = pykrx_source.get_market_fundamental_range("000000", date(2026, 1, 2), date(2026, 1, 5))
+
+    assert result == {}
+
+
+def test_get_market_cap_detail_range_keys_by_date(mocker):
+    df = pd.DataFrame(
+        {
+            "시가총액": [450_000_000_000_000, 451_000_000_000_000],
+            "거래량": [10_000_000, 11_000_000],
+            "거래대금": [5_000_000_000, 5_100_000_000],
+            "상장주식수": [5_969_782_550, 5_969_782_550],
+        },
+        index=pd.to_datetime(["2026-01-02", "2026-01-05"]),
+    )
+    mocker.patch.object(pykrx_source.stock, "get_market_cap_by_date", return_value=df)
+
+    result = pykrx_source.get_market_cap_detail_range("005930", date(2026, 1, 2), date(2026, 1, 5))
+
+    assert set(result.keys()) == {date(2026, 1, 2), date(2026, 1, 5)}
+    assert result[date(2026, 1, 5)]["volume"] == 11_000_000
 
 
 def test_resolve_market_downloads_and_caches_on_miss(mocker, tmp_path):

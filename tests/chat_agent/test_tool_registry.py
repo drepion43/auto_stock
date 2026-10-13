@@ -35,7 +35,7 @@ DEEPAGENTS_BUILTIN_TOOL_NAMES = {
 
 def _context() -> ChatToolContext:
     return ChatToolContext(
-        cache=object(), ml_models={}, llm_client=None, news_client=None, sentiment_client=None,
+        cache=object(), ml_model=None, llm_client=None, news_client=None, sentiment_client=None,
         budget=QueryBudget(max_llm_calls=8), account=None, agent_model="gpt-5.6-luna",
         scan_cache=object(), recommendation_coordinator=object(),
     )

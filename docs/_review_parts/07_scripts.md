@@ -1,5 +1,12 @@
 # `scripts/` — 실행 진입점 상세 리뷰
 
+> **2026-10-13 정정 노트**: ML 예측기가 Mamba(통합 단일 모델)로 교체되면서, 이 문서 §2/§3/§4가
+> 설명하는 "market별 `KOSPI_h5_logreg.joblib`/`KRX_h5_logreg.joblib` 아티팩트, `load_model("KOSPI")`
+> 처럼 market 인자를 받는 호출" 서술은 전부 바뀌었다 — 이제 아티팩트는 하나뿐
+> (`models/ml_predictor/unified_h1_mamba.pt`)이고 `load_model()`은 인자를 받지 않는다.
+> `train_ml_model.py`도 더 이상 시장별로 따로 학습하지 않고 KRX+NASDAQ+NYSE 전체를
+> 하나의 모델로 pooled 학습한다. 상세: `docs/design/ml-predictor-mamba-plan.md`.
+
 이 문서는 `scripts/` 디렉터리의 모든 실행 스크립트를 다룬다. 이 스크립트들은 전부 `src/auto_stock/` 패키지의 함수를 "배선"만 하는 얇은 진입점이며, 새로운 비즈니스 로직을 포함하지 않는다. 각 스크립트는 프로젝트 루트에서 실행해야 한다 — 상대경로로 `.env`와 `data/` 디렉터리를 참조하기 때문이다.
 
 ---

@@ -3,7 +3,7 @@
 변형(docs/design/llm-chart-analyst.md "오케스트레이터 통합" / Phase 3,
 docs/design/news-disclosure.md §6, docs/design/news-sentiment.md).
 
-KRX 로컬 ML 모델 아티팩트(models/ml_predictor/KRX_h5_logreg.joblib)와 OpenAI LLM
+통합(unified) 단일 ML 모델 아티팩트(models/ml_predictor/unified_h1_mamba.pt)와 OpenAI LLM
 크리덴셜(.env의 OPENAI_API_KEY)을 모두 로드해 run_recommendation_pipeline에
 ml_model/llm_client/news_client/sentiment_client로 함께 전달한다. ML 아티팩트나
 OPENAI_API_KEY가 없으면 안내 메시지를 출력하고 종료한다 — ML 아티팩트가 없으면 먼저
@@ -49,11 +49,10 @@ from auto_stock.risk_sizing.models import AccountState
 
 WATCHLIST = ["005930", "000660"]  # 삼성전자, SK하이닉스 — 둘 다 KOSPI 상장
 MARKET = "KOSPI"
-ML_MODEL_MARKET = "KRX"  # ml_predictor 아티팩트 키 — 재학습 안 함(합성 KRX 유지)
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
 
 try:
-    ml_model = load_model(ML_MODEL_MARKET)
+    ml_model = load_model()
 except ModelArtifactError as exc:
     print(str(exc))
     sys.exit(1)

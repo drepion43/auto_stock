@@ -37,7 +37,7 @@ class FakeReader:
 def _context(**overrides) -> ChatToolContext:
     values = dict(
         cache=object(),
-        ml_models={},
+        ml_model=None,
         llm_client=None,
         news_client=None,
         sentiment_client=None,

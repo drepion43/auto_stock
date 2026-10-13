@@ -35,7 +35,7 @@ _PROVENANCE_LABEL = "서브에이전트 자율 조사 결과"
 
 _SYSTEM_PROMPT = (
     "당신은 여러 종목의 분석 결과(judgment)를 비교해 최종 추천 순위를 매기는 "
-    "리서치 애널리스트다. 각 judgment는 규칙엔진 후보(rule_candidate)/ML 상승확률"
+    "리서치 애널리스트다. 각 judgment는 규칙엔진 후보(rule_candidate)/ML 예측 수익률"
     "(ml_prediction)/종목별 딥다이브 결과(stock_analyst_result — summary, outlook, "
     "signals_used 포함)로 구성된다. 이 정보를 종합해 상위 top_n개 종목만 순위(rank)와 "
     "구체적 근거(summary)와 함께 반환하라. 두 종목의 우열을 주어진 신호만으로 확신할 "
@@ -83,10 +83,7 @@ def _judgment_to_payload(judgment: TickerJudgment) -> dict:
             else None
         ),
         "ml_prediction": (
-            {
-                "probability_up": judgment.ml_prediction.probability_up,
-                "top_features": judgment.ml_prediction.top_features,
-            }
+            {"predicted_return": judgment.ml_prediction.predicted_return}
             if judgment.ml_prediction is not None
             else None
         ),

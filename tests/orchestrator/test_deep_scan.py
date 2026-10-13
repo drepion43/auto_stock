@@ -18,7 +18,7 @@ def _entry(ticker, market="KOSPI"):
         rule_candidate=Candidate(ticker=ticker, market=market, action="BUY", reasons=["RSI 과매도"]),
         ml_prediction=MLPrediction(
             ticker=ticker, market=market, date=date(2026, 1, 2),
-            probability_up=0.7, top_features=[],
+            predicted_return=0.01,
         ),
     )
 

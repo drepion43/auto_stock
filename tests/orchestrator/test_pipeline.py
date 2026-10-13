@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+import pytest
+
 from auto_stock.explainer.models import Explanation
 from auto_stock.notifier.models import TelegramCredentials
 from auto_stock.notifier.telegram_bot import TelegramNotificationError
@@ -43,6 +45,11 @@ def _sizing(ticker="005930", market="KOSPI"):
 
 def _explanation(ticker="005930", market="KOSPI"):
     return Explanation(ticker=ticker, market=market, action="BUY", summary=f"{ticker}: RSI 과매도.")
+
+
+@pytest.fixture(autouse=True)
+def _stub_fundamentals(mocker):
+    mocker.patch("auto_stock.orchestrator.pipeline.build_fundamentals_by_date", return_value=None)
 
 
 def test_buy_candidate_flows_through_all_stages_and_lands_in_sent(mocker):

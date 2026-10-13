@@ -205,7 +205,7 @@ def _build_shared() -> dict:
         "reader": OpenAIChatAgentClient(agent_config),
         "cache": OHLCVCache("data/ohlcv.duckdb"),
         "scan_cache": MarketScanCache("data/market_scan.duckdb"),
-        "ml_models": chat_cli._load_ml_models(),
+        "ml_model": chat_cli._load_ml_model(),
         "llm_client": chat_cli._load_chart_client(),
         "news_client": chat_cli._load_news_client(),
         "sentiment_client": chat_cli._load_sentiment_client(),
@@ -215,7 +215,7 @@ def _build_shared() -> dict:
 
 def _context(shared: dict, coordinator: _StubCoordinator, loop: str) -> ChatToolContext:
     return ChatToolContext(
-        cache=shared["cache"], ml_models=shared["ml_models"], llm_client=shared["llm_client"],
+        cache=shared["cache"], ml_model=shared["ml_model"], llm_client=shared["llm_client"],
         news_client=shared["news_client"], sentiment_client=shared["sentiment_client"],
         budget=QueryBudget(max_llm_calls=MAX_LLM_CALLS_PER_QUERY), account=shared["account"],
         agent_model=shared["agent_config"].model, scan_cache=shared["scan_cache"],

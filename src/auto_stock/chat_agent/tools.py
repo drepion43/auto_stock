@@ -30,7 +30,6 @@ from auto_stock.chat_agent.ticker_resolution import resolve_ticker
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.market_routing import (
     KRX_MARKETS,
-    ML_MODEL_KEYS,
     NEWS_SOURCE_LABELS,
     SENTIMENT_SOURCE_LABELS,
     US_MARKETS,
@@ -60,8 +59,9 @@ from auto_stock.data.sources.naver_news_source import search_news
 from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
+from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import ModelBundle
-from auto_stock.ml_predictor.predictor import predict
+from auto_stock.ml_predictor.predictor import ML_LOOKBACK_DAYS, predict
 from auto_stock.news_disclosure.analyst import analyze as analyze_disclosures
 from auto_stock.news_disclosure.credentials import DISCLOSURE_LOOKBACK_DAYS
 from auto_stock.news_disclosure.models import DisclosureReader
@@ -85,7 +85,7 @@ class ChatToolContext:
     def __init__(
         self,
         cache: OHLCVCache,
-        ml_models: dict[str, ModelBundle | None],
+        ml_model: ModelBundle | None,
         llm_client: ChartPatternReader | None,
         news_client: DisclosureReader | None,
         sentiment_client: NewsSentimentReader | None,
@@ -97,7 +97,7 @@ class ChatToolContext:
         batch_trigger_limit: int | None = None,
     ) -> None:
         self.cache = cache
-        self.ml_models = ml_models
+        self.ml_model = ml_model
         self.llm_client = llm_client
         self.news_client = news_client
         self.sentiment_client = sentiment_client
@@ -132,6 +132,21 @@ def _fetch_records(context: ChatToolContext, ticker: str, market: str):
     return get_ohlcv(context.cache, ticker, start, end, market)
 
 
+def _fetch_ml_records(context: ChatToolContext, ticker: str, market: str):
+    """ML(Mamba) 추론은 종목 전체 히스토리를 시퀀스로 받는다(MambaStock 원본 방식) —
+    규칙엔진/차트분석용 `_fetch_records`의 짧은 lookback(120일)과 별도로 더 긴
+    기간을 조회한다."""
+    end = date.today()
+    start = end - timedelta(days=ML_LOOKBACK_DAYS)
+    return get_ohlcv(context.cache, ticker, start, end, market)
+
+
+def _fetch_fundamentals(ticker: str, market: str):
+    end = date.today()
+    start = end - timedelta(days=ML_LOOKBACK_DAYS)
+    return build_fundamentals_by_date(ticker, market, start, end)
+
+
 def tool_analyze_rule_engine(context: ChatToolContext, ticker: str, market: str) -> dict:
     try:
         records = _fetch_records(context, ticker, market)
@@ -145,23 +160,20 @@ def tool_analyze_rule_engine(context: ChatToolContext, ticker: str, market: str)
 
 
 def tool_analyze_ml_prediction(context: ChatToolContext, ticker: str, market: str) -> dict:
-    model_key = ML_MODEL_KEYS.get(market)
-    model = context.ml_models.get(model_key) if model_key is not None else None
+    model = context.ml_model
     if model is None:
-        return {"available": False, "error": f"{market} 시장에 학습된 ML 모델이 없습니다"}
+        return {"available": False, "error": "학습된 ML 모델이 없습니다"}
     try:
-        records = _fetch_records(context, ticker, market)
-        prediction = predict(model, records)
+        records = _fetch_ml_records(context, ticker, market)
+        fundamentals = _fetch_fundamentals(ticker, market)
+        prediction = predict(model, records, fundamentals)
     except Exception as exc:
         return {"available": False, "error": str(exc)}
     if prediction is None:
         return {"available": True, "prediction": None}
     return {
         "available": True,
-        "prediction": {
-            "probability_up": prediction.probability_up,
-            "top_features": prediction.top_features,
-        },
+        "prediction": {"predicted_return": prediction.predicted_return},
     }
 
 

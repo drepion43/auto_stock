@@ -1,23 +1,22 @@
-"""ML 예측 모델(#2) 학습 스크립트 — logreg/rf/dummy 3종 평가 리포트 후 logreg만 저장.
+"""ML 예측 모델(#2) 학습 스크립트 — MambaStock 기반 PyTorch Mamba SSM, 통합(unified) 단일 모델.
 
-rf/dummy는 평가 리포트 전용 벤치마크이며 프로덕션에는 배선하지 않는다
-(docs/design/ml-predictor.md 핵심 설계 결정 1). 승격 규칙: RandomForest가
-walk-forward AUC 중앙값 기준 LogReg 대비 +0.02 이상 우세할 때만 재검토한다.
+**2026-10-13부로 production 모델이 scikit-learn LogisticRegression에서 Mamba(SSM)로
+교체됐다**(docs/design/ml-predictor-mamba-plan.md) — 계수 기반 설명가능성(Explainability)은
+포기하고(사용자 승인된 트레이드오프), 예측 수익률(regression) 자체를 신호로 쓴다.
+market/종목별로 모델을 나누지 않고 **KRX(코스피+코스닥)+NASDAQ+NYSE 전체 유니버스를
+하나의 통합 모델로 pooled 학습**한다(사용자 결정) — 과거 "두 시장을 하나로 합치면
+계수 해석이 무의미해진다"는 이유는 더 이상 적용되지 않는다(Mamba는 애초에 계수
+해석을 제공하지 않음).
 
-2026-09-27부로 KRX/NASDAQ 둘 다 순회하며 시장별로 독립된 아티팩트를 학습·저장한다
-(`run_market_scan.py`의 NASDAQ 확장과 동일한 패턴) — 두 시장을 하나로 합쳐 학습하지
-않는다: 거래시간·업종 구성·규제가 근본적으로 달라 계수(coefficient)가 "두 시장 평균
-효과"로 뭉개지면 PRD §5가 LogisticRegression을 고른 이유인 Explainability(피처별
-기여도 해석)가 훼손된다(사용자 확인, 2026-09-27). `save_model`/`load_model`은 이미
-market별로 아티팩트 경로를 분리하므로(`ml_predictor/artifact.py`), 이 스크립트만
-시장을 순회하도록 바꾸면 충분하다.
+PER/PBR/배당수익률/회전율/PSR 등 국내전용 펀더멘털 피처는 KOSPI/KOSDAQ 종목에만
+채워지고 NASDAQ/NYSE는 중립값으로 깔린다(`features.py` 참고).
 
 Run from the project root so `data/` resolves correctly:
     .venv/Scripts/python scripts/train_ml_model.py   (Windows)
     .venv/bin/python scripts/train_ml_model.py        (macOS/Linux)
 
-스모크 테스트(작은 유니버스/짧은 lookback)로 빠르게 돌려보려면:
-    ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 .venv/Scripts/python scripts/train_ml_model.py
+스모크 테스트(작은 유니버스/짧은 lookback/적은 epoch)로 빠르게 돌려보려면:
+    ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5 .venv/Scripts/python scripts/train_ml_model.py
 """
 
 import os
@@ -29,28 +28,33 @@ from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.service import get_ohlcv, get_universe
 from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.ml_predictor.artifact import save_model
-from auto_stock.ml_predictor.dataset import build_training_dataset, chronological_split, to_xy
-from auto_stock.ml_predictor.training import build_estimator, evaluate, train, walk_forward_scores
+from auto_stock.ml_predictor.dataset import build_sequence_dataset, chronological_split
+from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
+from auto_stock.ml_predictor.training import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_EPOCHS,
+    DEFAULT_HIDDEN_DIM,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_N_LAYERS,
+    DEFAULT_WEIGHT_DECAY,
+    persistence_baseline_metrics,
+    train,
+)
 from auto_stock.orchestrator.market_buckets import bucket_markets
 
-# "KRX"/"NASDAQ" 2분류는 모델 아티팩트 라벨로 그대로 유지한다(사용자 결정 — ML은
-# 재학습하지 않고 합성 KRX를 유지, market 세분화 작업 범위 밖). 다만 유니버스
-# 조회와 OHLCV 조회는 원자 market만 받으므로(`data/models.py::VALID_MARKETS`),
-# "KRX"는 KOSPI+KOSDAQ 합집합으로 유니버스를 모으고 종목별 실제 소속 거래소를
-# 역조회해 OHLCV를 가져온다.
-MARKETS = ["KRX", "NASDAQ"]
+UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]  # bucket_markets로 원자 거래소 전체 합집합
 UNIVERSE_SIZE = int(os.environ.get("ML_TRAIN_UNIVERSE_SIZE", 200))
 LOOKBACK_YEARS = int(os.environ.get("ML_TRAIN_LOOKBACK_YEARS", 5))
-REPORT_ALGORITHMS = ("logreg", "rf", "dummy")
-PRODUCTION_ALGORITHM = "logreg"
+EPOCHS = int(os.environ.get("ML_TRAIN_EPOCHS", DEFAULT_EPOCHS))
+BATCH_SIZE = int(os.environ.get("ML_TRAIN_BATCH_SIZE", DEFAULT_BATCH_SIZE))
+LEARNING_RATE = float(os.environ.get("ML_TRAIN_LR", DEFAULT_LEARNING_RATE))
+HIDDEN_DIM = int(os.environ.get("ML_TRAIN_HIDDEN_DIM", DEFAULT_HIDDEN_DIM))
+N_LAYERS = int(os.environ.get("ML_TRAIN_N_LAYERS", DEFAULT_N_LAYERS))
 
 
 def _universe_for(market: str) -> list[str]:
-    """`market`이 합성 "KRX"면 `bucket_markets`(원자 market들의 합집합 정의,
-    `orchestrator/market_buckets.py`)로 KOSPI+KOSDAQ을 각각 조회해 중복 없이 합친다
-    (처음 등장한 순서 보존 — `data/service.py::get_universe_union`과 동일한 관용구,
-    그 함수는 아직 scan_coordinator 전용으로만 쓰여 여기서는 재사용하지 않고 직접
-    구현). 원자 market이면 그대로 `get_universe`."""
+    """`market`이 합성 "KRX"면 `bucket_markets`로 KOSPI+KOSDAQ을 각각 조회해 중복
+    없이 합친다(처음 등장한 순서 보존). 원자 market이면 그대로 `get_universe`."""
     atomic_markets = bucket_markets(market)
     if len(atomic_markets) == 1 and atomic_markets[0] == market:
         return get_universe(market)
@@ -74,70 +78,76 @@ def _atomic_market_for(ticker: str, market: str) -> str:
 
 def _collect_universe_records(
     cache: OHLCVCache, tickers: list[str], start: date, end: date, market: str
-) -> list[list]:
+) -> tuple[list[list], list]:
+    """OHLCV 레코드와, 국내 종목에 대해서만 채워진 펀더멘털(dict | None)을
+    1:1 대응 리스트로 함께 수집한다 — 미국 종목은 fundamentals가 None(중립값 폴백)."""
     all_records = []
+    all_fundamentals = []
     skipped = 0
-    progress = tqdm(tickers, desc="OHLCV 수집", unit="종목")
+    progress = tqdm(tickers, desc=f"[{market}] OHLCV 수집", unit="종목")
     for ticker in progress:
         try:
             atomic_market = _atomic_market_for(ticker, market)
             records = get_ohlcv(cache, ticker, start, end, atomic_market)
             if records:
                 all_records.append(records)
+                all_fundamentals.append(build_fundamentals_by_date(ticker, atomic_market, start, end))
         except Exception as exc:  # per-ticker isolation, same principle as the orchestrator
             skipped += 1
             tqdm.write(f"  스킵 {ticker}: {exc}")
         progress.set_postfix(로드=len(all_records), 스킵=skipped)
-    return all_records
-
-
-def _train_one_market(cache: OHLCVCache, market: str) -> None:
-    tickers = _universe_for(market)[:UNIVERSE_SIZE]
-    end = date.today()
-    start = end - timedelta(days=365 * LOOKBACK_YEARS)
-
-    print(f"[{market}] 유니버스: {len(tickers)}종목, 기간: {start} ~ {end}")
-    all_records = _collect_universe_records(cache, tickers, start, end, market)
-
-    dataset = build_training_dataset(all_records)
-    split = chronological_split(dataset)
-
-    if not split.train.samples or not split.test.samples:
-        print(f"[{market}] 학습/테스트 표본이 부족합니다 - lookback을 늘리거나 유니버스를 확장하세요.")
-        return
-
-    train_start = split.train.samples[0].feature.date
-    train_end = split.train.samples[-1].feature.date
-    test_start = split.test.samples[0].feature.date
-    test_end = split.test.samples[-1].feature.date
-    print(f"[{market}] 학습 구간: {train_start} ~ {train_end} ({len(split.train.samples)}건)")
-    print(f"[{market}] 테스트 구간: {test_start} ~ {test_end} ({len(split.test.samples)}건)")
-
-    X_train, y_train = to_xy(split.train)
-    base_rate = sum(y_train) / len(y_train) if y_train else float("nan")
-    print(f"[{market}] 학습 세트 base rate(상승 비율): {base_rate:.3f}")
-
-    for algorithm in REPORT_ALGORITHMS:
-        estimator = build_estimator(algorithm)
-        estimator.fit(X_train, y_train)
-        metrics = evaluate(estimator, split.test)
-        wf_scores = walk_forward_scores(split.train, algorithm=algorithm)
-        wf_mean = sum(wf_scores) / len(wf_scores) if wf_scores else float("nan")
-        print(
-            f"[{market}][{algorithm}] test AUC={metrics['roc_auc']:.3f} accuracy={metrics['accuracy']:.3f} "
-            f"base_rate={metrics['base_rate']:.3f} | walk-forward AUC(5-fold, mean)={wf_mean:.3f} "
-            f"(folds={len(wf_scores)})"
-        )
-
-    bundle = train(split, market=market, universe_size=len(all_records), algorithm=PRODUCTION_ALGORITHM)
-    path = save_model(bundle)
-    print(f"[{market}] 저장 완료: {path} (+ {path.with_suffix('.metadata.json')})")
+    return all_records, all_fundamentals
 
 
 def main() -> None:
     cache = OHLCVCache("data/ohlcv.duckdb")
-    for market in MARKETS:
-        _train_one_market(cache, market)
+    end = date.today()
+    start = end - timedelta(days=365 * LOOKBACK_YEARS)
+
+    all_records: list[list] = []
+    all_fundamentals: list = []
+    for market in UNIVERSE_MARKETS:
+        tickers = _universe_for(market)[:UNIVERSE_SIZE]
+        print(f"[{market}] 유니버스: {len(tickers)}종목, 기간: {start} ~ {end}")
+        records, fundamentals = _collect_universe_records(cache, tickers, start, end, market)
+        all_records.extend(records)
+        all_fundamentals.extend(fundamentals)
+
+    dataset = build_sequence_dataset(all_records, all_fundamentals)
+    split = chronological_split(dataset)
+
+    if not split.train.sequences or not split.test.sequences:
+        print("학습/테스트 표본이 부족합니다 - lookback을 늘리거나 유니버스를 확장하세요.")
+        return
+
+    train_dates = [s.feature.date for seq in split.train.sequences for s in seq.samples]
+    test_dates = [s.feature.date for seq in split.test.sequences for s in seq.samples]
+    print(f"학습 구간: {min(train_dates)} ~ {max(train_dates)} ({len(split.train.sequences)}종목)")
+    print(f"테스트 구간: {min(test_dates)} ~ {max(test_dates)} ({len(split.test.sequences)}종목)")
+
+    baseline = persistence_baseline_metrics(split.test, split.train.feature_names)
+    print(
+        f"[persistence baseline] MSE={baseline['mse']:.6f} RMSE={baseline['rmse']:.6f} "
+        f"MAE={baseline['mae']:.6f} R2={baseline['r2']:.4f}"
+    )
+
+    bundle = train(
+        split,
+        universe_size=len(all_records),
+        hidden_dim=HIDDEN_DIM,
+        n_layers=N_LAYERS,
+        epochs=EPOCHS,
+        learning_rate=LEARNING_RATE,
+        weight_decay=DEFAULT_WEIGHT_DECAY,
+        batch_size=BATCH_SIZE,
+    )
+    print(
+        f"[mamba] test MSE={bundle.metadata.test_mse:.6f} RMSE={bundle.metadata.test_rmse:.6f} "
+        f"MAE={bundle.metadata.test_mae:.6f} R2={bundle.metadata.test_r2:.4f}"
+    )
+
+    path = save_model(bundle)
+    print(f"저장 완료: {path} (+ {path.with_suffix('.metadata.json')})")
 
 
 if __name__ == "__main__":

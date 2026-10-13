@@ -41,8 +41,9 @@ from auto_stock.explainer.generator import generate_explanation
 from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
 from auto_stock.llm_chart_analyst.analyst import to_reasons as to_chart_reasons
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
+from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import ModelBundle
-from auto_stock.ml_predictor.predictor import predict, to_reasons
+from auto_stock.ml_predictor.predictor import ML_LOOKBACK_DAYS, predict, to_reasons
 from auto_stock.news_disclosure.analyst import analyze as analyze_disclosures
 from auto_stock.news_disclosure.analyst import to_reasons as to_disclosure_reasons
 from auto_stock.news_disclosure.credentials import DISCLOSURE_LOOKBACK_DAYS
@@ -62,13 +63,21 @@ DEFAULT_LOOKBACK_DAYS = 120  # SMA60 warmup + ATR(14), padded for weekends/holid
 
 
 def _ml_reasons(
-    ml_model: ModelBundle | None, records: list[OHLCVRecord], action: str
+    ml_model: ModelBundle | None, cache: OHLCVCache, ticker: str, market: str, action: str
 ) -> tuple[list[str], str | None]:
-    """절대 raise하지 않는다 — ML 실패가 추천 발송을 막아서는 안 된다(설계 결정 5)."""
+    """절대 raise하지 않는다 — ML 실패가 추천 발송을 막아서는 안 된다(설계 결정 5).
+
+    규칙엔진용 `records`(짧은 lookback)를 그대로 재사용하지 않는다 — Mamba는 종목
+    전체 히스토리를 시퀀스로 받아야 하므로(MambaStock 원본 방식) 자체적으로 더 긴
+    기간(`ML_LOOKBACK_DAYS`)을 다시 조회한다."""
     if ml_model is None:
         return [], None
     try:
-        prediction = predict(ml_model, records)
+        end = date.today()
+        start = end - timedelta(days=ML_LOOKBACK_DAYS)
+        ml_records = get_ohlcv(cache, ticker, start, end, market)
+        fundamentals = build_fundamentals_by_date(ticker, market, start, end)
+        prediction = predict(ml_model, ml_records, fundamentals)
         return to_reasons(prediction, action), None
     except Exception as exc:  # ML failure is isolated the same way per-ticker errors are
         return [], str(exc)
@@ -218,7 +227,7 @@ def run_recommendation_pipeline(
                     explanation = generate_explanation(candidate, sizing)
                 else:
                     extra_reasons: list[str] = []
-                    ml_r, ml_error = _ml_reasons(ml_model, records, candidate.action)
+                    ml_r, ml_error = _ml_reasons(ml_model, cache, ticker, market, candidate.action)
                     extra_reasons.extend(ml_r)
                     llm_r, llm_error = _llm_reasons(llm_client, records, candidate.action)
                     extra_reasons.extend(llm_r)

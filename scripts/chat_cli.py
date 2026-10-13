@@ -91,7 +91,6 @@ from auto_stock.orchestrator.recommendation_coordinator import RecommendationCoo
 from auto_stock.risk_sizing.models import AccountState
 
 DEFAULT_ACCOUNT_EQUITY = 10_000_000.0
-_ML_MODEL_MARKETS = ["KRX", "NASDAQ"]  # ml_predictor 아티팩트 키 — 재학습 안 함(합성 KRX 유지)
 _SCAN_BUCKETS = ["KRX", "US"]  # 선제 스캔 트리거 — 국내(코스피+코스닥)/미국(나스닥+NYSE)
 _EXIT_COMMANDS = {"exit", "quit", "종료"}
 _RESULT_PREVIEW_MAX_CHARS = 200  # tool 결과가 길면(공시/뉴스 해석 등) 터미널을 뒤덮지 않도록 절단
@@ -125,14 +124,11 @@ class _ActivityPrinter:
             print(f"  [{self._current_index}]     -> {result_preview}")
 
 
-def _load_ml_models() -> dict:
-    models = {}
-    for market in _ML_MODEL_MARKETS:
-        try:
-            models[market] = load_model(market)
-        except ModelArtifactError:
-            models[market] = None  # 대화형이라 없어도 계속 진행 — 해당 도구만 available=False
-    return models
+def _load_ml_model():
+    try:
+        return load_model()
+    except ModelArtifactError:
+        return None  # 대화형이라 없어도 계속 진행 — 해당 도구만 available=False
 
 
 def _load_chart_client() -> OpenAIChartClient | None:
@@ -183,7 +179,7 @@ def main() -> None:
     reader = OpenAIChatAgentClient(agent_config)
     cache = OHLCVCache("data/ohlcv.duckdb")
     scan_cache = MarketScanCache("data/market_scan.duckdb")
-    ml_models = _load_ml_models()
+    ml_model = _load_ml_model()
     llm_client = _load_chart_client()
     news_client = _load_news_client()
     sentiment_client = _load_sentiment_client()
@@ -195,7 +191,7 @@ def main() -> None:
     recommendation_coordinator = RecommendationCoordinator(
         cache=cache,
         scan_cache=scan_cache,
-        ml_models=ml_models,
+        ml_model=ml_model,
         llm_client=llm_client,
         news_client=news_client,
         sentiment_client=sentiment_client,
@@ -225,7 +221,7 @@ def main() -> None:
 
         context = ChatToolContext(
             cache=cache,
-            ml_models=ml_models,
+            ml_model=ml_model,
             llm_client=llm_client,
             news_client=news_client,
             sentiment_client=sentiment_client,

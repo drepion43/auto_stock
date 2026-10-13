@@ -32,12 +32,51 @@ def get_ticker_list(as_of: date, market: str = "ALL") -> list[str]:
 
 def get_market_cap(ticker: str, as_of: date) -> int | None:
     """특정 종목의 특정일자 시가총액. 데이터가 없으면 None."""
+    detail = get_market_cap_detail(ticker, as_of)
+    return None if detail is None else detail["market_cap"]
+
+
+def get_market_cap_detail(ticker: str, as_of: date) -> dict | None:
+    """특정 종목의 특정일자 시가총액/거래량/거래대금/상장주식수. 데이터가 없으면 None.
+
+    회전율(거래량/상장주식수)을 계산하려면 거래량과 상장주식수가 모두 필요한데,
+    `get_market_cap`이 이미 같은 pykrx 호출로 둘 다 받고 있던 걸 시가총액만 뽑고
+    버리고 있었다 — 이 함수가 그 나머지 컬럼까지 노출한다(ml_predictor 신규
+    펀더멘털 피처용). 일별로 바뀌는 값이라 캐싱하지 않는다(investor_flow.py와
+    동일한 "일별 변동 데이터는 캐싱 안 함" 관례)."""
     load_dotenv()
     date_str = as_of.strftime("%Y%m%d")
     df = stock.get_market_cap(date_str, date_str, ticker)
     if df.empty:
         return None
-    return int(df.iloc[-1]["시가총액"])
+    row = df.iloc[-1]
+    return {
+        "market_cap": int(row["시가총액"]),
+        "volume": int(row["거래량"]),
+        "trading_value": int(row["거래대금"]),
+        "shares_outstanding": int(row["상장주식수"]),
+    }
+
+
+def get_market_fundamental(ticker: str, as_of: date) -> dict | None:
+    """특정 종목의 특정일자 PER/PBR/EPS/BPS/DIV/DPS. 데이터가 없으면 None(에러 아님).
+
+    DIV(배당수익률)/PER/PBR은 당일 종가 기준으로 매일 바뀌므로 캐싱하지 않는다
+    (get_market_cap_detail과 동일 원칙)."""
+    load_dotenv()
+    date_str = as_of.strftime("%Y%m%d")
+    df = stock.get_market_fundamental(date_str, date_str, ticker)
+    if df.empty:
+        return None
+    row = df.iloc[-1]
+    return {
+        "per": float(row["PER"]),
+        "pbr": float(row["PBR"]),
+        "eps": float(row["EPS"]),
+        "bps": float(row["BPS"]),
+        "div": float(row["DIV"]),
+        "dps": float(row["DPS"]),
+    }
 
 
 def _download_ticker_market_map() -> dict[str, str]:
@@ -78,6 +117,48 @@ def _load_or_refresh_ticker_market_map(cache_path: Path, refresh_days: int) -> d
     tmp_path.write_text(json.dumps(mapping), encoding="utf-8")
     os.replace(tmp_path, cache_path)
     return mapping
+
+
+def get_market_fundamental_range(ticker: str, start: date, end: date) -> dict[date, dict]:
+    """`[start, end]` 구간 전체의 PER/PBR/EPS/BPS/DIV/DPS를 날짜별 dict로 반환한다.
+
+    ml_predictor가 종목의 과거 전체 시퀀스를 만들 때 날짜마다 반복 호출(단일일자 조회)하는
+    대신 한 번에 구간 전체를 받는다 — pykrx가 날짜 범위 조회를 기간조회 함수로 따로 제공하므로
+    그걸 그대로 쓴다. 거래일이 아닌 날짜(휴장일)는 결과에 없다(에러 아님) — 호출부가 날짜별로
+    `.get(d)`로 조회해 없으면 None으로 취급해야 한다."""
+    load_dotenv()
+    df = stock.get_market_fundamental_by_date(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
+    if df.empty:
+        return {}
+    return {
+        row_date.date(): {
+            "per": float(row["PER"]),
+            "pbr": float(row["PBR"]),
+            "eps": float(row["EPS"]),
+            "bps": float(row["BPS"]),
+            "div": float(row["DIV"]),
+            "dps": float(row["DPS"]),
+        }
+        for row_date, row in df.iterrows()
+    }
+
+
+def get_market_cap_detail_range(ticker: str, start: date, end: date) -> dict[date, dict]:
+    """`[start, end]` 구간 전체의 시가총액/거래량/거래대금/상장주식수를 날짜별 dict로 반환한다.
+    `get_market_fundamental_range`와 동일한 이유로 기간조회 함수를 쓴다."""
+    load_dotenv()
+    df = stock.get_market_cap_by_date(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
+    if df.empty:
+        return {}
+    return {
+        row_date.date(): {
+            "market_cap": int(row["시가총액"]),
+            "volume": int(row["거래량"]),
+            "trading_value": int(row["거래대금"]),
+            "shares_outstanding": int(row["상장주식수"]),
+        }
+        for row_date, row in df.iterrows()
+    }
 
 
 def resolve_market(

@@ -19,6 +19,9 @@ dependencies = [
     "scikit-learn>=1.4",
     "joblib",
     "numpy",
+    # ml_predictor의 production 모델(Mamba SSM, src/auto_stock/ml_predictor/mamba_block.py)이
+    # PyTorch 기반이다 — CPU 전용으로 충분하다(기존 파이프라인 전체가 CPU 전제, GPU 코드 없음).
+    "torch",
     "tqdm",
     "openai>=3.5,<4",
     "defusedxml",

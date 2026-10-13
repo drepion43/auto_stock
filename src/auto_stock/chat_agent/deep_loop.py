@@ -224,7 +224,7 @@ def verify_exposure() -> None:
     deep 모드 시작 시 1회 호출한다."""
     probe = _ProbeModel()
     context = ChatToolContext(
-        cache=None, ml_models={}, llm_client=None, news_client=None, sentiment_client=None,
+        cache=None, ml_model=None, llm_client=None, news_client=None, sentiment_client=None,
         budget=QueryBudget(max_llm_calls=0), account=None, agent_model="", scan_cache=None,
         recommendation_coordinator=None,
     )
