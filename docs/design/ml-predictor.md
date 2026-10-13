@@ -1,5 +1,12 @@
 # ML 예측 모듈 (#2) 구현 가이드
 
+> **2026-10-13 정정 노트 — 이 문서는 역사적 기록이다.** 아래 내용(scikit-learn `LogisticRegression`,
+> 5거래일 후 상승 확률 분류, `probability_up`/`top_features`, market별 `{market}_h5_logreg.joblib`
+> 아티팩트)은 더 이상 production 구현이 아니다. 현재 모델은 Mamba(PyTorch SSM)이며, KRX+NASDAQ+NYSE
+> 통합 단일 모델로 다음 거래일 수익률을 regression한다(`MLPrediction.predicted_return`,
+> `models/ml_predictor/unified_h1_mamba.pt`, `load_model()` 인자 없음). 계수 기반 설명가능성은
+> 사용자 승인 하에 포기했다. 현재 설계: `docs/design/ml-predictor-mamba-plan.md`.
+
 > `docs/design/ml-predictor.md`(구현 착수 전 계획)를 실제로 구현한 뒤 작성한 결과 문서. `docs/design/rule-engine.md`, `docs/design/orchestrator.md`와 같은 위치·형식.
 
 ## 목적

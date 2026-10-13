@@ -1,5 +1,8 @@
 # ML 예측 모듈 (#2) 구현 계획
 
+> **2026-10-13 정정 노트**: 이 계획(LogisticRegression 기반)은 구현·운영된 뒤 Mamba(PyTorch SSM, 통합 단일
+> 모델, 다음 거래일 수익률 regression)로 대체됐다. 현재 설계: `docs/design/ml-predictor-mamba-plan.md`.
+
 > `docs/IMPLEMENTATION_PLAN.md`의 "신호 소스 확장" §1(ML #2)을 실행 가능한 수준으로 구체화한 사전 계획 문서. `docs/design/rule-engine.md`, `docs/design/orchestrator.md`와 같은 위치·형식을 따르되, 이 문서는 **구현 착수 전 계획**이다 — 구현이 끝난 뒤에는 실제로 무엇을 어떻게 만들었는지 기록하는 `docs/design/ml-predictor.md`를 별도로 작성한다 (Phase 4 참고).
 
 ## 배경
