@@ -20,9 +20,12 @@ dependencies = [
     "joblib",
     "numpy",
     # ml_predictor의 production 모델(Mamba SSM, src/auto_stock/ml_predictor/mamba_block.py)이
-    # PyTorch 기반이다 — CPU 전용으로 충분하다(기존 파이프라인 전체가 CPU 전제, GPU 코드 없음).
+    # PyTorch 기반이다. 추론은 CPU로 충분하고, 학습은 GPU가 있으면 GPU를 쓴다
+    # (training.py::resolve_device). Windows의 CUDA 빌드는 아래 [tool.uv.sources] 참고.
     "torch",
     "tqdm",
+    # 학습 곡선 PNG(ml_predictor/reporting.py). 기존에도 간접 의존성으로 설치돼 있었다.
+    "matplotlib",
     "openai>=3.5,<4",
     "defusedxml",
     "pydantic>=2",
@@ -40,6 +43,17 @@ dev = [
     "pytest-mock",
     "pytest-cov",
 ]
+
+# PyPI의 Windows용 torch는 CPU 빌드뿐이라 Windows에서만 PyTorch CUDA 13.0 인덱스를 쓴다.
+# cu130은 RTX 50(Blackwell, sm_120)을 지원하고 드라이버 CUDA 13.x와 맞는다. Linux PyPI torch는
+# 이미 CUDA 포함, macOS는 CPU/MPS라 그대로 둔다. GPU 없는 Windows에서도 CPU로 정상 동작한다.
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32'" }]
 
 [tool.setuptools.packages.find]
 where = ["src"]

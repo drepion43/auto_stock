@@ -1,11 +1,7 @@
 # `scripts/` — 실행 진입점 상세 리뷰
 
-> **2026-10-13 정정 노트**: ML 예측기가 Mamba(통합 단일 모델)로 교체되면서, 이 문서 §2/§3/§4가
-> 설명하는 "market별 `KOSPI_h5_logreg.joblib`/`KRX_h5_logreg.joblib` 아티팩트, `load_model("KOSPI")`
-> 처럼 market 인자를 받는 호출" 서술은 전부 바뀌었다 — 이제 아티팩트는 하나뿐
-> (`models/ml_predictor/unified_h1_mamba.pt`)이고 `load_model()`은 인자를 받지 않는다.
-> `train_ml_model.py`도 더 이상 시장별로 따로 학습하지 않고 KRX+NASDAQ+NYSE 전체를
-> 하나의 모델로 pooled 학습한다. 상세: `docs/design/ml-predictor-mamba-plan.md`.
+> **2026-10-14 갱신**: ML 관련 서술(§2/§3/§6, 환경변수 표, 실행 가이드)을 현재 코드 기준(Mamba 통합 단일 모델
+> `models/ml_predictor/unified_h1_mamba.pt`, 인자 없는 `load_model()`, GPU 학습, `scripts/train_full.sh`)으로 고쳤다.
 
 이 문서는 `scripts/` 디렉터리의 모든 실행 스크립트를 다룬다. 이 스크립트들은 전부 `src/auto_stock/` 패키지의 함수를 "배선"만 하는 얇은 진입점이며, 새로운 비즈니스 로직을 포함하지 않는다. 각 스크립트는 프로젝트 루트에서 실행해야 한다 — 상대경로로 `.env`와 `data/` 디렉터리를 참조하기 때문이다.
 
@@ -44,16 +40,14 @@
 .venv/Scripts/python scripts/run_recommendations_with_ml.py   (Windows)
 .venv/bin/python scripts/run_recommendations_with_ml.py        (macOS/Linux)
 ```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. 추가로 `models/ml_predictor/KOSPI_h5_logreg.joblib` 아티팩트가 **파일로** 존재해야 한다(환경변수가 아니라 디스크 아티팩트 의존).
+필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. 추가로 통합 ML 모델 `models/ml_predictor/unified_h1_mamba.pt`(+ `.metadata.json`)가 **파일로** 존재해야 한다.
 선택 환경변수: `ACCOUNT_EQUITY`.
 
-**동작 흐름**: 시작 시 `load_model("KOSPI")`로 로컬 아티팩트를 먼저 로드(`run_recommendations_with_ml.py:31-35`), 성공하면 `run_recommendation_pipeline(..., ml_model=ml_model)`로 ML 근거를 `extra_reasons`에 병합해 호출(`run_recommendations_with_ml.py:45-48`). 나머지는 `run_recommendations.py`와 동일한 2종목 워치리스트.
+**동작 흐름**: 시작 시 `load_model()`(인자 없음)로 통합 모델을 먼저 로드하고, 성공하면 `run_recommendation_pipeline(..., ml_model=ml_model)`로 ML 근거를 `extra_reasons`에 병합해 호출. `_ml_reasons`는 규칙엔진용 120일이 아니라 `ML_LOOKBACK_DAYS`(3년)치를 따로 조회한다. 나머지는 `run_recommendations.py`와 동일한 2종목 워치리스트(`MARKET = "KOSPI"`).
 
-**API 호출**: 텔레그램만(무료). ML 추론은 로컬 모델이라 외부 API 호출 아님.
+**API 호출**: 텔레그램만(무료). ML 추론은 로컬 모델(CPU)이라 외부 API 호출 아님. 국내 종목은 pykrx 펀더멘털 조회가 추가된다.
 
-**종료/실패 조건**: `load_model("KOSPI")`가 `ModelArtifactError`를 던지면(아티팩트 파일 없음) 에러 메시지를 출력하고 `sys.exit(1)`로 즉시 종료한다(`run_recommendations_with_ml.py:31-35`) — 먼저 `train_ml_model.py`를 실행해 아티팩트를 만들어야 한다.
-
-> **market 세분화(2026-10)**: 아티팩트 파일명이 market 값을 그대로 쓰므로(`ml_predictor/artifact.py::artifact_path`), 과거 커밋돼 있던 `models/ml_predictor/KRX_h5_logreg.metadata.json`은 이제 유효하지 않다 — `scripts/train_ml_model.py`를 KOSPI 대상으로 재실행해 `KOSPI_h5_logreg.joblib`을 새로 만들어야 이 스크립트가 동작한다.
+**종료/실패 조건**: `load_model()`이 `ModelArtifactError`를 던지면(모델 파일 없음) 안내 후 `sys.exit(1)` — 먼저 `train_ml_model.py`(또는 `train_full.sh`)로 학습해야 한다. 2026-10-14 기준 로컬에는 스모크 모델(14종목·5 epoch, 실사용 불가)만 있다 — 이 파일이 있으면 스크립트가 그 모델로 동작하므로 주의(`03_ml_predictor.md` §11).
 
 ---
 
@@ -66,12 +60,12 @@
 .venv/Scripts/python scripts/run_recommendations_with_signals.py   (Windows)
 .venv/bin/python scripts/run_recommendations_with_signals.py        (macOS/Linux)
 ```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `OPENAI_API_KEY`(3개 LLM 클라이언트가 전부 이 키를 공유 재사용 — `run_recommendations_with_signals.py:40,43,45`에서 각각 `load_llm_config()`를 호출하지만 내부적으로 같은 `OPENAI_API_KEY`를 읽음). 추가로 `models/ml_predictor/KOSPI_h5_logreg.joblib` 아티팩트 필요.
+필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `OPENAI_API_KEY`(3개 LLM 클라이언트가 전부 이 키를 공유 재사용 — `run_recommendations_with_signals.py:40,43,45`에서 각각 `load_llm_config()`를 호출하지만 내부적으로 같은 `OPENAI_API_KEY`를 읽음). 추가로 통합 ML 모델 `models/ml_predictor/unified_h1_mamba.pt` 필요.
 선택 환경변수: `ACCOUNT_EQUITY`. `DART_API_KEY`/`SEC_EDGAR_USER_AGENT`/`NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`는 이 스크립트가 **사전 검증하지 않는다** — 각 소스 모듈이 실제 호출 시점에 직접 읽으므로, 없으면 파이프라인 실행 중 `_news_reasons`/`_sentiment_reasons`가 내부적으로 잡아 `PipelineResult.errors`에만 기록되고 스크립트 자체는 죽지 않는다(`run_recommendations_with_signals.py:12-15`). GDELT는 크리덴셜 자체가 없다.
 
-**동작 흐름**: 시작 순서대로 `load_model("KOSPI")` → `load_llm_config()`(차트분석) → `load_llm_config()`(뉴스/공시) → `load_llm_config()`(뉴스감성) 4단계 사전 로드(`run_recommendations_with_signals.py:54-82`), 하나라도 실패하면 그 지점에서 즉시 종료. 전부 성공하면 `run_recommendation_pipeline(..., ml_model=..., llm_client=..., news_client=..., sentiment_client=...)` 1회 호출(`run_recommendations_with_signals.py:92-95`).
+**동작 흐름**: 시작 순서대로 `load_model()` → `load_llm_config()`(차트분석) → `load_llm_config()`(뉴스/공시) → `load_llm_config()`(뉴스감성) 4단계 사전 로드(`run_recommendations_with_signals.py:54-82`), 하나라도 실패하면 그 지점에서 즉시 종료. 전부 성공하면 `run_recommendation_pipeline(..., ml_model=..., llm_client=..., news_client=..., sentiment_client=...)` 1회 호출(`run_recommendations_with_signals.py:92-95`).
 
-> **market 세분화(2026-10)**: `run_recommendations.py`/`_with_ml.py`와 동일하게 `MARKET = "KRX"` → `MARKET = "KOSPI"`로 바뀌었고(WATCHLIST의 005930/000660 둘 다 코스피), ML 아티팩트도 `KOSPI_h5_logreg.joblib`로 재학습이 필요하다(위 §2 참고).
+> **market 세분화(2026-10)**: `run_recommendations.py`/`_with_ml.py`와 동일하게 `MARKET = "KOSPI"`(WATCHLIST의 005930/000660 둘 다 코스피). ML 모델이 없으면(현재 상태) 시작 단계에서 종료된다(위 §2 참고).
 
 **API 호출**: **실제 OpenAI API를 호출한다(유료)** — docstring에 명시된 경고(`run_recommendations_with_signals.py:21-24`). 종목 1개당 최대 3회의 OpenAI 호출(차트분석/공시해석/뉴스감성)이 발생할 수 있다. 실행 전 각 보조 신호의 `verify_*` 스크립트를 dry-run으로 먼저 돌려보라고 docstring이 권고한다.
 
@@ -127,29 +121,30 @@ MARKET_SCAN_UNIVERSE_SIZE=20 .venv/Scripts/python scripts/run_market_scan.py   (
 
 ---
 
-## 6. `train_ml_model.py`
+## 6. `train_ml_model.py` / `train_full.sh`
 
-**목적**: ML 예측 모델(#2)을 원자 거래소 4개(코스피/코스닥/나스닥/NYSE) 각각 독립적으로 학습해 로컬 아티팩트로 저장하는 스크립트. logreg/rf/dummy 3종을 평가 리포트용으로 비교하지만, 실제로 저장(프로덕션 배선)되는 것은 **logreg뿐**이다(`train_ml_model.py:1-18`).
+**목적**: ML 예측 모델(#2)을 **KRX(코스피+코스닥)+NASDAQ+NYSE 전체를 합친 통합 Mamba 모델 1개**로 학습해 저장한다. 데이터 수집과 학습을 한 번에 한다(별도 수집 스크립트 없음). 모델 상세는 `03_ml_predictor.md`.
 
 **실행 방법**:
 ```
 .venv/Scripts/python scripts/train_ml_model.py   (Windows)
 .venv/bin/python scripts/train_ml_model.py        (macOS/Linux)
 
-ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 .venv/Scripts/python scripts/train_ml_model.py   (스모크 테스트)
+ML_TRAIN_DEVICE=cuda ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5 \
+  .venv/Scripts/python scripts/train_ml_model.py   (스모크 테스트)
+
+bash scripts/train_full.sh                        (전체 학습 + 로그 파일, 아래)
 ```
-필수 환경변수 없음.
-선택 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(기본 200), `ML_TRAIN_LOOKBACK_YEARS`(기본 5).
+필수 환경변수 없음(국내 펀더멘털의 매출액은 `DART_API_KEY`가 있으면 채워지고 없으면 그 필드만 빠짐).
+선택 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(시장별, 기본 200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32), `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto|cuda|cpu, 기본 auto), `ML_TRAIN_LOG_EVERY`(1, 0이면 epoch 로그 끔), `ML_TRAIN_VAL_RATIO`(0.1).
 
-**동작 흐름**: `MARKETS = ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]`를 순회(`train_ml_model.py:39,109`)하며 시장마다 `_train_one_market`을 호출한다. 내부적으로: ① `get_universe(market)[:UNIVERSE_SIZE]`로 유니버스 추림 → ② `_collect_universe_records`가 종목별로 `get_ohlcv`를 호출하며 `tqdm` 진행바로 표시, 실패 종목은 스킵하고 계속(`train_ml_model.py:46-61`) → ③ `build_training_dataset(all_records)`로 전종목 pooled 데이터셋 생성 → ④ `chronological_split(dataset)`로 시간순 train/test 분할(랜덤 분할 금지, embargo 갭 적용) → ⑤ train/test 샘플이 부족하면 경고 출력 후 그 시장은 건너뜀(`train_ml_model.py:75-77`) → ⑥ `REPORT_ALGORITHMS = ("logreg", "rf", "dummy")` 3종 모두에 대해 `fit → evaluate → walk_forward_scores`로 AUC/accuracy/base_rate 리포트 출력(`train_ml_model.py:90-100`) → ⑦ `PRODUCTION_ALGORITHM = "logreg"`로 실제 학습(`train`) 후 `save_model(bundle)`로 `.joblib`+`.metadata.json` 저장(`train_ml_model.py:102-104`).
+**동작 흐름**: ① `resolve_device`로 device 확인(`cuda`를 명시했는데 GPU가 없으면 **수집 전에** 실패) → ② `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]`마다 `_universe_for(market)[:UNIVERSE_SIZE]`로 종목을 고르고(KRX는 KOSPI+KOSDAQ 합집합, 목록 앞에서부터 자름 — 시가총액 순인지는 미검증) `_collect_universe_records`가 OHLCV와 국내 펀더멘털을 수집(종목 단위 예외 격리, tqdm 진행바) → ③ `build_sequence_dataset` → `train_val_test_split`(시간순 ~70/10/20, embargo) → ④ 구간별 기간·종목 수, 하이퍼파라미터 출력 → ⑤ `train`(epoch마다 train/val loss·lr 로그) → ⑥ `_print_evaluation_report`(validation/test 전체, test 국내/미국별로 Mamba vs persistence 베이스라인 MSE/MAE/R²/방향적중률) → ⑦ `save_model` + `unified_h1_mamba.history.{csv,png}`(학습 곡선) 저장 → val 최저 epoch가 마지막보다 앞이면 재학습 안내(저장 가중치는 마지막 epoch).
 
-두 시장을 하나로 합쳐 학습하지 않는 이유가 docstring에 명시돼 있다 — 거래시간·업종 구성·규제가 근본적으로 달라 계수가 "두 시장 평균 효과"로 뭉개지면 LogisticRegression을 선택한 이유인 Explainability가 훼손된다는 것이 사용자 확인 사항(2026-09-27)이다(`train_ml_model.py:7-13`).
+**API 호출**: 없음(완전 무료) — 시세·펀더멘털 수집(FDR/pykrx/DART)과 로컬 학습뿐. 수집이 전체 시간의 대부분을 차지한다(OHLCV는 `data/ohlcv.duckdb`에 캐시, pykrx 펀더멘털은 캐시 없음).
 
-> **market 세분화(2026-10)**: `MARKETS`가 `["KRX", "NASDAQ"]`(2개)에서 원자 거래소 4개로 확장되면서, 모듈 docstring에 이 원칙의 연장선이 명시적으로 추가됐다(`train_ml_model.py:15-18`) — "KRX"(코스피+코스닥 합성)/"US"(나스닥+NYSE 합성) 같은 합성 버킷(`orchestrator/market_buckets.py`)을 이 스크립트의 학습 대상에 넣으면 바로 위에서 설명한 "두 시장 평균효과로 계수가 뭉개지는" 문제가 그대로 재발하므로, `MARKETS`에는 절대 합성 버킷을 넣지 않는다. 기존에 커밋돼 있던 `models/ml_predictor/KRX_h5_logreg.metadata.json`은 "KRX"가 더 이상 유효한 학습 대상이 아니게 되면서 사실상 폐기됐다 — 재학습하면 `KOSPI_h5_logreg.joblib`/`KOSDAQ_h5_logreg.joblib`/`NASDAQ_h5_logreg.joblib`/`NYSE_h5_logreg.joblib` 4개 아티팩트가 각각 생성된다.
+**종료/실패 조건**: 개별 종목 수집 실패는 스킵하고 계속. train/validation/test 중 하나라도 비면 "표본이 부족합니다" 출력 후 저장 없이 종료(기존 모델 파일은 그대로).
 
-**API 호출**: 없음(완전 무료) — 시세 데이터 수집(FDR/pykrx)과 로컬 학습뿐.
-
-**종료/실패 조건**: 개별 종목 OHLCV 수집 실패는 스킵하고 계속(`train_ml_model.py:52-55`). train/test 샘플 부족 시 해당 시장만 건너뛰고(`return`) 다음 시장 계속 진행 — 스크립트 자체가 죽지는 않는다.
+**`train_full.sh`**: 전체 학습 래퍼. 프로젝트 루트로 이동 → `.venv` 파이썬 탐색(Windows/Unix) → 기본 `ML_TRAIN_DEVICE=cuda`, `ML_TRAIN_LOG_EVERY=5`, `PYTHONUTF8=1`(파이프 출력 한글 깨짐 방지) → `logs/ml_training/train_full_<YYYYmmdd_HHMM>.log`로 `tee`. `set -euo pipefail`이라 학습이 실패하면 스크립트도 비0으로 끝난다. `ML_TRAIN_*`는 앞에 붙여 덮어쓸 수 있다(`ML_TRAIN_EPOCHS=40 bash scripts/train_full.sh`). `logs/`는 gitignore.
 
 ---
 
@@ -296,24 +291,21 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 **목적**: 위 두 `verify_news_*` 스크립트가 "시장 분기 + LLM 해석"까지 포함한 end-to-end 검증인 것과 달리, 이 스크립트는 **데이터 수집 계층(#0) 소스 각각의 연결성만** 독립적으로 확인한다. OpenAI는 전혀 호출하지 않는다(`verify_sources_individually.py:1-7`).
 
-> **실측 정정 (2026-10-11)**: 아래에 서술된 `etf` 타깃(`test_etf`)은 **실제 스크립트에 없다** — `_TESTS`는 `dart`/`edgar`/`naver`/`gdelt` 4개뿐이다(`verify_sources_individually.py:132`). ETF holdings/목록 조회는 2026-10-11 일회성 스크래치 스크립트로 라이브 검증했다(결과는 `01_data_layer.md`의 `etf_source.py` 절 참고). `etf` 타깃이 필요하면 `fetch_etf_listing()` 건수 + `fetch_etf_holdings("069500", top_n=5)` 출력 정도로 새로 추가해야 한다.
-
 **실행 방법**:
 ```
 .venv/Scripts/python.exe scripts/verify_sources_individually.py dart
 .venv/Scripts/python.exe scripts/verify_sources_individually.py edgar
 .venv/Scripts/python.exe scripts/verify_sources_individually.py naver
 .venv/Scripts/python.exe scripts/verify_sources_individually.py gdelt
-.venv/Scripts/python.exe scripts/verify_sources_individually.py etf
-.venv/Scripts/python.exe scripts/verify_sources_individually.py all   (5개 순서대로, 하나 실패해도 계속)
+.venv/Scripts/python.exe scripts/verify_sources_individually.py all   (4개 순서대로, 하나 실패해도 계속)
 ```
-필수 환경변수: `dart` 타깃은 `DART_API_KEY`, `edgar` 타깃은 `SEC_EDGAR_USER_AGENT`, `naver` 타깃은 `NAVER_CLIENT_ID`+`NAVER_CLIENT_SECRET`. `gdelt`/`etf` 타깃은 크리덴셜 불필요(단, `etf`가 내부적으로 쓰는 pykrx가 `KRX_ID`/`KRX_PW` 로그인을 암묵적으로 요구할 가능성은 라이브 미검증 — 이 스크립트가 바로 그 가능성을 확인하는 용도).
+필수 환경변수: `dart` 타깃은 `DART_API_KEY`, `edgar` 타깃은 `SEC_EDGAR_USER_AGENT`, `naver` 타깃은 `NAVER_CLIENT_ID`+`NAVER_CLIENT_SECRET`. `gdelt`는 크리덴셜 불필요.
 
-**동작 흐름**: `_TESTS = {"dart": test_dart, "edgar": test_edgar, "naver": test_naver, "gdelt": test_gdelt, "etf": test_etf}` 딕셔너리에서 `sys.argv[1]`(기본값 `"all"`)로 선택된 함수(들)를 실행. 각 `test_*` 함수는 해당 소스 모듈의 핵심 함수를 호출해 결과를 최대 5건까지 출력한다 — 예를 들어 `test_dart`는 `resolve_corp_code`/`resolve_corp_name`/`fetch_disclosures`를 차례로 호출(`verify_sources_individually.py:42-68`). `test_etf`는 `fetch_etf_universe()`(국내 ETF 유니버스 전체 건수 출력) → `fetch_etf_holdings("069500")`(KODEX 200의 구성종목 상위 5개 출력)를 차례로 호출 — 다른 `test_*`와 달리 전용 예외 타입(`*ApiError`)이 없어 `except Exception`으로 포괄 처리한다(모듈 docstring에 "스모크 테스트 전용, 어떤 예외든 그대로 보고"라고 명시).
+**동작 흐름**: `_TESTS = {"dart": test_dart, "edgar": test_edgar, "naver": test_naver, "gdelt": test_gdelt}`에서 `sys.argv[1]`(기본 `"all"`)로 고른 함수(들)를 실행. 각 `test_*`는 해당 소스 모듈의 핵심 함수를 호출해 결과를 최대 5건 출력한다(예: `test_dart`는 `resolve_corp_code`/`resolve_corp_name`/`fetch_disclosures`). **ETF 타깃은 없다** — ETF holdings/목록 조회는 2026-10-11 일회성 스크립트로 라이브 검증했다(`01_data_layer.md`의 `etf_source.py` 절). 필요하면 `fetch_etf_listing()` 건수 + `fetch_etf_holdings("069500", top_n=5)` 출력 정도로 새로 추가해야 한다.
 
-**API 호출**: 전부 무료(DART/EDGAR/네이버/GDELT/pykrx 데이터 수집만, OpenAI 없음).
+**API 호출**: 전부 무료(DART/EDGAR/네이버/GDELT 데이터 수집만, OpenAI 없음).
 
-**종료/실패 조건**: `dart`/`edgar`/`naver`/`gdelt`는 각각 해당 소스의 `*ApiError`(예: `DartApiError`, `EdgarApiError`, `NaverNewsApiError`, `GdeltApiError`)와 `KeyError`(크리덴셜 누락)를 개별적으로 잡아 `FAILED` 출력 후 함수를 조용히 리턴 — 다른 소스 테스트에 영향 없음. `etf`는 전용 예외 타입이 없어 `Exception` 전체를 잡는다(위 설명). `all` 타깃이면 하나가 실패해도 나머지는 계속 실행된다.
+**종료/실패 조건**: 각 타깃이 해당 소스의 `*ApiError`(`DartApiError`, `EdgarApiError`, `NaverNewsApiError`, `GdeltApiError`)와 `KeyError`(크리덴셜 누락)를 잡아 `FAILED` 출력 후 리턴 — 다른 소스 테스트에 영향 없음. `all`이면 하나가 실패해도 나머지는 계속.
 
 > 코드에 작은 흔적이 하나 있다: `_TESTS` 딕셔너리 선언 바로 위에 주석 처리된 동일한 줄이 남아 있다(`verify_sources_individually.py:130` `# _TESTS = {...}`) — 공백 포맷(`"gdelt":test_gdelt`, 콜론 뒤 공백 없음)만 다른 중복 줄로, 기능에는 영향 없는 사소한 코드 잔재다.
 
@@ -323,9 +315,9 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 ## 14. `chat_cli.py` — CLI 진입점만 (내부 로직은 `chat_agent/` 모듈 리뷰 참고)
 
-**목적**: 대화형 챗봇 에이전트의 터미널 진입점. `src/auto_stock/chat_agent/loop.py::run_turn`을 stdin 루프로 감싼다(`chat_cli.py:1-5`).
+**목적**: 대화형 챗봇 에이전트의 터미널 진입점. 기본은 deepagents 기반 `chat_agent/deep_loop.py::run_turn_deep`을, `CHAT_AGENT_LOOP=legacy`면 구 루프 `loop.run_turn`을 stdin 루프로 감싼다.
 
-> **갱신 (2026-10-12)**: 기본 메인 루프가 deepagents 기반 `chat_agent/deep_loop.py::run_turn_deep`으로 바뀌었다. 시작 시 트레이싱 차단 검사(`check_tracing_allowed`)와 노출 도구 검사(`verify_exposure`, fail-closed)를 통과해야 deep으로 실행되고, 실패하면 경고 후 구 루프로 실행한다. `CHAT_AGENT_LOOP=legacy`면 처음부터 구 루프(`loop.run_turn`). 시작 메시지에 `(루프: deep|legacy)`가 표시되고, 출력 형식은 두 루프가 같다. deep 모드에서는 턴당 새 백그라운드 추천 배치가 1개로 제한된다(`batch_trigger_limit`).
+> 루프 선택(2026-10-12~): 시작 시 트레이싱 차단 검사(`check_tracing_allowed`)와 노출 도구 검사(`verify_exposure`, fail-closed)를 통과해야 deep으로 실행되고, 실패하면 경고 후 구 루프로 실행한다. `CHAT_AGENT_LOOP=legacy`면 처음부터 구 루프(`loop.run_turn`). 시작 메시지에 `(루프: deep|legacy)`가 표시되고, 출력 형식은 두 루프가 같다. deep 모드에서는 턴당 새 백그라운드 추천 배치가 1개로 제한된다(`batch_trigger_limit`).
 
 **실행 방법**:
 ```
@@ -337,11 +329,11 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 **종료 조건**: 사용자가 `exit`, `quit`, `종료` 중 하나를 입력하면 루프 종료(`chat_cli.py:75, 182-183`). `EOFError`(입력 스트림 종료, 예: 파이프 입력이 끝났을 때)도 루프를 정상적으로 끝낸다(`chat_cli.py:178-179`).
 
-**API 호출**: **실제 OpenAI API를 호출한다(유료)** — 대화 턴마다 최소 1회 이상 호출(`chat_cli.py:20-21`). 이 스크립트는 작성만 되었고 아직 실행된 적이 없다(`docs/CODEBASE_REVIEW.md` 기준).
+**API 호출**: **실제 OpenAI API를 호출한다(유료)** — 대화 턴마다 최소 1회 이상 호출. 2026-10-11~12 `eval_main_agent.py`(아래 §15)로 legacy/deep 두 루프를 실제 API로 돌려 비교했다.
 
 **Windows 콘솔 인코딩 보정**: 실행 초반에 `sys.stdin`/`sys.stdout`/`sys.stderr`를 전부 `utf-8`로 강제 재설정한다(`chat_cli.py:46-48`) — Windows 콘솔 기본 코드페이지(cp949)가 한글/이모지/em-dash를 인코딩하지 못해 `UnicodeEncodeError`로 죽는 문제, 그리고 stdin을 안 바꾸면 한글 질문이 cp949로 잘못 디코딩되어 API 요청 직렬화 단계에서 예외가 나고 그게 넓은 except에 잡혀 원인 불명의 "일시적 오류"로만 보이는 문제를 실제로 겪고 고친 기록이 docstring에 남아 있다(`chat_cli.py:40-45`).
 
-내부 tool 호출/reasoning 로직, 9개 tool의 세부 동작, `ChatToolContext` 구성 등은 `chat_agent/` 모듈 자체의 리뷰 문서에서 다룬다(이 스크립트는 그 모듈을 호출만 하는 wrapper).
+내부 tool 호출/reasoning 로직, 16개 tool의 세부 동작, `ChatToolContext` 구성 등은 `chat_agent/` 모듈 자체의 리뷰 문서에서 다룬다(이 스크립트는 그 모듈을 호출만 하는 wrapper).
 
 ---
 
@@ -364,20 +356,23 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 `.env.example` 파일 자체는 market 세분화 작업(2026-10)에서 수정되지 않았다 — 위 표의 환경변수 목록·값은 실제 파일을 그대로 반영한 것이며 변경 없음. market 세분화로 새로 생긴 코드(`data/market_routing.py`, `orchestrator/market_buckets.py`, `data/sources/index_quote.py`, `data/sources/index_constituents.py`)는 전부 기존 크리덴셜(DART_API_KEY/SEC_EDGAR_USER_AGENT/NAVER_CLIENT_ID 등)을 그대로 재사용할 뿐 신규 환경변수를 요구하지 않는다.
 
-> **보안 주의 — 해결됨(2026-10 재확인)**: 과거 버전의 `.env.example`에는 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`가 빈 값이 아니라 실제 값처럼 보이는 문자열(`o4b35sf0n0`, `zUZjGfaRu6cojZAYb8xCVeG6g5jFSP2egPUA9yC5`)로 채워져 있던 적이 있었다. 2026-10 재확인 결과 **현재 `.env.example`의 두 변수는 모두 빈 값**이다(`.env.example:20-21`) — 더 이상 해당 경고가 유효하지 않다. 과거에 그 값이 실제로 깃 히스토리에 커밋된 적이 있다면, 히스토리 자체에서 완전히 제거(force-push rewrite 등)됐는지는 이 리뷰 범위 밖이므로 별도로 확인이 필요하다.
+> **보안 주의**: 과거 버전의 `.env.example`(커밋 f788c18)에는 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`에 실제 값이 들어 있었고 원격에 push됐다. 현재 `.env.example`의 두 변수는 빈 값이지만 **값은 git 히스토리에 남아 있으므로 Naver 개발자센터에서 키를 교체(rotate)해야 한다**. (2026-10-14: 이 문서 자체에도 그 값이 적혀 있던 것을 지웠다 — 비밀값을 문서에 옮겨 적지 말 것.)
 
 `.env.example`에 **없지만** 코드에서 실제로 읽는 환경변수(각 스크립트에서 `os.environ.get`으로 선택적으로 읽거나, 다른 모듈이 요구하는 것):
 
 | 변수 | 필수/선택 | 사용처 | 비고 |
 |---|---|---|---|
-| `KRX_ID` | 필수(pykrx 사용 시) | `data/sources/pykrx_source.py` | `verify_pykrx.py` docstring에서 언급되지만 `.env.example`에는 빠져 있음 — 템플릿에 추가가 필요해 보인다 |
-| `KRX_PW` | 필수(pykrx 사용 시) | `data/sources/pykrx_source.py` | 위와 동일 |
 | `ACCOUNT_EQUITY` | 선택 | 거의 모든 `run_*`/`chat_cli.py` 스크립트 | 기본값 10,000,000 — 브로커 연동 전 placeholder 계좌 자산 |
 | `MARKET_SCAN_UNIVERSE_SIZE` | 선택 | `run_market_scan.py`, `chat_cli.py` | 기본값 200 |
 | `MARKET_SCAN_STALE_HOURS` | 선택 | `run_market_scan.py` | 기본값은 `DEFAULT_STALE_AFTER` 환산값 |
 | `RECOMMENDATION_STALE_HOURS` | 선택 | `chat_cli.py` | 기본값 24 |
-| `ML_TRAIN_UNIVERSE_SIZE` | 선택 | `train_ml_model.py` | 기본값 200 |
+| `ML_TRAIN_UNIVERSE_SIZE` | 선택 | `train_ml_model.py` | 시장별 종목 수, 기본값 200 |
 | `ML_TRAIN_LOOKBACK_YEARS` | 선택 | `train_ml_model.py` | 기본값 5 |
+| `ML_TRAIN_EPOCHS` / `ML_TRAIN_BATCH_SIZE` / `ML_TRAIN_LR` / `ML_TRAIN_HIDDEN_DIM` / `ML_TRAIN_N_LAYERS` | 선택 | `train_ml_model.py` | 기본값 100 / 32 / 0.01 / 16 / 2 |
+| `ML_TRAIN_DEVICE` | 선택 | `train_ml_model.py`, `train_full.sh` | `auto`(기본, GPU 있으면 GPU) / `cuda` / `cpu`. `train_full.sh` 기본은 `cuda` |
+| `ML_TRAIN_LOG_EVERY` | 선택 | `train_ml_model.py`, `train_full.sh` | epoch 로그 간격, 기본 1(`train_full.sh`는 5), 0이면 끔 |
+| `ML_TRAIN_VAL_RATIO` | 선택 | `train_ml_model.py` | validation 구간 비율(전체 날짜 대비), 기본 0.1 |
+| `CHAT_AGENT_LOOP` | 선택 | `chat_cli.py` | `legacy`면 구 루프. 기본은 deep |
 | `LLM_VERIFY_DRY_RUN` | 선택 | `verify_llm_chart_analyst.py` | `"1"`이면 dry-run |
 | `NEWS_VERIFY_MARKET` | 선택 | `verify_news_disclosure.py` | `KOSPI`(기본) 또는 `KOSDAQ`/`NASDAQ`/`NYSE` (market 세분화 2026-10 — 과거엔 `KRX`/`NASDAQ` 2개뿐) |
 | `NEWS_VERIFY_DRY_RUN` | 선택 | `verify_news_disclosure.py` | `"1"`이면 dry-run |
@@ -390,13 +385,13 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 이 프로젝트를 처음 받아 로컬에서 아무것도 실행해보지 않은 상태라면, 아래 순서로 "무료 → 저비용 → 전체 실행" 순으로 올라가는 것을 권장한다.
 
-1. **환경 준비**: `.env.example`을 복사해 `.env`를 만들고, 최소한 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`를 채운다. `KRX_ID`/`KRX_PW`도 pykrx를 쓸 계획이면 함께 채운다(템플릿에 없으니 직접 추가).
+1. **환경 준비**: `uv sync --extra dev`로 `.venv`를 만든다(Windows는 CUDA 빌드 torch가 설치됨). `.env.example`을 복사해 `.env`를 만들고, 최소한 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`를 채운다. pykrx를 쓸 계획이면 `KRX_ID`/`KRX_PW`도 채운다.
 2. **데이터 수집 계층 무비용 확인** — API 키 없이도 되는 것부터:
    - `scripts/verify_fdr_nasdaq.py` (키 불필요, NASDAQ 유니버스+OHLCV 확인)
    - `scripts/verify_pykrx.py` (`KRX_ID`/`KRX_PW` 필요, KRX 유니버스+시가총액 확인)
 3. **알림 경로 확인**: `scripts/verify_telegram.py` — 텔레그램 토큰이 유효한지 가장 간단하게 확인.
 4. **MVP-0 기본 파이프라인 확인**: `scripts/run_recommendations.py` — 2종목만 대상으로 전체 추천 파이프라인이 끝까지 도는지 확인(ML/LLM 없음, 텔레그램만 발송).
-5. **ML 모델 준비 및 확인**: `scripts/train_ml_model.py`를 `ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1`로 스모크 테스트 실행 → 성공하면 `scripts/run_recommendations_with_ml.py`로 ML 보조 신호가 섞인 추천을 확인.
+5. **ML 모델 준비 및 확인**: `scripts/train_ml_model.py`를 `ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5`로 스모크 테스트 → 리포트·학습 곡선을 확인한 뒤 `bash scripts/train_full.sh`로 전체 학습 → `scripts/run_recommendations_with_ml.py`로 ML 보조 신호가 섞인 추천을 확인.
 6. **OpenAI 키 발급 후, dry-run부터**: `OPENAI_API_KEY` 발급 후 비용이 들지 않는 dry-run 모드부터 각 보조 신호를 하나씩 점검.
    - `LLM_VERIFY_DRY_RUN=1 scripts/verify_llm_chart_analyst.py`
    - `NEWS_VERIFY_DRY_RUN=1 scripts/verify_news_disclosure.py` (KOSPI/KOSDAQ/NASDAQ/NYSE 4개 시장 모두 `NEWS_VERIFY_MARKET`로 바꿔가며 — market 세분화 2026-10)
@@ -417,7 +412,7 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 이 디렉터리의 스크립트들은 전부 **원자 market만 다루는 레거시/배치 경로**라, 위 1~13번 섹션에서 설명한 대로 "KRX"였던 하드코딩 값을 전부 "KOSPI"(또는 4개 원자값 전체 순회)로 교체하는 정도의 변경만 받았다 — 합성 버킷을 다루는 로직 자체는 이 디렉터리에 없다(그건 `orchestrator/recommendation_coordinator.py`와 `chat_agent/tools.py`의 책임이며, 각각의 리뷰 문서가 다룬다). 신규 공용 모듈 `data/market_routing.py`(`KRX_MARKETS`/`US_MARKETS` 멤버십 집합, `NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS` 라우팅 딕셔너리)는 `pipeline.py`/`tools.py`에 과거 중복됐던 시장 분기 로직을 통합한 것이며, `verify_news_disclosure.py`/`verify_news_sentiment.py`도 이번에 이 모듈을 재사용하도록 바뀌었다.
 
-ML 모델 아티팩트(`models/ml_predictor/*.joblib`)는 market 값을 파일명에 그대로 쓰므로(`ml_predictor/artifact.py::artifact_path`), 과거 "KRX" 기준으로 학습·커밋됐던 `KRX_h5_logreg.*` 아티팩트는 이제 어떤 스크립트도 참조하지 않는다 — `scripts/train_ml_model.py`를 재실행해 `KOSPI`/`KOSDAQ`/`NASDAQ`/`NYSE` 4개 아티팩트를 새로 만들어야 `run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`가 다시 동작한다.
+ML 모델은 market과 무관한 통합 아티팩트 하나(`models/ml_predictor/unified_h1_mamba.pt`)다. 과거 `KRX_h5_logreg.metadata.json`은 어떤 스크립트도 참조하지 않는다 — `train_ml_model.py`(또는 `train_full.sh`)로 통합 모델을 학습해야 `run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`가 동작한다.
 
 ## 15. `eval_main_agent.py` (2026-10-11 신규)
 

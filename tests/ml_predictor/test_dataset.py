@@ -8,6 +8,7 @@ from auto_stock.ml_predictor.dataset import (
     chronological_split,
     collate_sequences,
     to_xy_flat,
+    train_val_test_split,
 )
 from auto_stock.ml_predictor.features import FEATURE_NAMES
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS
@@ -106,6 +107,43 @@ def test_multi_ticker_dataset_is_split_by_global_date_not_per_ticker():
     test_min_date = min(s.feature.date for seq in split.test.sequences for s in seq.samples)
 
     assert all(d < test_min_date for d in train_dates)
+
+
+def _dates(dataset) -> list:
+    return sorted({s.feature.date for seq in dataset.sequences for s in seq.samples})
+
+
+def test_train_val_test_split_orders_windows_with_embargo_gaps():
+    records = make_records(random_walk_prices(300))
+    dataset = build_sequence_dataset([records])
+
+    split = train_val_test_split(dataset, val_ratio=0.1, test_ratio=0.2)
+
+    assert split.validation is not None
+    train_dates, val_dates, test_dates = _dates(split.train), _dates(split.validation), _dates(split.test)
+    assert train_dates and val_dates and test_dates
+    assert train_dates[-1] < val_dates[0] and val_dates[-1] < test_dates[0]
+    all_dates = _dates(dataset)
+    assert len([d for d in all_dates if train_dates[-1] < d < val_dates[0]]) >= LABEL_HORIZON_DAYS
+    assert len([d for d in all_dates if val_dates[-1] < d < test_dates[0]]) >= LABEL_HORIZON_DAYS
+
+
+def test_train_val_test_split_keeps_test_window_identical_to_two_way_split():
+    # Adding a validation window must not move the test window (keeps results comparable).
+    records = make_records(random_walk_prices(300))
+    dataset = build_sequence_dataset([records])
+
+    three_way = train_val_test_split(dataset, val_ratio=0.1, test_ratio=0.2)
+    two_way = chronological_split(dataset, test_ratio=0.2)
+
+    assert _dates(three_way.test) == _dates(two_way.test)
+
+
+def test_two_way_split_has_no_validation():
+    records = make_records(random_walk_prices(160))
+    dataset = build_sequence_dataset([records])
+
+    assert chronological_split(dataset, test_ratio=0.2).validation is None
 
 
 def test_chronological_split_never_shuffles():

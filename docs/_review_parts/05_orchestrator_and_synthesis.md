@@ -1,14 +1,9 @@
 # `orchestrator/` + `recommendation_synthesis/` 상세 리뷰
 
-> **2026-10-13 정정 노트**: ML 예측기가 scikit-learn LogisticRegression에서 Mamba(PyTorch
-> SSM, 통합 단일 모델)로 교체됐다(`docs/design/ml-predictor-mamba-plan.md`). 이 문서
-> 전체에서 `probability_up`/`ML_AGREE_THRESHOLD(0.55)`/`ML_CONFLICT_THRESHOLD(0.45)`를
-> 언급하는 부분은 각각 `predicted_return`/`ML_AGREE_RETURN_THRESHOLD(0.003)`/
-> `ML_CONFLICT_RETURN_THRESHOLD(-0.003)`로 바뀌었다. `data/market_routing.py::ML_MODEL_KEYS`
-> 매핑(원자 market → 아티팩트 키)은 **삭제**됐다 — market/종목별 모델 분리가 없는 통합
-> 단일 모델이라 `RecommendationCoordinator`/`chat_agent/tools.py`가 `ml_models: dict`
-> 대신 `ml_model: ModelBundle | None` 필드 하나만 받는다. `_shortlist_score`의 ML 항목도
-> `abs(probability_up - 0.5)`에서 `abs(predicted_return)`로 바뀌었다.
+> **2026-10-14 갱신**: ML 관련 본문을 현재 코드(Mamba 통합 단일 모델, `predicted_return`,
+> ±0.3% 임계값, `ml_model: ModelBundle | None` 단일 필드)에 맞게 고쳤다. 이전 LogReg 시절 서술
+> (`probability_up`, 0.55/0.45 임계값, market별 `ml_models`/`ML_MODEL_KEYS`)은 더 이상 코드에 없다.
+> ML 모듈 자체는 `03_ml_predictor.md` 참고.
 >
 > 이 문서는 "배선(wiring) 계층" — `src/auto_stock/orchestrator/`와 그 위에서 세 번째 `deepagents` 서브에이전트를 구성하는 `src/auto_stock/recommendation_synthesis/` — 를 함수/클래스 단위로 상세히 정리한다. 상위 요약은 `docs/CODEBASE_REVIEW.md`, 최초 MVP-0 설계 근거는 `docs/design/orchestrator.md`를 참고하되, 이 문서는 그 이후 추가된 "전체 유니버스 추천 파이프라인"(숏리스트→딥다이브→종합)과, 이후 market 세분화 작업(아래 핵심 설계 원칙)까지 포함해 현재 코드 상태를 기준으로 다시 정리한 것이다.
 
@@ -58,7 +53,7 @@
                                     └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-이 전체 경로는 `scripts/chat_cli.py`가 시작 시 **8개 스캔 버킷 전체**(`orchestrator/market_buckets.py::ALL_SCAN_BUCKETS`)에 대해 `ensure_fresh`를 선제 호출하고, 챗봇 tool(`tool_get_market_scan_recommendations` 등, `chat_agent/tools.py`)이 질의 시점마다 같은 메서드를 호출해 "이미 신선하면 아무것도 안 함, stale이면 백그라운드 스레드로 갱신 트리거" 하는 **온디맨드 자가치유** 패턴으로 돌아간다. 둘 다 idempotent — 중복 트리거가 안 생기도록 "stale 체크 + in-progress 추적"을 하나의 락 안에서 원자적으로 수행한다.
+이 전체 경로는 `scripts/chat_cli.py`가 시작 시 **가장 굵은 합성 버킷 2개**(`_SCAN_BUCKETS = ["KRX", "US"]`)에 대해 `ensure_fresh`를 선제 호출하고(나머지 6개 버킷 — KOSPI/KOSDAQ/NASDAQ/NYSE/SP500/DOW — 은 사용자가 그 범위를 물을 때 tool이 신선화), 챗봇 tool(`tool_get_market_scan_recommendations` 등, `chat_agent/tools.py`)이 질의 시점마다 같은 메서드를 호출해 "이미 신선하면 아무것도 안 함, stale이면 백그라운드 스레드로 갱신 트리거" 하는 **온디맨드 자가치유** 패턴으로 돌아간다. 둘 다 idempotent — 중복 트리거가 안 생기도록 "stale 체크 + in-progress 추적"을 하나의 락 안에서 원자적으로 수행한다.
 
 ---
 
@@ -85,12 +80,12 @@ class PipelineResult:
 
 - `DEFAULT_LOOKBACK_DAYS = 120` (`pipeline.py:56`) — SMA60 워밍업 + ATR(14) 계산에 필요한 최소 60거래일을 확보하기 위해, 주말·공휴일을 감안해 캘린더 기준 120일로 설정. `market_scan.py`/`shortlist.py`도 이 상수를 그대로 import해서 재사용한다.
 
-### `_ml_reasons(ml_model, records, action) -> tuple[list[str], str | None]`
+### `_ml_reasons(ml_model, cache, ticker, market, action) -> tuple[list[str], str | None]`
 
 - **역할**: ML 예측(#2) 보조신호를 문구로 변환. `ml_model`이 `None`이면 `([], None)` 즉시 반환(스킵).
-- **동작**: `predict(ml_model, records)` → `to_reasons(prediction, action)`.
+- **동작**: 규칙엔진용 짧은 `records`(120일)를 재사용하지 **않는다** — Mamba는 종목 히스토리 전체를 시퀀스로 받으므로 `ML_LOOKBACK_DAYS`(3년)치를 `get_ohlcv`로 다시 조회하고, `build_fundamentals_by_date`로 국내 펀더멘털을 붙인 뒤 `predict(ml_model, ml_records, fundamentals)` → `to_reasons(prediction, action)`.
 - **에러 처리**: `except Exception` 전체를 잡아 `([], str(exc))`로 변환 — **절대 raise하지 않는다**(docstring 명시, 설계 결정 5). ML 실패가 알림 발송 자체를 막으면 안 된다는 원칙.
-- 다른 세 헬퍼와 달리 에러 메시지에 소스 라벨 접두사를 **스스로 붙이지 않는다** — 호출부(`run_recommendation_pipeline`)가 `"ML 예측 실패: {ml_error}"`로 접두사를 붙인다(`pipeline.py:238`).
+- 다른 세 헬퍼와 달리 에러 메시지에 소스 라벨 접두사를 **스스로 붙이지 않는다** — 호출부(`run_recommendation_pipeline`)가 `"ML 예측 실패: {ml_error}"`로 접두사를 붙인다.
 
 ### `_llm_reasons(llm_client, records, action) -> tuple[list[str], str | None]`
 
@@ -112,9 +107,7 @@ class PipelineResult:
 - **동작 순서**:
   1. 시장 미지원이면 스킵.
   2. 이름 해석: `market in KRX_MARKETS`면 `resolve_corp_name`(DART 캐시 재사용), 아니면(NASDAQ/NYSE) `resolve_company_title`(EDGAR 캐시 재사용) — **공시용 캐시 인프라를 그대로 재사용**, 새 인프라를 만들지 않음. `None`이면(해석 실패) 조용히 스킵.
-  3. 뉴스 조회: KOSPI/KOSDAQ은 `search_news(name, ...)`, NASDAQ/NYSE는 `search_articles(f'"{safe_name}"', ...)`(정확 구문 검색을 위해 회사명을 따옴표로 감싼다 — `safe_name = name.replace('"', "")`로 회사명 자체에 든 따옴표를 먼저 제거해 GDELT 질의 문법이 깨지는 것을 방지, 코드리뷰 LOW 수정).
-
-     > **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase(name)`로 만든다 — 따옴표 제거에 더해 SEC 법인 접미사(Corp, Inc, Co, Ltd 등)를 떼어 뉴스 표기와 맞춘다("NVIDIA CORP" 27건 → "NVIDIA" 50건 이상, 14일 실측). `safe_name`은 없어졌다. 상세: `docs/design/us-news-source-reliability.md`.
+  3. 뉴스 조회: KOSPI/KOSDAQ은 `search_news(name, ...)`, NASDAQ/NYSE는 `search_articles(company_phrase(name), ...)` — `gdelt_source.company_phrase`가 따옴표를 제거하고 SEC 법인 접미사(Corp, Inc, Co, Ltd 등)를 떼어 뉴스 표기와 맞춘 구문 검색어를 만든다("NVIDIA CORP" 27건 → "NVIDIA" 50건 이상, 14일 실측). 상세: `docs/design/us-news-source-reliability.md`.
   4. `analyze_sentiment` → `to_sentiment_reasons`.
 - **에러 처리**: **이름 해석 / 뉴스 조회 / LLM 해석 세 단계가 각각 분리된 `try/except`**. 이름 해석 실패는 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 재사용한 라벨로("DART 조회 실패: ..."), 뉴스 조회 실패는 `SENTIMENT_SOURCE_LABELS`(네이버뉴스/GDELT)로, LLM 해석 실패는 `"LLM 뉴스감성 해석 실패: ..."`로 각각 구분해서 반환한다. **왜 분리했는지**: 하나로 묶으면 DART/EDGAR 호출 실패가 "네이버뉴스/GDELT 조회 실패"로 잘못 라벨링되는 버그가 실제로 있었고(코드리뷰 MEDIUM으로 발견·수정), 그 재발을 막기 위해 구조적으로 분리됐다.
 - **NYSE 추가로 인한 변화**: 과거엔 `market == "KRX"`/`else`(2-way)였던 분기가 `market in KRX_MARKETS`/`else`(사실상 4-way 중 국내/미국 2분류)로 바뀌었을 뿐, DART/EDGAR/네이버/GDELT 호출 코드 자체는 수정되지 않았다 — NYSE는 그냥 "미국 쪽" 분기를 그대로 탄다.
@@ -158,14 +151,14 @@ ml_prediction: MLPrediction | None
 
 ### `_ml_has_directional_opinion(prediction) -> bool`
 
-ML이 "방향성 있는 의견"을 냈는지 판정. `prediction`이 `None`이면 `False`. 아니면 `probability_up >= ML_AGREE_THRESHOLD`(상승 쪽 확신) 또는 `probability_up <= ML_CONFLICT_THRESHOLD`(하락 쪽 확신) — 즉 확률이 0.5 근처(애매함)면 `False`가 된다. 두 임계값은 `ml_predictor.predictor` 모듈이 이미 정의한 상수를 재사용한다.
+ML이 "방향성 있는 의견"을 냈는지 판정. `prediction`이 `None`이면 `False`. 아니면 `predicted_return >= ML_AGREE_RETURN_THRESHOLD`(+0.3%, 상승 예측) 또는 `predicted_return <= ML_CONFLICT_RETURN_THRESHOLD`(−0.3%, 하락 예측) — 즉 예측 수익률이 ±0.3% 안쪽이면 `False`. 두 임계값은 `ml_predictor.predictor`의 상수를 재사용한다.
 
 ### `build_shortlist(cache, tickers, market, ml_model, lookback_days=120) -> tuple[list[ShortlistEntry], list[tuple[str, str]]]`
 
 - **역할**: 전체 유니버스 중 "분석할 가치가 있는" 종목만 1차로 걸러낸다.
 - **핵심 설계 결정 — OR 게이트**: 규칙엔진 후보 **또는** ML 방향성 의견 중 **하나라도** 있으면 숏리스트에 넣는다. docstring이 명시적으로 설명한다 — 규칙엔진 후보만 요구하는 AND 게이트로 만들면, ML만 신호를 잡는 종목을 영구히 놓치게 된다.
-- **동작**: 티커마다 `get_ohlcv → generate_candidates`(첫 번째 후보만 사용, `candidates[0] if candidates else None`) + `predict(ml_model, records)`(ml_model이 있을 때만) → OR 조건 통과 시 `ShortlistEntry`로 적재.
-- **비용 특성**: 규칙엔진은 순수 계산, ML은 이미 학습된 모델의 `predict_proba()` 호출 — 둘 다 LLM을 쓰지 않는 "공짜" 계산이라, **전체 유니버스(수백 종목)에 돌려도 비용 문제가 없다**. 비싼 LLM 신호(차트/공시/뉴스감성)는 이 단계에서 추려진 숏리스트에만 쓴다(②단계).
+- **동작**: 티커마다 `get_ohlcv(lookback_days) → generate_candidates`(첫 번째 후보만 사용, `candidates[0] if candidates else None`) + (ml_model이 있을 때만) `ML_LOOKBACK_DAYS`(3년)치를 따로 조회하고 국내 펀더멘털을 붙여 `predict(ml_model, ml_records, fundamentals)` → OR 조건 통과 시 `ShortlistEntry`로 적재. ML용 조회가 3년치라 ML을 켜면 종목당 데이터 조회량이 규칙엔진만 쓸 때보다 크다(국내 종목은 pykrx 펀더멘털 조회도 추가).
+- **비용 특성**: 규칙엔진은 순수 계산, ML은 이미 학습된 Mamba 모델의 추론(CPU) — 둘 다 LLM을 쓰지 않는 "공짜" 계산이라, **전체 유니버스(수백 종목)에 돌려도 비용 문제가 없다**. 비싼 LLM 신호(차트/공시/뉴스감성)는 이 단계에서 추려진 숏리스트에만 쓴다(②단계).
 - **실패 격리**: `scan_market`과 동일한 티커 단위 `try/except`.
 - **왜 `scan_market`의 계약을 건드리지 않았는가**: `scan_market`은 다른 소비자(텔레그램 알림 등)가 있을 수 있어 하위 호환을 지켜야 한다는 이유로, 이 모듈이 새로 추가됐다(`shortlist.py:9-11`).
 - **market 세분화 이후 영향**: 이 함수도 로직이 바뀌지 않았다 — `market: str` 하나만 받는 범용 계약 그대로다. 합성 버킷(KRX/US/SP500/DOW)을 다루려면 호출부가 원자 market별로 이 함수를 여러 번 호출해야 한다 — 그 분기는 이 함수가 아니라 `RecommendationCoordinator._run`이 담당한다(아래 섹션).
@@ -408,11 +401,11 @@ def bucket_universe_by_atomic_market(bucket, fetch_universe):
 
 ### `_shortlist_score(entry: ShortlistEntry) -> float`
 
-숏리스트를 정렬하기 위한 점수 함수. `rule_score`(규칙엔진 후보가 있으면 1.0, 없으면 0.0) + `ml_score`(ML 확률이 0.5에서 얼마나 먼지의 절댓값, 없으면 0.0)를 **단순 합산**. 둘 다 신호가 강할수록 점수가 높아지는 설계.
+숏리스트를 정렬하기 위한 점수 함수. `rule_score`(규칙엔진 후보가 있으면 1.0, 없으면 0.0) + `ml_score`(`abs(predicted_return)`, 없으면 0.0)를 **단순 합산**. 둘 다 신호가 강할수록 점수가 높아지는 설계. 다만 예측 수익률은 보통 ±몇 % 수준(0.0x)이라 `rule_score` 1.0보다 훨씬 작다 — 결과적으로 **규칙엔진 후보가 있는 종목이 항상 먼저** 오고, ML 점수는 같은 그룹 안에서의 순서만 정한다(LogReg 시절의 `abs(p-0.5)`도 최대 0.5라 같은 성질).
 
 ### `RecommendationCoordinator.__init__`
 
-의존성이 많다 — `cache`, `scan_cache`, `ml_models: dict[str, ModelBundle | None]`(시장별 모델), `llm_client`, `news_client`, `sentiment_client`(세 보조신호 클라이언트, ②단계에서 `stock_analyst`에 넘겨짐), `account`, `agent_model`(사용할 LLM 모델명), `reader`(섹터 1차 분류용 — `chat_agent`의 기존 reader를 재사용), 그리고 각종 상한값. `self._lock`/`self._in_progress: set[str]`는 `ScanCoordinator`와 동일한 역할이지만, 여기서는 **market 이름뿐 아니라 섹터 합성키도 같은 set에 들어간다**(공유 범용 메서드로 처리하기 때문).
+의존성이 많다 — `cache`, `scan_cache`, `ml_model: ModelBundle | None`(통합 단일 모델, 없으면 ML 신호 꺼짐), `llm_client`, `news_client`, `sentiment_client`(세 보조신호 클라이언트, ②단계에서 `stock_analyst`에 넘겨짐), `account`, `agent_model`(사용할 LLM 모델명), `reader`(섹터 1차 분류용 — `chat_agent`의 기존 reader를 재사용), 그리고 각종 상한값. `self._lock`/`self._in_progress: set[str]`는 `ScanCoordinator`와 동일한 역할이지만, 여기서는 **market 이름뿐 아니라 섹터 합성키도 같은 set에 들어간다**(공유 범용 메서드로 처리하기 때문).
 
 ### `_ensure_fresh_for(scan_key, run) -> threading.Thread | None`
 
@@ -455,7 +448,7 @@ worst_case = shortlist_size × STOCK_ANALYST_LLM_CALL_ESTIMATE
 1. 스레드 전용 커서 획득(`cache.cursor()`/`scan_cache.cursor()`).
 2. 내부 클로저 `fetch_universe(atomic_market)`을 정의 — `_fresh_universe(scan_cache, atomic_market, universe_size, stale_after)`를 그대로 호출하는 콜백.
 3. `bucket_universe_by_atomic_market(bucket, fetch_universe)`(`orchestrator/market_buckets.py`)를 호출해 `{원자market: tickers}` dict를 얻는다. `bucket`이 원자 market이면 이 dict는 `{bucket: tickers}` 하나뿐이고, 합성 버킷이면 2개(KRX→KOSPI+KOSDAQ, US→NASDAQ+NYSE) 또는 SP500/DOW 필터링을 거친 2개(NASDAQ+NYSE 중 지수 구성종목만)가 된다.
-4. 이 dict를 순회하며 **원자 market마다 각각** `build_shortlist(cache, tickers, atomic_market, ml_model, lookback_days)`(①)를 호출하고, 반환된 `ShortlistEntry`들과 에러들을 하나의 리스트로 누적한다. **ML 모델 조회는 `self._ml_models.get(atomic_market)`로 직접 하지 않는다** — `data/market_routing.py::ML_MODEL_KEYS = {"KOSPI": "KRX", "KOSDAQ": "KRX", "NASDAQ": "NASDAQ", "NYSE": None}` 매핑을 먼저 거쳐 `ml_key = ML_MODEL_KEYS.get(atomic_market)` → `self._ml_models.get(ml_key) if ml_key is not None else None`으로 조회한다(`recommendation_coordinator.py:217-218`). 사용자 결정으로 ML은 재학습하지 않고 합성 "KRX" 아티팩트(2026-09-28 학습분, KOSPI/KOSDAQ 공용)와 "NASDAQ" 아티팩트(미학습)만 유지하기로 했기 때문 — NYSE는 매핑 자체가 `None`이라 조회 시도조차 하지 않고 바로 ML 신호가 꺼진다. 상세: `03_ml_predictor.md` §10b/§11.
+4. 이 dict를 순회하며 **원자 market마다 각각** `build_shortlist(cache, tickers, atomic_market, self._ml_model, self._lookback_days)`(①)를 호출하고, 반환된 `ShortlistEntry`들과 에러들을 하나의 리스트로 누적한다. 모든 원자 market에 **같은 통합 모델**을 넘긴다 — 모델이 있으면 4개 market 모두 ML을 쓰고, 없으면 모두 끈다(2026-10-14 기준 로컬 모델은 스모크용뿐 — `03_ml_predictor.md` §11).
 5. 누적된 전체 숏리스트를 `_shortlist_score` 기준 내림차순 정렬 → `shortlist[:self._shortlist_cap]`(상위 20개로 절단) — 이 단계는 세분화 이전과 동일, 여러 원자 market에서 모인 종목들이 점수 하나의 기준으로 함께 경쟁한다.
 6. `_run_deep_scan_and_synthesize(shortlist, bucket, scan_cache)`(②③) — 이 단계는 세분화 이전과 동일한 코드다. 숏리스트에 여러 market의 종목이 섞여 있어도 문제없다 — 각 `ShortlistEntry`가 자기 `market` 필드를 들고 있어서 ②단계(`run_deep_scan`)가 종목별로 올바른 market을 사용한다. 결과는 `scan_key=bucket`(합성 버킷 이름 그대로, 예: "KRX")으로 캐시에 적재된다.
 7. 숏리스트 빌드 중 생긴 종목별 에러는 `stderr` 경고로만 남김(합쳐진 `build_errors` 전체 건수).
@@ -475,7 +468,7 @@ worst_case = shortlist_size × STOCK_ANALYST_LLM_CALL_ESTIMATE
 
 ## 전체 데이터 흐름 재정리 (실행 진입점부터)
 
-1. `scripts/chat_cli.py`가 기동 시 `RecommendationCoordinator(cache=..., scan_cache=..., ml_models=..., llm_client=..., news_client=..., sentiment_client=..., account=..., agent_model=..., reader=...)`를 만든다. `ml_models`는 `_ATOMIC_MARKETS = ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]`(원자 4개만, ML은 합성버킷 학습 안 함) 각각에 대해 `load_model`을 시도해 조립한다. 그 다음 `orchestrator.market_buckets.ALL_SCAN_BUCKETS`(8개: KOSPI/KOSDAQ/KRX/NASDAQ/NYSE/US/SP500/DOW) 전체를 순회하며 `recommendation_coordinator.ensure_fresh(bucket)`를 호출한다(`chat_cli.py:174-175`) — market 세분화 이전에는 `_MARKETS = ["KRX", "NASDAQ"]` 2개뿐이었다.
+1. `scripts/chat_cli.py`가 기동 시 `RecommendationCoordinator(cache, scan_cache, ml_model, llm_client, news_client, sentiment_client, account, agent_model, reader, stale_after, universe_size)`를 만든다. `ml_model`은 `_load_ml_model()`이 `load_model()`을 한 번 시도해 얻고, 모델 파일이 없으면 `None`(ML 신호 꺼짐). 선제 스캔은 `_SCAN_BUCKETS = ["KRX", "US"]` 2개만 순회한다 — "국내 전체"/"미국 전체" 버킷만 미리 신선화하고, KOSPI/KOSDAQ/NASDAQ/NYSE/SP500/DOW 버킷은 사용자가 그 범위를 물을 때 `ensure_fresh`로 신선화된다.
 2. 각 버킷의 캐시가 24시간 이상 stale이면 백그라운드 스레드가 뜬다 — `_run(bucket)` → `bucket_universe_by_atomic_market`으로 원자 market별 유니버스 획득 → 원자 market마다 ①`build_shortlist` 호출 후 결과 병합 → 정렬·절단 → ②`run_deep_scan` → ③`run_recommendation_synthesis` → `MarketScanCache.put_recommendations(scan_key=bucket, ...)`. 8개 버킷은 서로 완전히 독립적으로 트리거·캐싱된다(각자 다른 `scan_key`) — "KRX" 버킷을 갱신해도 "KOSPI"/"KOSDAQ" 버킷의 캐시는 별도로 그대로 남는다(세 캐시 모두 내부적으로는 같은 원자 유니버스 캐시(`_fresh_universe`)를 공유해 재사용하지만, 숏리스트~추천 결과 자체는 버킷별로 독립 저장된다).
 3. 사용자가 대화 중 "추천해줘" 류의 질의를 하면 `chat_agent/tools.py`의 해당 tool이 `MarketScanCache.get_latest_recommendations(scan_key)`로 **이미 캐시에 적재된 결과**를 즉시 반환한다 — `market` 인자로 8개 버킷 중 어느 것을 넘기든 그대로 `scan_key`로 쓰인다(이 조율기 체인이 생성한 결과를 소비하는 쪽은 이 리뷰의 범위 밖, `chat_agent/tools.py` 문서 참고).
 4. 섹터 질의("로봇 관련주 추천해줘", "반도체관련 나스닥 종목 추천해줘")는 같은 체인을 `_run_sector`로 타되, ①을 생략하고 `resolve_sector_tickers`로 대체한다 — 섹터 경로의 `market` 인자는 원자/합성 구분 없이 그대로 전달되므로(①숏리스트가 없어 `OHLCVRecord` 생성 자체가 발생하지 않음), "로봇관련 KRX 종목"처럼 합성 버킷을 섹터 질의에 써도 코드상 문제는 없다 — 다만 1차(공식 업종 매칭)는 `sector_classification.py`가 KOSPI/KOSDAQ/KRX만 지원하므로, NASDAQ/NYSE/US 쪽 섹터 질의는 항상 2차(LLM 제안+뉴스검증) 경로로 간다.

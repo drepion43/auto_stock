@@ -45,6 +45,18 @@ class SequenceDataset:
 class SequenceDatasetSplit:
     train: SequenceDataset
     test: SequenceDataset
+    validation: SequenceDataset | None = None  # train_val_test_split만 채운다(2분할이면 None)
+
+
+@dataclass(frozen=True, slots=True)
+class EpochRecord:
+    """학습 1 epoch의 기록 — 학습 곡선(train/val loss) 그래프와 history CSV의 한 행."""
+
+    epoch: int
+    train_loss: float  # 패딩 제외 masked MSE, 그 epoch 전체 배치의 가중평균
+    val_loss: float | None  # validation 구간이 없으면 None
+    learning_rate: float
+    elapsed_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +84,8 @@ class ModelMetadata:
 class ModelBundle:
     estimator: Any  # 학습된 MambaRegressor(nn.Module) — untyped by design (3rd-party 패턴 재사용)
     metadata: ModelMetadata
+    # 학습 직후에만 채워진다 — 아티팩트(.pt/.metadata.json)에는 저장하지 않으므로 load_model() 결과는 빈 tuple.
+    history: tuple[EpochRecord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

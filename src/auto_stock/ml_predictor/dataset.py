@@ -97,6 +97,18 @@ def chronological_split(
     )
 
 
+def train_val_test_split(
+    dataset: SequenceDataset, val_ratio: float = 0.1, test_ratio: float = 0.2, embargo_days: int | None = None
+) -> SequenceDatasetSplit:
+    """시간순 3분할: [train | embargo | validation | embargo | test]. test 구간은
+    `chronological_split(dataset, test_ratio)`와 정확히 같다(validation 추가 전후 test 결과
+    비교 가능). validation은 test 앞쪽 구간에서 다시 같은 규칙으로 잘라낸다 —
+    `val_ratio`는 전체 날짜 대비 비율."""
+    outer = chronological_split(dataset, test_ratio=test_ratio, embargo_days=embargo_days)
+    inner = chronological_split(outer.train, test_ratio=val_ratio / (1 - test_ratio), embargo_days=embargo_days)
+    return SequenceDatasetSplit(train=inner.train, test=outer.test, validation=inner.test)
+
+
 def collate_sequences(
     sequences: list[TickerSequence], feature_names: list[str]
 ) -> tuple[list[list[list[float]]], list[list[float]], list[list[bool]]]:

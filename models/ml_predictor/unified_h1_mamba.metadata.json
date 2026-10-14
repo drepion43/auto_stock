@@ -1,0 +1,41 @@
+{
+  "market": "UNIFIED",
+  "algorithm": "mamba",
+  "horizon_days": 1,
+  "feature_names": [
+    "return_1d",
+    "return_5d",
+    "return_20d",
+    "rsi_14",
+    "macd_hist_norm",
+    "close_to_sma20",
+    "close_to_sma60",
+    "sma20_to_sma60",
+    "atr_14_pct",
+    "volume_ratio_20",
+    "channel_position_20",
+    "earnings_yield",
+    "pbr",
+    "dividend_yield",
+    "turnover_rate",
+    "sales_yield",
+    "fundamental_available"
+  ],
+  "universe_size": 14,
+  "train_start": "2026-01-08",
+  "train_end": "2026-07-17",
+  "test_start": "2026-08-19",
+  "test_end": "2026-10-13",
+  "train_samples": 1819,
+  "test_samples": 522,
+  "test_mse": 0.06841410878256038,
+  "test_rmse": 0.26156090836086415,
+  "test_mae": 0.24527546523441002,
+  "test_r2": -72.66529678945703,
+  "model_config": {
+    "in_dim": 17,
+    "hidden_dim": 16,
+    "n_layers": 2
+  },
+  "trained_at": "2026-10-14T23:01:46.853141"
+}

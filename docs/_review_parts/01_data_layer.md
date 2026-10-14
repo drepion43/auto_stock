@@ -2,7 +2,9 @@
 
 이 문서는 PRD #0 데이터 수집 계층을 구성하는 모든 파일의 공개 함수/클래스를 함수 단위로 상세히 정리한 것이다. 설계 배경 전반은 `docs/design/data-collection-layer.md`에 있으며, 이 문서는 그 설계가 실제 코드에서 어떻게 구현됐는지, 그리고 설계 문서 작성 이후 실제 구현 과정에서 추가/변경된 부분(DART/EDGAR/네이버/GDELT 소스, 업종 분류, market 세분화)까지 포함해 다룬다.
 
-> **실측 정정 (2026-10-12 갱신)**: 아래 market 세분화 서술은 이제 **작업 트리에 구현돼 있다(아직 커밋 전)** — `data/models.py::VALID_MARKETS` = `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}`, `data/market_routing.py`(도구·파이프라인·추천 코디네이터가 사용)와 `orchestrator/market_buckets.py`(스캔/추천 코디네이터가 사용, S&P500/다우 필터는 `sources/index_constituents.py` 경유)가 연결됐다. **아직 연결 안 됨**: `sources/index_quote.py`, `sources/investor_flow.py`(어떤 도구·모듈도 import하지 않음). 이전(2026-10-11) 메모의 "코드에 반영되지 않았다"는 더 이상 사실이 아니다.
+> **실측 정정 (2026-10-12 갱신)**: 아래 market 세분화 서술은 이제 **구현·커밋돼 있다(34e433c, 2026-10-13)** — `data/models.py::VALID_MARKETS` = `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}`, `data/market_routing.py`(도구·파이프라인·추천 코디네이터가 사용)와 `orchestrator/market_buckets.py`(스캔/추천 코디네이터가 사용, S&P500/다우 필터는 `sources/index_constituents.py` 경유)가 연결됐다. 이전(2026-10-11) 메모의 "코드에 반영되지 않았다"는 더 이상 사실이 아니다.
+>
+> **추가 정정 (2026-10-14)**: 바로 위 "아직 연결 안 됨: `sources/index_quote.py`, `sources/investor_flow.py`" 서술은 이제 **stale** — 둘 다 `chat_agent/tools.py`가 import해서 쓴다(`tools.py:76-77`의 `from auto_stock.data.sources.index_quote import fetch_index_quote` / `from auto_stock.data.sources.investor_flow import fetch_latest_shorting_balance, fetch_net_purchases`, 각각 `tool_get_index_quote`/`tool_analyze_supply_demand`가 호출). `tool_registry.TOOL_SPECS`에 `get_index_quote`/`analyze_supply_demand`/`analyze_technical_context`가 모두 등록돼 있어 챗봇 tool 16개 전부 배선 완료 상태다(`06_chat_agent.md`의 동일 날짜 정정 참고).
 
 **market 세분화(2026-10 작업) 개요**: 이 계층 전체가 "KRX"/"NASDAQ" 2분류에서 "KOSPI"/"KOSDAQ"/"NASDAQ"/"NYSE" 원자(atomic) 거래소 4분류로 바뀌었다. 핵심 설계 원칙은 **"원자 market(레코드·캐시 PK에 쓰임)"과 "합성 scan_key(백그라운드 스캔 버킷에만 쓰임)"를 분리**하는 것이다 — "KRX"(코스피+코스닥)/"US"(나스닥+NYSE)/"SP500"/"DOW" 같은 합성 개념은 더 이상 `OHLCVRecord.market`에 들어가지 않고, `data/service.py::get_universe_union`과 `orchestrator/market_buckets.py`(이 문서 범위 밖, `orchestrator` 리뷰 참고) 레벨에서만 존재한다. 이렇게 분리한 이유는 합성값을 레코드/캐시 PK에 허용하면 "코스피 종목을 KRX로 캐싱했다가 KOSPI로 재조회하면 캐시미스가 나는" 식의 애매함이 생기기 때문이다.
 

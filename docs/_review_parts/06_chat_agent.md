@@ -1,10 +1,19 @@
 # `src/auto_stock/chat_agent/` — 대화형 챗봇 에이전트
 
-> 전체 코드베이스에서 가장 복잡한 조율 로직을 담은 모듈이다. MVP-0 신호 소스(#1 규칙엔진, #2 ML예측, #3 LLM차트분석, #4 공시/뉴스감성)와 #5 리스크 사이징을 메인 대화 에이전트에게 "도구(tool)"로 노출하고, 사용자가 자유 질의하면 모델이 필요한 도구만 스스로 골라 호출해 종합 답변한다. 메인 루프는 LangGraph나 `deepagents`의 Tool Runner를 쓰지 않고 OpenAI Responses API의 네이티브 함수콜링을 수동 while 루프로 직접 오케스트레이션한다(`loop.py`). 예외적으로 `find_related_companies`(관련기업 자율 탐색)와 `stock_analyst(ticker)`(종목별 자율 딥다이브) 2개만 `deepagents`의 `create_deep_agent()`로 만든 서브에이전트를 "agent-as-tool" 패턴으로 메인 루프에 노출한다. 메인 루프 입장에서는 이 2개도 다른 평범한 함수콜링 도구와 구분되지 않는다 — `TOOL_DISPATCH`에 똑같이 등록되어 있다.
+> **2026-10-14 정리**: 이 문서에 겹겹이 쌓여 있던 정정 노트를 현재 코드 기준으로 정리했다. 줄 번호 인용은
+> 대부분 지웠다(자주 바뀜) — `파일::이름`으로 찾을 것.
 
-> **참조 문서 경고**: 코드 docstring과 `docs/CODEBASE_REVIEW.md`, `docs/PRD.md`는 이 모듈의 설계 근거를 `docs/_review_parts/06_chat_agent.md`와 `docs/design/main-agent-migration-plan.md`에서 찾아보라고 반복해서 안내하지만, **이 두 파일은 2026-10-07 현재 `docs/design/` 디렉터리에 실제로 존재하지 않는다**(`find docs/design -iname "*chat-agent*"` 결과 없음). 코드 docstring 안에 설계 근거가 이미 상당히 자세히 남아 있어 실질적인 정보 손실은 적지만, 이 레퍼런스들은 stale 포인터로 취급해야 한다 — 과거에 작성됐다가 삭제/미커밋되었거나, 애초에 별도 파일로 만들어지지 않고 코드 docstring에만 흡수된 것으로 보인다.
+전체 코드베이스에서 가장 복잡한 조율 로직을 담은 모듈이다. 신호 소스(#1 규칙엔진, #2 ML예측, #3 LLM차트분석, #4 공시/뉴스감성, 기술지표·수급·지수·ETF)와 #5 리스크 사이징을 메인 대화 에이전트에게 **도구 16개**로 노출하고, 사용자가 자유 질의하면 모델이 필요한 도구만 골라 호출해 종합 답변한다.
 
-실행 진입점은 `scripts/chat_cli.py`다(이 문서 마지막 절에서 다룸). 전체 흐름을 한 문장으로 요약하면: `chat_cli.py`가 모든 신호원 클라이언트/캐시/코디네이터를 조립해 `ChatToolContext`를 만들고, 사용자 입력마다 `loop.run_turn()`을 호출하며, `run_turn`은 `tool_schemas.TOOL_SCHEMAS`를 모델에게 보여주고 모델이 고른 도구를 `tools.TOOL_DISPATCH`로 디스패치한다.
+**메인 루프는 두 가지다.**
+- **기본값(2026-10-12~): `deep_loop.py`** — `deepagents.create_deep_agent(model, tools=as_langchain_tools(...), system_prompt=SYSTEM_PROMPT, backend=StateBackend(), middleware=[InvalidToolCallFeedback, ModelCallLimitMiddleware, SessionCallCounter, TurnEvents, ExposureGuard, StrictToolSchemas, ToolCallGuard, FilesystemMiddleware])`. 미들웨어는 `agent_middleware.py`(+ langchain 내장 `ModelCallLimitMiddleware`, deepagents `FilesystemMiddleware`). 설계·결정(D1–D19)은 `docs/design/main-agent-migration-plan.md`.
+- **롤백용: `loop.py`** — OpenAI Responses API 함수콜링을 수동 while 루프로 돌리는 구 루프. `CHAT_AGENT_LOOP=legacy`일 때만 쓰며 ~2026-10-26 제거 예정(D12).
+
+**도구 정의는 `tool_registry.py::TOOL_SPECS` 한 곳**에 있다. 스키마(`TOOL_SCHEMAS`), 디스패치(`TOOL_DISPATCH`), langchain 도구(`as_langchain_tools`), `stock_analyst` 바인딩(`bind_stock_analyst_tools`)이 전부 여기서 파생된다. `tool_schemas.py`와 `tools.TOOL_DISPATCH`는 구 루프용 하위 호환 별칭이다.
+
+`deepagents` 서브에이전트는 메인 에이전트 외에 4개: `find_related_companies`, `stock_analyst(ticker)`(둘 다 agent-as-tool), `etf_composition`(`analyze_etf_composition` 도구가 내부에서 호출), `recommendation_synthesis`(배경 배치 코디네이터가 호출, 메인 에이전트와 무관 — `05_orchestrator_and_synthesis.md`). 섹터/테마 2차 탐색(`sector_resolution.run_sector_theme_search`)도 임시 서브에이전트를 만든다.
+
+실행 진입점은 `scripts/chat_cli.py`다(마지막 절). `chat_cli.py`가 신호원 클라이언트·캐시·코디네이터를 조립해 `ChatToolContext`를 만들고, 사용자 입력마다 `deep_loop.run_turn_deep()`(또는 legacy면 `loop.run_turn()`)을 호출한다.
 
 ---
 
@@ -115,44 +124,47 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 ---
 
-> **구조 변경 (2026-10-11, 브랜치 `feat/main-agent-registry`)**: 도구 정의는 `tool_registry.py`의 `TOOL_SPECS` 한 곳으로 모였다(`tool_schemas.py`는 재export만, `tools.py`의 `TOOL_DISPATCH`/`_bind_stock_analyst_tools`는 하위 호환 별칭). 또 deepagents 메인 루프(`deep_loop.py` + `agent_middleware.py`)가 추가됐고 2026-10-12부터 기본값이다(롤백: `CHAT_AGENT_LOOP=legacy`, 구 루프는 2026-10-26 이후 제거 예정). 아래 본문은 구 루프 기준 서술이며, 새 구조는 `docs/design/main-agent-migration-plan.md` §0·§4.0·§4.1을 참고.
+## `tool_registry.py` / `tool_args.py` / `tool_schemas.py` — 도구 단일 정의와 스키마
 
-## `tool_schemas.py` — OpenAI Responses API 함수콜링 스키마
+**`ToolSpec`**(frozen dataclass): `name`, `description`(메인 에이전트가 보는 설명), `args_model`(Pydantic 인자 모델), `fn_name`(`tools.py`의 `tool_*` 함수 이름 — 호출 시점에 조회해 테스트 patch와 호환), `subagent_description`(있으면 `stock_analyst` 바인딩 대상). 도구를 추가하려면 `ToolSpec` 1개 + `tools.py`의 `tool_*` 함수 1개만 쓰면 된다.
 
-> **실측 정정 (2026-10-12 갱신)**: (1) **market enum은 이제 코드에 반영됐다(작업 트리, 커밋 전)** — 종목 단위 도구는 `tool_args.AtomicMarket`(KOSPI/KOSDAQ/NASDAQ/NYSE), 전체 스캔·섹터 도구는 `tool_args.ScanMarket`(원자 4개 + 합성 KRX/US/SP500/DOW)을 받는다(스키마는 `tool_registry.py`에서 파생, 아래 `_MARKET_PROPERTY` 서술은 레지스트리 도입 전 구조). (2) **"16개 도구" 서술은 여전히 사실이 아니다** — 실제 도구는 **13개**(`resolve_ticker` + 기존 11개 + `analyze_etf_composition`)이고, `get_index_quote`/`analyze_technical_context`/`analyze_supply_demand`는 데이터소스 모듈(`index_quote.py`/`technical_context.py`/`investor_flow.py`)만 있고 도구로 연결되지 않았다. 아래 본문의 도구 개수는 13개로 읽을 것.
+**인자 모델(`tool_args.py`)** — 모두 `extra="forbid"` 엄격 모델:
 
-메인 에이전트에게 노출하는 도구는 2026-10 작업(market 세분화 + 신규 보조신호 2종 + ETF 구성종목 분석) 이후 **16개**다(`TOOL_SCHEMAS` 리스트 실측, `TOOL_DISPATCH`도 동일하게 16개 키). 모듈 상단 docstring은 "11개 도구"라고 적어 두고 있는데, 이는 `get_sector_recommendations`/`get_index_quote`/`analyze_technical_context`/`analyze_supply_demand`/`analyze_etf_composition`가 반영되지 않은 **stale 숫자**다 — 실제로는 `resolve_ticker` 1개 + plain function 13개(`analyze_rule_engine`/`analyze_ml_prediction`/`analyze_chart_pattern`/`analyze_disclosures`/`analyze_news_sentiment`/`analyze_position_sizing`/`analyze_technical_context`/`analyze_supply_demand`/`analyze_etf_composition`/`get_price_data`/`get_market_scan_recommendations`/`get_sector_recommendations`/`get_index_quote`) + agent-as-tool 2개(`find_related_companies`/`stock_analyst`) = 16개다. **`analyze_etf_composition`는 agent-as-tool이 아니라 plain tool로 분류되지만, 내부적으로 네 번째 `deepagents` 서브에이전트(`chat_agent/etf_composition.py`)를 호출한다** — `find_related_companies`/`stock_analyst`와 달리 호출 전에 구성종목별 신호 수집(일반 함수 호출)이 먼저 끝나야 서브에이전트를 부를 수 있어서, 메인 루프 입장에서는 "서브에이전트를 감싼 단일 함수"라는 점에서 둘과 유사하지만 스키마 분류상 agent-as-tool 2개 묶음에는 포함하지 않는다(아래 `tools.py`/`etf_composition.py` 절 참고).
+| 모델 | 필드 | 쓰는 도구 |
+|---|---|---|
+| `TickerMarketArgs` | `ticker`, `market: AtomicMarket`(KOSPI/KOSDAQ/NASDAQ/NYSE) | 종목/ETF 하나를 다루는 12개 도구 |
+| `QueryArgs` | `query` | `resolve_ticker` |
+| `MarketArgs` | `market: ScanMarket`(원자 4개 + 합성 KRX/US/SP500/DOW) | `get_market_scan_recommendations` |
+| `QueryMarketArgs` | `query`, `market: ScanMarket` | `get_sector_recommendations` |
+| `IndexArgs` | `index`(VIX/DJI/IXIC/S&P500/RUT) | `get_index_quote` |
 
-**market enum이 "종목단위"와 "스캔버킷단위" 둘로 분리됐다**(이번 세션의 핵심 변경, `data/models.py::VALID_MARKETS`가 `{"KRX","NASDAQ"}` 2개에서 원자(atomic) 거래소 4개 `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}`로 바뀐 것과 짝을 이룸):
+`ScanMarket`은 `orchestrator/market_buckets.ALL_SCAN_BUCKETS`와 같아야 한다(종목 레코드는 원자 market에만 속하고, 합성 버킷은 스캔 캐시 레벨에만 존재하므로 스캔·섹터 도구만 받는다). `analyze_supply_demand`는 스키마상 4개 market을 받지만 국내 전용이라 NASDAQ/NYSE면 `available=false`로 저하된다.
 
-- `_MARKET_PROPERTY`(tool_schemas.py:24-28) — `enum: ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]`(원자 4개). `analyze_rule_engine`/`analyze_ml_prediction`/`analyze_chart_pattern`/`analyze_disclosures`/`analyze_news_sentiment`/`analyze_position_sizing`/`analyze_technical_context`/`analyze_supply_demand`/`analyze_etf_composition`/`get_price_data`/`find_related_companies`/`stock_analyst` 등 **종목(또는 ETF) 하나를 다루는 도구**가 쓴다 — 종목 하나는 항상 원자 거래소 하나에만 속하므로 합성값("KRX"/"US" 등)이 들어올 이유가 없다. `analyze_supply_demand`는 국내(KOSPI/KOSDAQ) 전용이라 NASDAQ/NYSE를 받아도 스키마 레벨에서 막지는 않고(enum 자체는 4개 공통) 호출부(`tools.py`)가 즉시 `available=false`로 저하시킨다 — "스키마가 받을 수 있는 값"과 "실제로 지원하는 값"이 다른 사례. **`analyze_etf_composition`은 2026-10-12부터 이 사례에서 빠졌다** — 국내·미국 ETF 둘 다 실제로 지원하므로 enum 전체 값이 "실제로 지원하는 값"과 일치한다.
-- `_SCAN_BUCKET_PROPERTY`(tool_schemas.py:32-37, 신규) — `enum: ALL_SCAN_BUCKETS`(`orchestrator.market_buckets`에서 import, 8개: `KOSPI`/`KOSDAQ`/`KRX`/`NASDAQ`/`NYSE`/`US`/`SP500`/`DOW`). `get_market_scan_recommendations`/`get_sector_recommendations`처럼 **백그라운드 스캔 캐시(scan_key)를 조회하는 도구**가 쓴다 — "KRX"(코스피+코스닥 합성)/"US"(나스닥+NYSE 합성)/"SP500"/"DOW"(지수 구성종목 필터)는 종목 레코드가 아니라 이 스캔 캐시 레벨에만 존재하는 합성 버킷이기 때문에, 이 두 도구만 8개 전체를 받을 수 있다.
-- `_query_market_schema`/`_market_only_schema` 헬퍼(tool_schemas.py:78-110)가 이제 `_SCAN_BUCKET_PROPERTY`를 쓰도록 바뀌었다(이전엔 `_MARKET_PROPERTY`를 공유해서 썼음) — docstring에도 "get_sector_recommendations 전용 — market은 scan 버킷(원자+합성) 전체를 받는다"고 명시돼 있다.
-- `_TICKER_DESC`(tool_schemas.py:58-60)도 "KRX: 6자리..., NASDAQ: 티커..."에서 "코스피/코스닥: 6자리 숫자 예 005930, 나스닥/NYSE: 티커 심볼 예 AAPL"로 갱신됐다.
+**파생물**: `openai_schemas()`→`TOOL_SCHEMAS`(Responses API의 평평한 형태 — `type`/`name`/`description`/`parameters`/`strict`가 최상위), `dispatch()`→`TOOL_DISPATCH`, `call_isolated`(인자 검증 실패를 `"도구 인자 파싱 실패"` 결과로 변환, 예외 격리), `as_langchain_tools(context, turn_lock)`(deep 루프용 `StructuredTool`), `bind_stock_analyst_tools(context, ticker, market)`(`subagent_description`이 있는 8개 도구 — `analyze_rule_engine`/`analyze_ml_prediction`/`analyze_chart_pattern`/`analyze_technical_context`/`analyze_supply_demand`/`analyze_disclosures`/`analyze_news_sentiment`/`analyze_position_sizing` — 를 종목·시장에 고정한 인자 없는 도구로 감싼다. 같은 OHLCV 캐시 연결을 공유하므로 바인딩 1회 안에서는 Lock으로 직렬화). 모델이 받는 스키마는 `tests/chat_agent/fixtures/`의 골든 파일이 고정한다.
 
-핵심 설계: `chat.completions`의 중첩형(`{"function": {...}}`)이 아니라 **Responses API 고유의 평평한 형태**(`type`/`name`/`description`/`parameters`/`strict`가 최상위 키)를 쓴다. 이 shape은 `tests/chat_agent/test_tool_schemas.py`로 고정되어 있다.
+`tool_schemas.py`는 `TOOL_SCHEMAS`를 재export하는 15줄짜리 하위 호환 모듈이다(구 루프가 이 이름으로 import).
 
-스키마 빌더 헬퍼 4종(+1 미사용):
-- `_ticker_market_schema(name, description, ticker_description)` — `ticker`+`market`(원자 4개 enum) 두 파라미터, 가장 많이 쓰임(12개 도구)
-- `_no_params_schema` — 현재 TOOL_SCHEMAS에서는 실제로 쓰이지 않는 헬퍼(정의만 있음)
-- `_query_market_schema(name, description, query_description)` — `query`+`market`(8개 scan 버킷 enum), `get_sector_recommendations` 전용
-- `_market_only_schema(name, description)` — `market`(8개 scan 버킷 enum)만, `get_market_scan_recommendations` 전용
+### 도구 16개
 
-`resolve_ticker`는 `query` 단일 파라미터(tool_schemas.py:112-134)만 받는다. 이 스키마의 `description`이 사실상 호출 프로토콜 전체를 담고 있다 — "다른 어떤 도구를 호출하기 전에도 반드시 이 도구로 먼저 종목을 확정하라", matches 1개=해석 성공, 0개=재질문, 2개 이상=후보 나열 후 되묻기. 이 지침은 `prompt.py`의 SYSTEM_PROMPT에서도 중복 강조된다(이중 방어).
+`resolve_ticker`, `analyze_rule_engine`, `analyze_ml_prediction`, `analyze_chart_pattern`, `analyze_technical_context`, `analyze_supply_demand`, `analyze_disclosures`, `analyze_news_sentiment`, `analyze_position_sizing`, `get_price_data`, `find_related_companies`, `stock_analyst`, `get_market_scan_recommendations`, `get_sector_recommendations`, `analyze_etf_composition`, `get_index_quote`. agent-as-tool은 `find_related_companies`/`stock_analyst` 2개이고, `analyze_etf_composition`은 plain 도구지만 내부에서 서브에이전트를 호출한다.
+
+### (이하 도구별 설명 — 설명 문구는 `TOOL_SPECS`의 `description`에 있다)
+
+`resolve_ticker`는 `query` 단일 파라미터만 받는다. 이 스키마의 `description`이 사실상 호출 프로토콜 전체를 담고 있다 — "다른 어떤 도구를 호출하기 전에도 반드시 이 도구로 먼저 종목을 확정하라", matches 1개=해석 성공, 0개=재질문, 2개 이상=후보 나열 후 되묻기. 이 지침은 `prompt.py`의 SYSTEM_PROMPT에서도 중복 강조된다(이중 방어).
 
 왜 ticker/market을 모델이 직접 추측하게 하지 않는가(tool_schemas.py 모듈 docstring): 환각 방지 + 사용자 승인 설계 — `ticker_resolution.py`를 별도 전처리 단계로 분리하지 않고 다른 도구들과 동일한 tool-calling 루프 안의 도구로 노출함으로써, 모델이 종목을 틀리게 짐작한 상태로 나머지 분석을 전부 엉뚱한 종목에 대해 돌리는 사고를 막는다.
 
-`analyze_disclosures`/`analyze_news_sentiment`의 description(tool_schemas.py:186-199)도 market 세분화에 맞춰 "코스피/코스닥: DART, 나스닥/NYSE: SEC EDGAR"/"코스피/코스닥: 네이버뉴스, 나스닥/NYSE: GDELT"로 갱신됐다.
+`analyze_disclosures`/`analyze_news_sentiment`의 description도 market 세분화에 맞춰 "코스피/코스닥: DART, 나스닥/NYSE: SEC EDGAR"/"코스피/코스닥: 네이버뉴스, 나스닥/NYSE: GDELT"로 갱신됐다.
 
-`get_market_scan_recommendations`/`get_sector_recommendations`의 description(tool_schemas.py:237-275)은 특히 길고 상세하다 — 8개 scan 버킷 각각이 어떤 사용자 발화에 매핑되는지(코스피만→KOSPI, 코스닥만→KOSDAQ, 코스피/코스닥 구분 없이 국내 전체→KRX, 나스닥만→NASDAQ, 뉴욕거래소/NYSE만→NYSE, 미국 전체→US, S&P500→SP500, 다우존스→DOW, 명시 없으면 KRX 기본값)을 명시하고, `scanned_at`이 `null`인 경우(한 번도 실행 안 됨, 정상)와 `scanned_at`은 있는데 `recommendations`가 빈 배열인 경우(실행은 됐지만 이번 회차에 추천 종목 없음, 정상)를 모델이 혼동하지 말고 구분해서 안내하라는 지침, `refreshing=true`일 때 "지금 갱신 중입니다"를 안내하라는 지침이 스키마 레벨에서부터 박혀 있다. `get_sector_recommendations`는 추가로 "미국(NASDAQ/NYSE/US) 종목의 섹터 질의는 공식 업종 매칭이 불가능해 항상 LLM 제안+뉴스검증 경로로만 처리된다"는 제약도 명시한다.
+`get_market_scan_recommendations`/`get_sector_recommendations`의 description은 특히 길고 상세하다 — 8개 scan 버킷 각각이 어떤 사용자 발화에 매핑되는지(코스피만→KOSPI, 코스닥만→KOSDAQ, 코스피/코스닥 구분 없이 국내 전체→KRX, 나스닥만→NASDAQ, 뉴욕거래소/NYSE만→NYSE, 미국 전체→US, S&P500→SP500, 다우존스→DOW, 명시 없으면 KRX 기본값)을 명시하고, `scanned_at`이 `null`인 경우(한 번도 실행 안 됨, 정상)와 `scanned_at`은 있는데 `recommendations`가 빈 배열인 경우(실행은 됐지만 이번 회차에 추천 종목 없음, 정상)를 모델이 혼동하지 말고 구분해서 안내하라는 지침, `refreshing=true`일 때 "지금 갱신 중입니다"를 안내하라는 지침이 스키마 레벨에서부터 박혀 있다. `get_sector_recommendations`는 추가로 "미국(NASDAQ/NYSE/US) 종목의 섹터 질의는 공식 업종 매칭이 불가능해 항상 LLM 제안+뉴스검증 경로로만 처리된다"는 제약도 명시한다.
 
-### `get_index_quote` — 신규 13번째 도구(tool_schemas.py:136-161)
+### `get_index_quote`
 
-`_INDEX_QUOTE_SCHEMA`. 종목(ticker)이 아니라 **지수 자체**(VIX/다우존스/나스닥종합/S&P500/러셀2000)의 시세를 조회하는 전용 도구 — `ticker`/`market` 파라미터가 전혀 없고 `index` 파라미터 하나만 받는다(`enum: ["VIX", "DJI", "IXIC", "S&P500", "RUT"]`). "VIX 지금 어때", "나스닥 지수 어때"처럼 개별 종목 추천/분석과는 무관한 질의 전용이라는 점을 description이 명시적으로 경고한다("ticker/market 기반 도구들과 혼동하지 말 것"). 데이터소스는 `data/sources/index_quote.py::fetch_index_quote`.
+인자 모델 `IndexArgs`. 종목(ticker)이 아니라 **지수 자체**(VIX/다우존스/나스닥종합/S&P500/러셀2000)의 시세를 조회하는 전용 도구 — `ticker`/`market` 파라미터가 전혀 없고 `index` 파라미터 하나만 받는다(`enum: ["VIX", "DJI", "IXIC", "S&P500", "RUT"]`). "VIX 지금 어때", "나스닥 지수 어때"처럼 개별 종목 추천/분석과는 무관한 질의 전용이라는 점을 description이 명시적으로 경고한다("ticker/market 기반 도구들과 혼동하지 말 것"). 데이터소스는 `data/sources/index_quote.py::fetch_index_quote`.
 
 ### `analyze_technical_context` / `analyze_supply_demand` — 신규 보조신호 2종(2026-10)
 
-둘 다 `_ticker_market_schema`를 그대로 재사용하는 평범한 스키마지만 description이 전달하는 내용이 다르다.
+둘 다 `TickerMarketArgs`를 쓰는 평범한 스키마지만 description이 전달하는 내용이 다르다.
 
 - `analyze_technical_context`: ADX/+DI/-DI(추세 강도·방향), 볼린저밴드 %B·밴드폭, 스토캐스틱 %K/%D, OBV 추세(RISING/FALLING/FLAT), Aroon Up/Down/Oscillator, Squeeze(변동성 폭발 임박 신호), RSI/가격 다이버전스(bullish/bearish/null)를 **"숫자 그대로"** 반환한다는 점을 description이 명시한다 — "이 도구는 판단을 내리지 않으므로 직접 종합해서 해석하라"는 지침이 스키마 레벨에 박혀 있다(`rule_engine/technical_context.py`가 조립, `02_core_signals_and_notify.md` 참고).
 - `analyze_supply_demand`: 외국인/기관 순매수(최근 거래일 거래량·거래대금)와 공매도 잔고/비중을 반환. description이 "**국내(코스피/코스닥) 전용**이며 나스닥/NYSE 종목은 지원하지 않는다(available=false)"를 명시 — `data/sources/investor_flow.py`가 데이터소스다.
@@ -163,7 +175,7 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 사용자가 제시한 통찰("ETF는 결국 구성종목들의 가중평균 움직임 아니냐")에서 출발한 기능. description은 "ETF 자체의 공시/뉴스를 찾는 대신 구성종목 각각의 공시·뉴스 신호를 모아 종합한 결과"라는 점을 명시한다.
 
-**갱신(2026-10-12)**: **국내(KOSPI/KOSDAQ)·미국(NASDAQ/NYSE) ETF 모두 지원**한다 — 더 이상 미국 ETF가 `available=false`로 막히지 않는다. 국내는 pykrx(`etf_source.py`, 거의 일별 신선도), 미국은 SEC EDGAR Form N-PORT(`edgar_nport_source.py`, 분기 공시 — 최대 2개월 지연)로 소스가 다르며, 미국 경로일 때는 결과에 `data_as_of_note` 필드(신선도 디스클레이머)가 결정론적으로 덧붙는다. `holdings`가 `null`이면 ETF가 아니거나 구성종목 데이터가 없다는 뜻이며 실패가 아니라고 안내한다. `_ticker_market_schema`를 그대로 재사용(파라미터는 ETF 티커 + market).
+**갱신(2026-10-12)**: **국내(KOSPI/KOSDAQ)·미국(NASDAQ/NYSE) ETF 모두 지원**한다 — 더 이상 미국 ETF가 `available=false`로 막히지 않는다. 국내는 pykrx(`etf_source.py`, 거의 일별 신선도), 미국은 SEC EDGAR Form N-PORT(`edgar_nport_source.py`, 분기 공시 — 최대 2개월 지연)로 소스가 다르며, 미국 경로일 때는 결과에 `data_as_of_note` 필드(신선도 디스클레이머)가 결정론적으로 덧붙는다. `holdings`가 `null`이면 ETF가 아니거나 구성종목 데이터가 없다는 뜻이며 실패가 아니라고 안내한다. 인자는 `TickerMarketArgs`(ETF 티커 + market).
 
 ---
 
@@ -175,16 +187,16 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 **이전(2026-10 이전)**: `_try_direct_code_match`가 "6자리 숫자면 바로 `market="KRX"`로 단정" / "영문 1~5자면 바로 `market="NASDAQ"`으로 단정"했다. `_NASDAQ_KOREAN_ALIASES` 딕셔너리도 한글 종목명마다 (티커, `"NASDAQ"` 하드코딩) 쌍을 담고 있었다.
 
-**지금**: `data/models.py::VALID_MARKETS`가 원자 거래소 4개(`KOSPI`/`KOSDAQ`/`NASDAQ`/`NYSE`)로 세분화되면서, "6자리 숫자" 하나로는 코스피/코스닥을 구분할 수 없고 "영문 1~5자" 하나로는 나스닥/NYSE를 구분할 수 없게 됐다(모듈 docstring:9-15에 명시). 그래서 패턴 매칭은 "국내냐 미국이냐"까지만 판정하고, 실제 소속 거래소는 신규 헬퍼 2개가 역조회 캐시로 알아낸다:
+**지금**: `data/models.py::VALID_MARKETS`가 원자 거래소 4개(`KOSPI`/`KOSDAQ`/`NASDAQ`/`NYSE`)로 세분화되면서, "6자리 숫자" 하나로는 코스피/코스닥을 구분할 수 없고 "영문 1~5자" 하나로는 나스닥/NYSE를 구분할 수 없게 됐다(모듈 docstring:9-15에 명시). 그래서 패턴 매칭은 "국내냐 미국이냐"까지만 판정하고, 실제 소속 거래소는 헬퍼 2개가 역조회 캐시로 알아낸다. 둘 다 **거래소 후보 리스트**(`list[str]`)를 돌려주고, 호출부가 후보마다 `TickerMatch`를 만든다:
 
-- **`_krx_matches(ticker, name)`**(ticker_resolution.py:124-129) — `pykrx_source.resolve_market(ticker)`(신규 함수, `data/sources/pykrx_source.py`)로 KOSPI/KOSDAQ 중 실제 소속을 역조회한다. 역조회에 실패하면(코넥스 상장, 캐시 미등록 등) 거래소를 임의로 단정하지 않고 `_UNKNOWN_KRX_SUB_MARKET = "KRX"`(합성 폴백 라벨)를 그대로 쓴다 — 호출부(`prompt.py`)는 이 값을 "국내 상장은 확실하지만 코스피/코스닥 중 어디인지는 모른다"로 해석해야 한다.
-- **`_us_matches(ticker, name)`**(ticker_resolution.py:132-142) — `edgar_source.resolve_exchange(ticker)`(신규 함수)로 NASDAQ/NYSE 중 실제 소속을 역조회한다. 역조회에 실패하면(ETF 등 SEC가 모르는 거래소명) NASDAQ으로 임의 단정하지 않고 **NASDAQ/NYSE 두 후보를 모두** `TickerMatch` 리스트로 반환한다 — 모호함을 그대로 드러내 사용자에게 되묻게 만드는, 이 모듈 전체의 원칙("모호 시 절대 임의로 고르지 않는다")을 패턴 매칭 단계에도 일관되게 적용한 것이다.
+- **`_krx_markets_for(code)`** — `pykrx_source.resolve_market(code)`로 KOSPI/KOSDAQ 중 실제 소속을 역조회한다. 역조회에 실패하면(코넥스, 캐시 미스 등) 하나로 단정하지 않고 **KOSPI/KOSDAQ 둘 다 후보**로 돌려준다 → `resolve_ticker`가 모호(ambiguous) 결과로 사용자에게 되묻는다. (과거 문서에 적혀 있던 합성 폴백 라벨 `"KRX"`는 현재 코드에 없다.)
+- **`_us_markets_for(ticker)`** — `edgar_source.resolve_exchange(ticker)`로 NASDAQ/NYSE 중 실제 소속을 역조회한다. 실패하면(SEC가 모르는 거래소명 등) **NASDAQ/NYSE 둘 다 후보**. 원칙은 같다 — "모호하면 절대 임의로 고르지 않는다".
 
-`_try_direct_code_match`(ticker_resolution.py:145-155)와 `_try_korean_alias_match`(158-163)는 이제 패턴 성공 직후 바로 `TickerMatch`를 만들지 않고 `_krx_matches`/`_us_matches`를 거쳐서 만든다. `resolve_ticker()`의 이름검색 폴백 경로(DART/EDGAR `resolve_ticker_by_name`, ticker_resolution.py:175-185)도 동일하게 각각 `_krx_matches`/`_us_matches`를 통과시켜 리스트를 조립한다(`for ticker, name in ... for match in _krx_matches(...)` 형태로 1개 이름매치가 여러 `TickerMatch`로 펼쳐질 수 있음 — 예를 들어 `_us_matches`가 모호해서 NASDAQ/NYSE 둘 다 반환하면).
+`_try_direct_code_match`, `_try_korean_alias_match`, ETF 매칭(`_match_etf_by_code`/`_match_etf_by_name`), `resolve_ticker()`의 이름검색 폴백(DART/EDGAR `resolve_ticker_by_name`)이 모두 이 두 헬퍼를 거쳐 `TickerMatch`를 만든다 — 이름 매치 1개가 거래소 후보 수만큼 여러 `TickerMatch`로 펼쳐질 수 있다.
 
 ### 발견된 과거 버그: 한글 별칭표의 NYSE 종목 오분류
 
-`_NASDAQ_KOREAN_ALIASES`(지금은 `_US_KOREAN_ALIASES`로 이름 변경, ticker_resolution.py:56-97)는 애초에 "나스닥 전용 한글 별칭"으로 의도됐지만, 이번 세션에서 `resolve_exchange`로 각 티커를 실제 역조회해보니 **JPM(제이피모건), V(비자), GS(골드만삭스), BA(보잉), DIS(디즈니), NKE(나이키), JNJ(존슨앤존슨), PFE(화이자), KO(코카콜라), WMT(월마트), XOM(엑슨모빌), BRK-B(버크셔해서웨이) 등 실제로는 NYSE 상장 종목이 다수 섞여 있었다**는 사실이 드러났다 — 과거 코드는 이 표의 모든 항목에 `market="NASDAQ"`을 무조건 하드코딩했으므로, 사용자가 "제이피모건 분석해줘"라고 물으면 실제로는 NYSE 종목인데 NASDAQ으로 잘못 분류된 채 나머지 5개 분석 도구가 전부 호출됐다는 뜻이다. 지금 코드는 이 표에서 market 자체를 완전히 제거했다(티커만 매핑) — 실제 거래소는 매번 `resolve_exchange`로 조회하므로 구조적으로 재발이 불가능하다.
+`_NASDAQ_KOREAN_ALIASES`(이름은 그대로지만 지금은 NASDAQ/NYSE 종목을 모두 담는 미국 한글 별칭 표, 티커만 매핑)는 애초에 "나스닥 전용 한글 별칭"으로 의도됐지만, 이번 세션에서 `resolve_exchange`로 각 티커를 실제 역조회해보니 **JPM(제이피모건), V(비자), GS(골드만삭스), BA(보잉), DIS(디즈니), NKE(나이키), JNJ(존슨앤존슨), PFE(화이자), KO(코카콜라), WMT(월마트), XOM(엑슨모빌), BRK-B(버크셔해서웨이) 등 실제로는 NYSE 상장 종목이 다수 섞여 있었다**는 사실이 드러났다 — 과거 코드는 이 표의 모든 항목에 `market="NASDAQ"`을 무조건 하드코딩했으므로, 사용자가 "제이피모건 분석해줘"라고 물으면 실제로는 NYSE 종목인데 NASDAQ으로 잘못 분류된 채 나머지 5개 분석 도구가 전부 호출됐다는 뜻이다. 지금 코드는 이 표에서 market 자체를 완전히 제거했다(티커만 매핑) — 실제 거래소는 매번 `resolve_exchange`로 조회하므로 구조적으로 재발이 불가능하다.
 
 **한글 별칭 표가 필요한 이유**: EDGAR의 이름 검색은 SEC `company_tickers.json`의 영문 title만 대상으로 하므로, "애플"/"테슬라" 같은 한글 질의로는 절대 매칭되지 않는다(실사용 중 2026-09-07 발견). DART는 원본이 한글이라 이 문제가 없다. 별칭 표는 근사 해법일 뿐이며 표에 없는 미국 종목은 영문 티커/영문 회사명으로 입력해야 한다 — 이 안내는 `prompt.py`의 SYSTEM_PROMPT가 담당한다.
 
@@ -193,7 +205,7 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 - `pykrx_source.resolve_market(ticker)`(`data/sources/pykrx_source.py`, 신규) — KOSPI/KOSDAQ 유니버스를 각각 `get_market_ticker_list`로 조회해 종목코드→소속시장 역방향 테이블을 만들고 7일 TTL로 로컬 캐싱한다(`TICKER_MARKET_CACHE_PATH`, DART/EDGAR 캐시와 동일한 "임시파일+os.replace" 원자적 쓰기 패턴). "KOSPI/KOSDAQ 양쪽에 동시 상장되는 종목은 없다"는 전제(KRX 상장 규정상 성립)로 역방향 매핑이 안전하다. 캐시에 없는 티커(코넥스, 폐지 등)는 `None`.
 - `edgar_source.resolve_exchange(ticker)`(`data/sources/edgar_source.py`, 신규) — 기존 `_download_cik_map`/`_load_or_refresh_cik_map` 캐시(`company_tickers.json`)에 SEC 원본의 `exchange` 필드(소문자 자유 문자열, 예: `"Nasdaq"`/`"NYSE"`/`"NYSEArca"`)를 추가로 저장해두고, `_normalize_exchange` 헬퍼로 `nasdaq`→`"NASDAQ"`, `nyse`→`"NYSE"`로 정규화한다. 모르는 거래소명(ETF 등)이나 구/중간 스키마 캐시(exchange 필드 자체가 없던 시절)는 `None` — NASDAQ으로 임의 단정하지 않는다. `resolve_cik`/`resolve_company_title`과 동일한 캐시를 공유하므로 추가 API 호출이 발생하지 않는다.
 
-**`TickerResolution`** (frozen dataclass) — `matches: list[TickerMatch]`에 3개 프로퍼티: `is_resolved`(길이 1), `is_ambiguous`(길이 2 이상), `is_not_found`(길이 0). 모호한 경우 **절대 임의로 하나를 고르지 않는다** — 이는 LLM 프롬프트에 실제 날짜/티커를 주입하지 않는 환각 방어 원칙과 같은 급의 설계 결정으로 명시되어 있다(모듈 docstring). market 세분화 이후로는 이 원칙이 "거래소 자체가 모호한 경우"(위 `_us_matches` 설명)에도 동일하게 확장 적용된다.
+**`TickerResolution`** (frozen dataclass) — `matches: list[TickerMatch]`에 3개 프로퍼티: `is_resolved`(길이 1), `is_ambiguous`(길이 2 이상), `is_not_found`(길이 0). 모호한 경우 **절대 임의로 하나를 고르지 않는다** — 이는 LLM 프롬프트에 실제 날짜/티커를 주입하지 않는 환각 방어 원칙과 같은 급의 설계 결정으로 명시되어 있다(모듈 docstring). market 세분화 이후로는 이 원칙이 "거래소 자체가 모호한 경우"(위 `_us_markets_for` 설명)에도 동일하게 확장 적용된다.
 
 ### ETF 이름/코드 역조회 폴백(신규, 2026-10 ETF 지원 작업 — 2026-10-11 구현 기준으로 갱신)
 
@@ -224,9 +236,9 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 ---
 
-## `tools.py` (467줄) — 도구 구현 본체
+## `tools.py` — 도구 구현 본체 (약 640줄)
 
-이 파일의 모듈 docstring은 "5개 도구"라고 적지만, 실제로는 11개 `tool_*` 함수가 정의되어 있고 `TOOL_DISPATCH`에 13개(위 tool_schemas.py 절 참고 — `resolve_ticker`가 `ticker_resolution.resolve_ticker`를 감싼 `tool_resolve_ticker`로 포함, `find_related_companies`/`stock_analyst`도 포함)가 등록된다. 이 역시 모듈이 성장하면서 상단 주석이 따라가지 못한 사례다.
+`tool_*` 함수 16개(도구 16개와 1:1)가 있다. 목록·스키마·설명은 이 파일이 아니라 `tool_registry.py::TOOL_SPECS`에 있다. `TOOL_DISPATCH`는 모듈 수준 `__getattr__`(PEP 562)이 `tool_registry.TOOL_DISPATCH`로 지연 위임하는 하위 호환 별칭이고, `_bind_stock_analyst_tools`도 `tool_registry.bind_stock_analyst_tools`의 별칭이다(`recommendation_coordinator.py`와 기존 테스트가 이 이름을 씀).
 
 ### market 라우팅 딕셔너리 — 중복 제거(신규 `data/market_routing.py`)
 
@@ -241,16 +253,16 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 
 `tool_analyze_disclosures`/`tool_analyze_news_sentiment`의 분기 로직도 `market == "KRX"`(2-way 비교)에서 `is_krx = market in KRX_MARKETS`(멤버십 체크)로 바뀌었다(tools.py:163, 202) — 결과적으로 "국내냐 미국이냐"로 수렴하는 동작은 그대로지만, 이제 원자 4개(KOSPI/KOSDAQ/NASDAQ/NYSE)를 올바르게 분기한다.
 
-### `ChatToolContext` (일반 클래스, dataclass 아님) — tools.py:58-89
+### `ChatToolContext` (일반 클래스, dataclass 아님)
 
-13개 도구 전부가 공유하는 의존성 묶음(본문 초안의 "16개"는 계획 상태 — 2026-10-12 정정). **dataclass가 아닌 일반 클래스로 만든 이유**가 명시되어 있다 — `budget` 필드가 매 도구 호출마다 mutable하게 갱신되는 `QueryBudget`에 대한 참조이기 때문에, 이 묶음 자체가 "여러 도구가 공유하는 가변 상태로의 핸들"이라는 점을 명확히 하기 위해서다(동작상으로는 dataclass여도 같다).
+16개 `tool_*` 함수 전부가 첫 인자로 받는 의존성 묶음. **dataclass가 아닌 일반 클래스로 만든 이유**가 명시되어 있다 — `budget` 필드가 매 도구 호출마다 mutable하게 갱신되는 `QueryBudget`에 대한 참조이기 때문에, 이 묶음 자체가 "여러 도구가 공유하는 가변 상태로의 핸들"이라는 점을 명확히 하기 위해서다(동작상으로는 dataclass여도 같다).
 
 필드 전부와 `None`일 때의 degradation 동작:
 
 | 필드 | 타입 | `None`/부재 시 동작 |
 |---|---|---|
 | `cache` | `OHLCVCache` | 필수(생성자에 항상 전달) — OHLCV 조회 자체가 불가능해지므로 degradation 경로 없음 |
-| `ml_models` | `dict[str, ModelBundle \| None]` | market별로 개별 `None` 가능 — `tool_analyze_ml_prediction`이 `{"available": False, "error": "{market} 시장에 학습된 ML 모델이 없습니다"}` 반환 |
+| `ml_model` | `ModelBundle \| None` | 통합 Mamba 모델 하나(market별 dict 아님). `None`이면 `tool_analyze_ml_prediction`이 `{"available": False, "error": "학습된 ML 모델이 없습니다"}` 반환 |
 | `llm_client` | `ChartPatternReader \| None` | `None`이면 `tool_analyze_chart_pattern`이 즉시 `{"available": False, "error": "LLM 차트분석 클라이언트가 설정되지 않았습니다"}` |
 | `news_client` | `DisclosureReader \| None` | `None`이면 `tool_analyze_disclosures`가 동일 패턴으로 저하 |
 | `sentiment_client` | `NewsSentimentReader \| None` | `None`이면 `tool_analyze_news_sentiment`가 동일 패턴으로 저하 |
@@ -259,6 +271,7 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 | `agent_model` | `str` | 필수 — `find_related_companies`/`stock_analyst`가 `create_deep_agent(model=f"openai:{model}")`에 넘길 메인 에이전트 자신의 모델 문자열(다른 신호원 클라이언트의 모델과는 독립적) |
 | `scan_cache` | `MarketScanCache` | 필수 — 배치 추천 캐시 조회 |
 | `recommendation_coordinator` | `"RecommendationCoordinator"` | 필수(`TYPE_CHECKING` 전용 import — `tools.py`↔`recommendation_coordinator.py` 순환 임포트 회피) |
+| `batch_trigger_limit` | `int \| None` | deep 루프에서만 `MAX_BATCH_TRIGGERS_PER_TURN`(턴당 새 백그라운드 추천 배치 수 상한, D17). `None`이면 상한 없음(legacy 루프) |
 
 ### 9개 `tool_analyze_*`/`tool_get_*` 함수 — 상세
 
@@ -267,8 +280,8 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 **`tool_analyze_rule_engine(context, ticker, market)`** (tools.py:98-107)
 `_fetch_records`로 OHLCV 조회(기본 lookback은 `orchestrator.pipeline.DEFAULT_LOOKBACK_DAYS`) → `generate_candidates(records)`. 후보가 없으면 `{"available": True, "candidate": None}`(이건 실패가 아니라 "신호 없음"이라는 정상 결과임을 tool_schemas.py의 description이 모델에게 명시). LLM을 쓰지 않으므로 `QueryBudget`을 소비하지 않는다.
 
-**`tool_analyze_ml_prediction(context, ticker, market)`** (tools.py:110-127)
-`context.ml_models.get(market)`이 `None`이면 즉시 저하. 있으면 `predict(model, records)` 호출, `prediction is None`이면(데이터 부족) `{"available": True, "prediction": None}`. LLM 미사용, budget 비소비.
+**`tool_analyze_ml_prediction(context, ticker, market)`**
+`context.ml_model`이 `None`이면 즉시 저하. 있으면 `_fetch_ml_records`로 `ML_LOOKBACK_DAYS`(3년)치 OHLCV를, `_fetch_fundamentals`로 국내 펀더멘털을 구해 `predict(model, records, fundamentals)` 호출. 예외는 `{"available": False, "error": ...}`, `prediction is None`(데이터 부족)이면 `{"available": True, "prediction": None}`, 성공이면 `{"prediction": {"predicted_return": ...}}`(다음 거래일 예측 수익률 하나). LLM 미사용, budget 비소비. 2026-10-14 기준 로컬에는 스모크 모델(실사용 불가)만 있다 — 모델 파일이 있으면 이 도구가 켜진다(`03_ml_predictor.md` §11).
 
 **`tool_analyze_chart_pattern(context, ticker, market)`** (tools.py:130-154)
 `llm_client is None` → 즉시 저하. OHLCV 조회 실패를 먼저 격리한 뒤, **그 다음에야** `context.budget.try_consume_llm_call()`을 체크한다(순서 중요 — OHLCV 조회가 실패하면 애초에 LLM을 부를 필요가 없으므로 예산을 쓰지 않는다). 예산 소진 시 `{"available": False, "error": "이번 대화 턴의 LLM 호출 예산을 모두 사용했습니다"}`. `analyze_chart` 호출 실패는 별도 try로 격리해 `"LLM 차트분석 실패: {exc}"`.
@@ -281,9 +294,7 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 `analysis is None`(최근 90일 내 공시 없음)이면 `{"available": True, "analysis": None}`.
 
 **`tool_analyze_news_sentiment(context, ticker, market)`** (tools.py:195-239)
-`tool_analyze_disclosures`와 동형 구조이되 한 단계가 더 있다 — 이름 해석(`resolve_corp_name`/`resolve_company_title`)이 **공시 조회가 아니라 뉴스 조회**를 위한 전처리라는 점이 다르다. 이름 해석 실패 시 에러 라벨은 일부러 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 쓴다(tools.py:206) — 뉴스 소스 자체는 네이버/GDELT(`SENTIMENT_SOURCE_LABELS`)이지만, 이름 해석은 DART/EDGAR 캐시가 하는 일이므로 실패 원인을 정확히 그 시스템 이름으로 라벨링해야 한다는 설계다. 미국(NASDAQ/NYSE) 종목의 경우 회사명에 포함된 `"` 문자를 제거(`safe_name = name.replace('"', "")`)한 뒤 `f'"{safe_name}"'`로 감싸 GDELT 질의 구문을 깨지 않게 한다.
-
-> **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase()`로 만든다(따옴표 제거 + SEC 법인 접미사 제거, 예: "NVIDIA CORP" → "NVIDIA"). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
+`tool_analyze_disclosures`와 동형 구조이되 한 단계가 더 있다 — 이름 해석(`resolve_corp_name`/`resolve_company_title`)이 **공시 조회가 아니라 뉴스 조회**를 위한 전처리라는 점이 다르다. 이름 해석 실패 시 에러 라벨은 일부러 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 쓴다(tools.py:206) — 뉴스 소스 자체는 네이버/GDELT(`SENTIMENT_SOURCE_LABELS`)이지만, 이름 해석은 DART/EDGAR 캐시가 하는 일이므로 실패 원인을 정확히 그 시스템 이름으로 라벨링해야 한다는 설계다. 미국(NASDAQ/NYSE) 종목은 GDELT 검색어를 `gdelt_source.company_phrase(name)`로 만든다(따옴표 제거 + SEC 법인 접미사 제거, 예: "NVIDIA CORP" → "NVIDIA"). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
 
 **`tool_analyze_technical_context(context, ticker, market)`** (신규, 2026-10)
 `_fetch_records`로 OHLCV 조회 → `rule_engine.technical_context.build_technical_context(records)` 호출 → 13개 필드(ADX/+DI/-DI, 볼린저밴드 %B·밴드폭, 스토캐스틱 %K/%D, OBV 추세, Aroon 3종, Squeeze, RSI 다이버전스)를 그대로 JSON으로 변환. `tech is None`(워밍업 미충족)이면 `{"available": True, "context": None}`. 순수 계산이라 LLM 미사용, budget 비소비.
@@ -314,22 +325,13 @@ docstring에 실사용 중 발견된 버그 사례가 적혀 있다(2026-09-26):
 4. **이미 있는** `tool_analyze_disclosures`/`tool_analyze_news_sentiment`를 구성종목마다 그대로 재호출(새 분석 로직 없음)한다 — holding의 실제 소속 거래소(KOSPI/KOSDAQ 또는 NASDAQ/NYSE)를 함께 전달. `ThreadPoolExecutor(max_workers=ETF_HOLDING_MAX_WORKERS=4).map`으로 병렬화 — `QueryBudget`은 내부 락으로 스레드 안전하고, `.map()`이 비중 순서를 보존한다(`orchestrator/deep_scan.py`와 같은 패턴).
 5. `etf_composition._holding_to_payload`로 조립 → `run_etf_composition_synthesis`(네 번째 deepagents 서브에이전트, 아래 절)에 종합 위임. 종합 실패면 그 결과(`available=false`)를 그대로 반환, 성공이면 결과에 실제 분석한 `holdings`(`ticker`/`name`/`weight_pct`) 목록을 덧붙인다. **미국 경로면 `data_as_of_note` 필드(N-PORT 분기 공시 기준 디스클레이머)를 결정론적으로 추가로 덧붙인다** — LLM 요약에 맡기지 않고 코드가 직접 붙인다(provenance와 동일한 환각 방지 원칙).
 
-`_STOCK_ANALYST_TOOL_SPECS`에는 넣지 않았다 — 종목 1개 딥다이브의 보조 신호가 아니라 별도 질의 유형이라 메인 챗봇이 직접 호출하는 독립 tool이다.
+`subagent_description`이 없어 `stock_analyst` 바인딩에는 들어가지 않는다 — 종목 1개 딥다이브의 보조 신호가 아니라 별도 질의 유형이라 메인 챗봇이 직접 호출하는 독립 tool이다.
 
-### `_STOCK_ANALYST_TOOL_SPECS` / `_bind_stock_analyst_tools` / `tool_stock_analyst` — tools.py:339-377
+### `stock_analyst` 바인딩 / `tool_stock_analyst`
 
-> **갱신 (2026-10-11~12)**: 바인딩은 `tool_registry.bind_stock_analyst_tools`로 옮겨졌다(`ToolSpec.subagent_description`이 있는 6개 도구, `tools._bind_stock_analyst_tools`는 하위 호환 별칭). 또 LangGraph가 서브에이전트의 tool_call도 병렬 실행해 공유 DuckDB 연결에서 무작위 오류가 났기 때문에, 바인딩 1회 안에서는 도구 실행을 Lock으로 직렬화한다(커밋 `04ad247`). 아래 코드는 이전 구현 기준이다.
+**순환 임포트를 피하는 바인딩 메커니즘**이 핵심이다. `stock_analyst.py`는 `tools.py`를 import하지 않는다. 대신 `tool_registry.bind_stock_analyst_tools(context, ticker, market)`가 `ToolSpec.subagent_description`이 있는 **8개** 도구(`analyze_rule_engine`/`analyze_ml_prediction`/`analyze_chart_pattern`/`analyze_technical_context`/`analyze_supply_demand`/`analyze_disclosures`/`analyze_news_sentiment`/`analyze_position_sizing`)를 **종목/시장에 클로저로 고정한, 인자 없는 langchain `@tool`**로 감싸 `run_stock_analyst`에 전달한다(`tools._bind_stock_analyst_tools`는 그 별칭). `analyze_etf_composition`·`find_related_companies`·`get_*`는 바인딩 대상이 아니다.
 
-**순환 임포트를 피하는 바인딩 메커니즘**이 이 섹션의 핵심이다. `stock_analyst.py`는 `tools.py`를 import하지 않는다(반대 방향 — `tools.py`가 `stock_analyst.run_stock_analyst`를 `TOOL_DISPATCH` 등록을 위해 import해야 하므로, 거꾸로 import하면 순환이 생긴다). 그래서 `_bind_stock_analyst_tools(context, ticker, market)`가 여기서 **8개**(2026-10 작업으로 `analyze_technical_context`/`analyze_supply_demand` 2개 추가 — 과거 6개) `tool_analyze_*` 함수(`_STOCK_ANALYST_TOOL_SPECS`에 이름+설명 나열)를 **종목/시장에 클로저로 고정한, 인자 없는 langchain `@tool`**로 감싸 `run_stock_analyst`에 전달한다. **`analyze_etf_composition`은 이 목록에 포함되지 않는다** — ETF 분석은 종목 1개 전용 `stock_analyst`의 보조 신호가 아니라 별도 질의 유형(ETF 티커 자체를 분석)이므로, 메인 챗봇이 직접 호출하는 독립 tool로 둔다(`find_related_companies`처럼 메인 루프 전용, `etf_composition.py` 절 참고):
-
-```python
-def _make_bound_tool(fn):
-    def _bound_tool() -> dict:
-        return fn(context, ticker, market)
-    return _bound_tool
-```
-
-서브에이전트 인스턴스 1개는 종목 1개만 다루므로 이렇게 인자를 미리 다 고정해버리면, 서브에이전트(LangGraph 에이전트)가 판단할 것은 "어떤 도구를 부를지"뿐으로 단순화된다. `tool_stock_analyst(context, ticker, market)`는 이 바인딩을 만든 뒤 `run_stock_analyst(context.budget, context.agent_model, bound_tools, ticker, market)`를 그대로 호출한다.
+서브에이전트 인스턴스 1개는 종목 1개만 다루므로 인자를 미리 고정하면 서브에이전트가 판단할 것은 "어떤 도구를 부를지"뿐이다. LangGraph가 서브에이전트의 tool_call도 병렬 실행하는데 바인딩 도구들이 같은 OHLCV DuckDB 연결을 공유해 무작위 오류가 났기 때문에(2026-10-12 재현), **바인딩 1회 안에서는 도구 실행을 Lock으로 직렬화**한다(배치의 서로 다른 종목은 각자 cursor를 써서 병렬 유지). `tool_stock_analyst(context, ticker, market)`는 이 바인딩을 만든 뒤 `run_stock_analyst(context.budget, context.agent_model, bound_tools, ticker, market)`를 호출한다.
 
 ### `tool_get_market_scan_recommendations` / `tool_get_sector_recommendations` — tools.py:378-423
 
@@ -347,17 +349,14 @@ VIX/다우존스/나스닥종합/S&P500/러셀2000 같은 지수 자체 시세�
 
 ### `TOOL_DISPATCH`
 
-16개 키 → 함수 매핑(`resolve_ticker` + plain function 13개 + agent-as-tool 2개, 위 `tool_schemas.py` 절 참고). `loop._dispatch_tool_call`이 모델이 호출한 도구 이름으로 이 딕셔너리를 조회해 실행한다.
-
+16개 키 → 함수 매핑. 실체는 `tool_registry.dispatch()`가 `TOOL_SPECS`에서 만든 것이고(`tools.TOOL_DISPATCH`는 지연 별칭), 구 루프(`loop._dispatch_tool_call`)가 도구 이름으로 조회해 실행한다. deep 루프는 이 딕셔너리 대신 `as_langchain_tools`가 만든 `StructuredTool`을 쓴다.
 ---
 
 ## `related_companies.py` — 첫 번째 deepagents 서브에이전트
 
 ### `verify_companies_co_mentioned_in_news(company_a, company_b, market)` — langchain `@tool` (related_companies.py:45-68)
 
-두 회사명이 최근 뉴스에서 공동 언급된 적이 있는지 사실 확인만 하는 도구(서브에이전트에게 confidence 판단을 맡기고, 이 도구 자체는 판단하지 않는다). 분기 로직이 `market == "KRX"`/`market == "NASDAQ"`(2-way 리터럴 비교)에서 `market in KRX_MARKETS`/`market in US_MARKETS`(멤버십 체크, `data/market_routing.py`에서 import, related_companies.py:26,56,58)로 바뀌었다 — `market in KRX_MARKETS`면 `search_news(f"{company_a} {company_b}", ...)`(네이버 뉴스), `market in US_MARKETS`면 `search_articles(f'"{safe_a}" "{safe_b}"', ...)`(GDELT, 따옴표 이스케이프 처리). 이 함수는 `tool_find_related_companies`(위 참고, 여전히 리터럴 비교라 버그 가능성 있음)와 달리 market 세분화를 올바르게 반영한 사례다. 지원하지 않는 시장이거나 조회 자체가 예외를 던지면 `{"co_mentioned": False, "error": ...}` — 이 도구도 raise하지 않는다. 기사가 있으면 `{"co_mentioned": True, "headline": ..., "url": ...}`(첫 번째 기사만).
-
-> **갱신 (2026-10-12)**: GDELT 검색어는 이제 `gdelt_source.company_phrase()`로 만든다(따옴표 제거 + SEC 법인 접미사 제거, 예: "NVIDIA CORP" → "NVIDIA"). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
+두 회사명이 최근 뉴스에서 공동 언급된 적이 있는지 사실 확인만 하는 도구(서브에이전트에게 confidence 판단을 맡기고, 이 도구 자체는 판단하지 않는다). 분기 로직이 `market == "KRX"`/`market == "NASDAQ"`(2-way 리터럴 비교)에서 `market in KRX_MARKETS`/`market in US_MARKETS`(멤버십 체크, `data/market_routing.py`에서 import, related_companies.py:26,56,58)로 바뀌었다 — `market in KRX_MARKETS`면 `search_news(f"{company_a} {company_b}", ...)`(네이버 뉴스), `market in US_MARKETS`면 `search_articles(f"{company_phrase(company_a)} {company_phrase(company_b)}", ...)`(GDELT — `company_phrase`가 따옴표 제거 + SEC 법인 접미사 제거 후 구문 검색어를 만든다). 지원하지 않는 시장이거나 조회 자체가 예외를 던지면 `{"co_mentioned": False, "error": ...}` — 이 도구도 raise하지 않는다. 기사가 있으면 `{"co_mentioned": True, "headline": ..., "url": ...}`(첫 번째 기사만). GDELT 요청은 프로세스 전체에서 5.5초 간격으로 조절되고 429 시 1회 재시도한다 — `docs/design/us-news-source-reliability.md`.
 
 **관계 검증은 뉴스 공동언급으로만 한다**(설계 확정 사항, 모듈 docstring:5-7) — DART/EDGAR는 공시 제목/날짜 메타데이터만 수집되어 있고 본문은 수집하지 않으므로, 공시 본문 기반 검증은 이 프로젝트의 데이터 계층으로는 애초에 불가능하다.
 
@@ -386,7 +385,7 @@ VIX/다우존스/나스닥종합/S&P500/러셀2000 같은 지수 자체 시세�
 
 `run_find_related_companies`와 완전히 동형인 구조다: 예산 사전차감(`STOCK_ANALYST_LLM_CALL_ESTIMATE`) → `create_deep_agent(model=f"openai:{model}", tools=tools, system_prompt=_SYSTEM_PROMPT, response_format=StockAnalystResult)` → `.invoke({"messages": [{"role": "user", "content": f"{ticker}({market}) 종목을 분석하라."}]}, config={"recursion_limit": STOCK_ANALYST_RECURSION_LIMIT})` → `structured_response` 접근까지 전부 하나의 try 안.
 
-**중요한 차이점**: 이 함수는 `tools` 매개변수를 **외부(= `tools.py`의 `_bind_stock_analyst_tools`)에서 받는다** — 자기 자신이 어떤 분석 도구를 쓸지 하드코딩하지 않는다. 이는 순환 임포트 회피를 위한 구조이며(모듈 docstring:6-10), 동시에 "종목 1개에 대해 신호 중 필요한 것만 자율 선택"하는 서브에이전트 자체의 자유도와도 자연스럽게 맞는다. **바인딩되는 신호 수는 6개가 아니라 8개다**(`_STOCK_ANALYST_TOOL_SPECS`에 2026-10 작업으로 `analyze_technical_context`/`analyze_supply_demand`가 추가됨) — 아래 `_bind_stock_analyst_tools` 절 참고.
+**중요한 차이점**: 이 함수는 `tools` 매개변수를 **외부(= `tool_registry.bind_stock_analyst_tools`)에서 받는다** — 자기 자신이 어떤 분석 도구를 쓸지 하드코딩하지 않는다. 순환 임포트 회피를 위한 구조이며, "종목 1개에 대해 신호 중 필요한 것만 자율 선택"하는 서브에이전트의 자유도와도 맞는다. 바인딩되는 신호는 8개다(위 "stock_analyst 바인딩" 절).
 
 `provenance`("서브에이전트 자율 조사 결과") 라벨은 **LLM 출력 텍스트가 아니라 `run_stock_analyst` 함수 자신이 결정론적으로 하드코딩해 붙인다**(stock_analyst.py:25, 82-86) — 모델이 스스로 "나는 서브에이전트다"라고 말하게 하면 그 말을 신뢰할 수 없으므로(환각 가능), 호출부가 라벨을 코드로 보장한다. 이 프로젝트 전체에 걸친 환각 방지 컨벤션(`llm_chart_analyst`의 `ticker`/`market`/`date`를 LLM 응답이 아니라 입력 레코드에서 채우는 것과 동일한 원칙)의 연장이다.
 
@@ -420,7 +419,7 @@ ETF 구성종목별 신호를 "종합"만 하는 전용 서브에이전트 — `
 
 ## `prompt.py` — 메인 SYSTEM_PROMPT
 
-메인 대화 에이전트(서브에이전트가 아니라 `loop.run_turn`이 매 턴 호출하는 그 모델)의 시스템 프롬프트. 섹션별 핵심 규칙:
+메인 대화 에이전트(서브에이전트가 아니라 deep 루프의 `create_deep_agent(system_prompt=...)`, legacy 루프의 첫 턴 입력으로 들어가는 그 모델)의 시스템 프롬프트. 섹션별 핵심 규칙:
 
 1. **종목 확정** — 종목명/코드가 언급되면 다른 어떤 분석 도구보다 먼저 `resolve_ticker`를 호출하라는 강제, matches 1/0/2+ 각각의 분기 처리, 한글로 미국 종목을 물었는데 0개가 나왔을 때는 "한글 별칭 표에 없을 수 있으니 영문 티커/회사명으로 다시 입력해달라"고 안내하라는 구체적 지침.
 2. 전체 스캔형 질의(`get_market_scan_recommendations`)와 섹터/테마형 질의(`get_sector_recommendations`)의 구분 — market 인자를 어떻게 유추할지. market 세분화(2026-10) 이후로는 8개 scan 버킷 전체를 다음 규칙으로 안내한다: "코스피"만 명시→`KOSPI`, "코스닥"만 명시→`KOSDAQ`, 코스피/코스닥 구분 없이 국내 전체를 뜻하면→`KRX`, "나스닥"만 명시→`NASDAQ`, "뉴욕거래소"/"NYSE"만 명시→`NYSE`, 미국 전체를 뜻하면("미국 주식" 등)→`US`, "S&P500" 명시→`SP500`, "다우존스" 명시→`DOW`, 아무것도 명시 안 하면 `KRX`를 기본값으로 사용. `get_sector_recommendations`도 동일한 market 선택 규칙을 따른다.
@@ -442,7 +441,9 @@ ETF 구성종목별 신호를 "종합"만 하는 전용 서브에이전트 — `
 
 ---
 
-## `loop.py` — 메인 tool-calling 루프
+## `loop.py` — 구(legacy) tool-calling 루프
+
+> 기본 루프는 `deep_loop.py`다(이 문서 상단). 이 절은 `CHAT_AGENT_LOOP=legacy` 롤백 경로 설명이며, `loop.py`는 ~2026-10-26 제거 예정이다(D12). deep 루프의 멀티턴은 `DeepChatSession`이 메시지 히스토리를 들고 가고, 입력 토큰이 상한을 넘으면 `_compact_if_needed`가 최근 (질문, 최종답변) 쌍만 남긴다.
 
 ### 멀티턴 처리 메커니즘
 
@@ -494,16 +495,17 @@ else:
 
 이 파일 자체는 `chat_agent/` 패키지 소속이 아니지만 유일한 실행 진입점이므로 여기서 함께 다룬다.
 
-### 조립 순서 (main 함수, chat_cli.py:138-171)
+### 조립 순서 (`main`)
 
 1. `load_llm_config()` — `OPENAI_API_KEY` 없으면 즉시 `FAILED` 메시지 출력 후 `sys.exit(1)`(대화 자체를 시작할 수 없는 유일한 필수 크리덴셜).
-2. `OpenAIChatAgentClient(agent_config)` — 대화 세션 전체에서 재사용되는 단일 인스턴스.
+2. `OpenAIChatAgentClient(agent_config)` — 세션 전체에서 재사용(legacy 루프와 섹터 1차 분류용 reader).
 3. `OHLCVCache("data/ohlcv.duckdb")`, `MarketScanCache("data/market_scan.duckdb")`.
-4. `_load_ml_models()` — **`_ATOMIC_MARKETS = ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]`(원자 4개)** 각각 `load_model(market)` 시도, `ModelArtifactError`면 해당 market 값을 `None`으로(배치 스크립트와 달리 **즉시 종료하지 않는다** — 대화형이므로 일부 신호원이 꺼져 있어도 나머지로 계속 대화 가능해야 한다). 과거엔 `_MARKETS = ["KRX", "NASDAQ"]` 하나로 ML 모델 로드와 scan 버킷 선제 트리거를 겸했는데, market 세분화 이후 **두 용도가 분리됐다** — ML 모델은 반드시 원자 market별로만 학습·저장되므로(합성 버킷을 학습하면 두 시장 평균효과로 계수가 뭉개져 Explainability가 훼손된다, `scripts/train_ml_model.py` 참고) `ml_models` dict의 키는 원자 4개여야 한다.
-5. `_load_chart_client()`/`_load_news_client()`/`_load_sentiment_client()` — 각각 `KeyError`(크리덴셜 미설정) 시 `None` 반환.
-6. `AccountState(equity=..., held_tickers=frozenset(), total_exposure_pct=0.0)` — `ACCOUNT_EQUITY` 환경변수(기본 1천만원), **브로커 연동 전이라 placeholder**(MVP-1에서 교체 예정, `run_recommendations.py`류 배치 스크립트와 동일한 이유).
-7. `RecommendationCoordinator(...)` 생성 후 `for bucket in ALL_SCAN_BUCKETS: recommendation_coordinator.ensure_fresh(bucket)` — **`orchestrator.market_buckets.ALL_SCAN_BUCKETS`(8개: KOSPI/KOSDAQ/KRX/NASDAQ/NYSE/US/SP500/DOW)를 전부 순회**해 시작 시점에 모든 scan 버킷 캐시를 선제적으로 신선화한다. 이게 바로 4번의 ML 모델 로드와 분리된 용도다 — `RecommendationCoordinator._run`은 합성 버킷(KRX/US/SP500/DOW)이 들어오면 내부적으로 원자 market별로 쪼개 처리한다(상세는 `05_orchestrator_and_synthesis.md` 참고).
-8. 메인 while 루프 — `input("you> ")`를 받아 `exit`/`quit`/`종료`면 종료, 빈 입력이면 continue. 매 턴마다 **새 `ChatToolContext`를 만들고 그 안에 새 `QueryBudget(max_llm_calls=MAX_LLM_CALLS_PER_QUERY)`를 꽂는다**(턴 단위 예산 리셋이 실제로 여기서 일어난다). `run_turn(reader, context, user_message, previous_response_id, on_event=_ActivityPrinter())` 호출 후 `previous_response_id`를 갱신하고 `bot> {text}` 출력.
+4. `_load_ml_model()` — `load_model()`을 한 번 시도해 `ModelArtifactError`면 `None`(ML 신호 전체 꺼짐, 나머지는 정상). 통합 단일 모델이라 market별 반복이 없다.
+5. `_load_chart_client()`/`_load_news_client()`/`_load_sentiment_client()` — 각각 `KeyError`(크리덴셜 미설정) 시 `None`.
+6. `AccountState(equity=..., held_tickers=frozenset(), total_exposure_pct=0.0)` — `ACCOUNT_EQUITY` 환경변수(기본 1천만원), **브로커 연동 전이라 placeholder**.
+7. `RecommendationCoordinator(...)` 생성(`RECOMMENDATION_STALE_HOURS` 기본 24, `MARKET_SCAN_UNIVERSE_SIZE` 기본 200) 후 `_SCAN_BUCKETS = ["KRX", "US"]` 2개만 `ensure_fresh`로 선제 신선화. 나머지 6개 버킷은 사용자가 그 범위를 물을 때 tool이 신선화한다.
+8. `_select_loop_mode()`로 deep/legacy 결정 — deep이면 `DeepChatSession(model=make_chat_model(agent_config))`. 시작 메시지에 `(루프: deep|legacy)` 표시.
+9. 메인 while 루프 — `input("you> ")`, `exit`/`quit`/`종료`면 종료. 매 턴 **새 `ChatToolContext` + 새 `QueryBudget(MAX_LLM_CALLS_PER_QUERY)`**(턴 단위 예산 리셋). deep 모드면 `batch_trigger_limit=MAX_BATCH_TRIGGERS_PER_TURN`(턴당 새 백그라운드 추천 배치 1개, D17)을 넣고 `run_turn_deep(deep_session, context, user_message, on_event=_ActivityPrinter())`, legacy면 `run_turn(reader, context, user_message, previous_response_id, ...)` 후 `previous_response_id` 갱신. `bot> {text}` 출력.
 
 ### `_ActivityPrinter` (chat_cli.py:79-104)
 
@@ -520,10 +522,10 @@ else:
 ## 신규 참여자를 위한 체크리스트
 
 - **신규 분석 도구를 추가하려면 (2026-10-11 이후)**: `tool_registry.py`의 `TOOL_SPECS`에 `ToolSpec` 1개(이름, 설명, `tool_args.py`의 인자 모델, `tools.py` 함수 이름, stock_analyst에 줄 거면 `subagent_description`) + `tools.py`에 `tool_<이름>` 구현 함수만 추가하면 스키마·디스패치·바인딩·LangChain 도구가 자동 파생된다. `prompt.py`의 호출 안내만 손으로 추가한다(테스트가 "모든 도구 이름이 프롬프트에 언급되는지" 확인). 골든 픽스처(`tests/chat_agent/fixtures/`)가 깨지면 의도한 변경인지 확인 후 갱신한다.
-- **(레지스트리 도입 전 절차, 참고용) 신규 분석 도구를 추가하려면**: ① `tool_schemas.py`에 스키마 추가(헬퍼 재사용), ② `tools.py`에 `tool_<이름>` 함수 추가(실패격리 원칙 준수, raise 금지) + `TOOL_DISPATCH`에 등록, ③ LLM을 쓴다면 `context.budget.try_consume_llm_call()` 체크를 OHLCV/메타데이터 조회 성공 이후·실제 LLM 호출 이전에 넣을 것, ④ `_STOCK_ANALYST_TOOL_SPECS`에도 추가해 `stock_analyst` 서브에이전트가 쓸 수 있게 할지 결정(ETF처럼 "종목 1개 전용 딥다이브의 보조 신호가 아닌" 별도 질의 유형이면 추가하지 않는 게 맞다 — `analyze_etf_composition`이 그 선례), ⑤ `prompt.py`의 SYSTEM_PROMPT에 호출 조건/답변 표기 규칙 추가.
+- **새 도구 구현 시 지켜야 할 것**: `tool_*` 함수는 절대 raise하지 않고 `{"available": bool, ...}`를 반환한다. LLM을 쓴다면 `context.budget.try_consume_llm_call()` 체크를 데이터 조회 성공 이후·실제 LLM 호출 이전에 넣는다. `stock_analyst`에 줄지(`subagent_description`)는 "종목 1개 딥다이브의 보조 신호인가"로 판단한다(`analyze_etf_composition`은 아니라서 제외한 선례).
 - **멀티턴 버그를 조사하려면**: `loop.py`의 `previous_response_id` 전파 지점(정상 종료/API 실패/반복상한 3가지 반환 경로 각각 다른 ID를 반환함)을 먼저 확인하라 — 서버 쪽 상태(OpenAI Responses API)에 의존하므로 로컬 재현이 어려울 수 있다.
 - **예산 소진이 의심되면**: `credentials.py`의 `*_RECURSION_LIMIT`과 `*_LLM_CALL_ESTIMATE` 쌍이 여전히 "estimate ≥ recursion_limit" 불변식을 지키는지 먼저 확인하라(`ETF_COMPOSITION_*`도 동일 규칙 적용 대상).
 - **`stock_analyst`/`find_related_companies`/`etf_composition`을 수정하려면**: 세 파일 모두 `create_deep_agent(...).invoke(...)` 호출과 `structured_response` 필드 접근까지 **하나의 try 블록**에 있어야 한다는 계약을 깨지 않도록 주의하라(과거 버그: `find_related_companies`에서 후처리가 try 밖에 있었음).
-- **market 버킷을 추가/변경하려면**(예: 러셀2000 구성종목 지원 추가, 새 지수 필터 버킷 신설): `orchestrator/market_buckets.py`(`MARKET_BUCKETS`/`INDEX_FILTER_BUCKETS`/`ALL_SCAN_BUCKETS`), `data/market_routing.py`(국내/미국 공시·뉴스 소스 라우팅이 필요하면), `chat_agent/tool_schemas.py`의 `_SCAN_BUCKET_PROPERTY` enum, `chat_agent/prompt.py`의 market 선택 규칙(두 군데: `get_market_scan_recommendations`/`get_sector_recommendations` 설명) 네 곳을 함께 수정해야 한다 — 하나라도 빠지면 모델이 그 버킷을 선택할 방법이 없거나(enum/prompt 누락), 선택해도 백엔드가 처리하지 못한다(market_buckets 누락). 반대로 원자 거래소(KOSPI/KOSDAQ/NASDAQ/NYSE) 자체를 추가/변경하는 경우(새 거래소 상장 등)는 `data/models.py::VALID_MARKETS`, `data/service.py::get_universe`, `data/market_routing.py`, `chat_agent/tool_schemas.py`의 `_MARKET_PROPERTY`까지 영향 범위가 더 넓다.
+- **market 버킷을 추가/변경하려면**(예: 러셀2000 구성종목 지원 추가, 새 지수 필터 버킷 신설): `orchestrator/market_buckets.py`(`MARKET_BUCKETS`/`INDEX_FILTER_BUCKETS`/`ALL_SCAN_BUCKETS`), `data/market_routing.py`(국내/미국 공시·뉴스 소스 라우팅이 필요하면), `chat_agent/tool_args.py`의 `ScanMarket` Literal, `chat_agent/prompt.py`의 market 선택 규칙(`get_market_scan_recommendations`/`get_sector_recommendations` 설명), `tool_registry.py`의 해당 도구 description을 함께 수정해야 한다 — 하나라도 빠지면 모델이 그 버킷을 선택할 방법이 없거나(Literal/prompt 누락), 선택해도 백엔드가 처리하지 못한다(market_buckets 누락). 골든 스키마 픽스처도 갱신해야 한다. 원자 거래소(KOSPI/KOSDAQ/NASDAQ/NYSE) 자체를 추가/변경하는 경우는 `data/models.py::VALID_MARKETS`, `data/service.py::get_universe`, `data/market_routing.py`, `tool_args.py`의 `AtomicMarket`까지 영향 범위가 더 넓다.
 - **`tool_find_related_companies`의 `market == "KRX"` 리터럴 비교 버그는 수정 완료됐다** — 과거(market 세분화 직후) 이 함수가 수정 누락으로 남아 있었다가, 이후 세션에서 `market in KRX_MARKETS` 멤버십 체크로 다른 도구들과 통일됐다(위 `tool_find_related_companies` 절 참고).
 - **ETF holdings 조회는 2026-10-11 라이브 검증 완료** — KRX 로그인(`.env`의 `KRX_ID`/`KRX_PW`) 후 정상 동작. 이 검증에서 pykrx의 두 함정(날짜 생략 시 실패, `비중` 컬럼 깨짐)을 발견해 `fetch_etf_holdings`를 수정했다(01_data_layer.md의 `etf_source.py` 절 참고). 주의: `scripts/verify_sources_individually.py`에는 `etf` 타깃이 **실제로는 없다**(07_scripts.md 참고). 아직 미검증: 실제 LLM을 태운 대화(`scripts/chat_cli.py`에서 "KODEX 200 왜 올랐어?").
