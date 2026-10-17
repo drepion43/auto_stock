@@ -4,7 +4,7 @@
 
 세 모듈 모두 공통적으로 아래 5개 파일로 구성된다: `models.py`(도메인 모델 + Protocol), `schema.py`(Pydantic 출력 스키마), `prompt.py`(시스템/유저 프롬프트 생성, API 호출 없음), `credentials.py`(`.env` 로딩), `client.py`(OpenAI SDK를 import하는 유일한 파일), `analyst.py`(추론 흐름 조립 + 근거 문구 생성). `llm_chart_analyst`에는 추가로 `snapshot.py`(OHLCV → 정규화 차트 데이터 변환)가 있다.
 
-> **market 세분화(2026-10) 관련 노트**: 이 3개 모듈 자체는 market 세분화 작업(`VALID_MARKETS`가 `{"KRX","NASDAQ"}` 2개에서 `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}` 원자 4개로 확장된 작업)으로 **코드가 전혀 수정되지 않았다** — `analyze()`/`to_reasons()`는 market을 그냥 라벨용 문자열로 받아 쓸 뿐, 모듈 내부에 market 값 종류에 대한 분기 로직이 원래 없었기 때문이다(Grep으로 확인: 세 모듈 소스 어디에도 `"KRX"`/`"NASDAQ"` 하드코딩 없음). 실제로 바뀐 것은 호출부(`orchestrator/pipeline.py`, `chat_agent/tools.py`)의 라우팅 로직이다 — 과거엔 `if market == "KRX": DART ... else: EDGAR` 2-way였는데, 이제 `if market in KRX_MARKETS: DART ... else: EDGAR`(국내 KOSPI/KOSDAQ vs 미국 NASDAQ/NYSE로 수렴)로 바뀌었고, 이 라우팅 매핑(`NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS`/`KRX_MARKETS`/`US_MARKETS`)은 신규 공용 모듈 `data/market_routing.py`로 통합됐다(기존엔 `pipeline.py`와 `tools.py`에 중복 정의돼 있었음). 상세는 05/06번 문서 참고. 아래 서술에서 "KRX"/"NASDAQ"로 쓰인 부분은 실제로는 "국내(KOSPI/KOSDAQ)"/"미국(NASDAQ/NYSE)"를 뜻한다.
+> **market 세분화(2026-10) 관련 노트**: 이 3개 모듈 자체는 market 세분화 작업(`VALID_MARKETS`가 `{"KRX","NASDAQ"}` 2개에서 `{"KOSPI","KOSDAQ","NASDAQ","NYSE"}` 원자 4개로 확장된 작업)으로 **코드가 전혀 수정되지 않았다** — `analyze()`/`to_reasons()`는 market을 그냥 라벨용 문자열로 받아 쓸 뿐, 모듈 내부에 market 값 종류에 대한 분기 로직이 원래 없었기 때문이다(Grep으로 확인: 세 모듈 소스 어디에도 `"KRX"`/`"NASDAQ"` 하드코딩 없음). 실제로 바뀐 것은 호출부(과거엔 `orchestrator/pipeline.py`도 포함, `chat_agent/tools.py`)의 라우팅 로직이다 — 과거엔 `if market == "KRX": DART ... else: EDGAR` 2-way였는데, 이제 `if market in KRX_MARKETS: DART ... else: EDGAR`(국내 KOSPI/KOSDAQ vs 미국 NASDAQ/NYSE로 수렴)로 바뀌었고, 이 라우팅 매핑(`NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS`/`KRX_MARKETS`/`US_MARKETS`)은 신규 공용 모듈 `data/market_routing.py`로 통합됐다(기존엔 `pipeline.py`와 `tools.py`에 중복 정의돼 있었음 — `pipeline.py`는 2026-10-15에 메인 챗봇 미사용으로 삭제). 상세는 05/06번 문서 참고. 아래 서술에서 "KRX"/"NASDAQ"로 쓰인 부분은 실제로는 "국내(KOSPI/KOSDAQ)"/"미국(NASDAQ/NYSE)"를 뜻한다.
 
 ---
 
@@ -226,4 +226,4 @@ DART(국내: KOSPI/KOSDAQ)/SEC EDGAR(미국: NASDAQ/NYSE) 공시 목록(보고�
 4. `credentials.py`에 `load_llm_config()` — 가능하면 `OPENAI_API_KEY`는 재사용, 모델 등급만 전용 환경변수로 분리.
 5. `client.py`에 `openai.OpenAI` 클라이언트 래퍼 — 7단계 예외 매핑 순서를 정확히 복제, `max_calls_per_run` 선검사 유지.
 6. `analyst.py`에 `analyze()`(빈 입력이면 조기 `None`, LLM 응답이 아니라 호출자가 가진 ticker/market/날짜로 라벨링) + `_stance()`(코드가 action과 비교) + `to_reasons()`(디스클레이머 항상 마지막).
-7. `orchestrator/pipeline.py`의 `_xxx_reasons` 헬퍼 패턴(절대 raise하지 않고 실패를 독립적으로 기록)에 맞춰 오케스트레이터 배선 추가.
+7. **(2026-10-15 재정정)** 과거엔 `orchestrator/pipeline.py`의 `_xxx_reasons` 헬퍼 패턴(절대 raise하지 않고 실패를 독립적으로 기록)에 맞춰 오케스트레이터 배선을 추가했으나, `pipeline.py`는 메인 챗봇 미사용으로 삭제됐다 — 지금 새 신호원을 추가하려면 `chat_agent/tool_registry.py`에 `ToolSpec` 1개 + `tools.py`에 `tool_<이름>` 함수(절대 raise하지 않고 `{"available": False, "error": ...}` 반환하는 동일한 실패격리 원칙)를 추가하는 쪽이 맞는 경로다(`06_chat_agent.md` 참고).

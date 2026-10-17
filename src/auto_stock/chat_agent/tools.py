@@ -68,7 +68,7 @@ from auto_stock.news_disclosure.models import DisclosureReader
 from auto_stock.news_sentiment.analyst import analyze as analyze_sentiment
 from auto_stock.news_sentiment.credentials import NEWS_LOOKBACK_DAYS
 from auto_stock.news_sentiment.models import NewsSentimentReader
-from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
+from auto_stock.orchestrator.models import DEFAULT_LOOKBACK_DAYS
 from auto_stock.risk_sizing.models import AccountState
 from auto_stock.risk_sizing.sizing import suggest_position
 from auto_stock.rule_engine.engine import generate_candidates

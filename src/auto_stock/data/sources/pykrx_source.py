@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-
+from datetime import datetime, timedelta
 # pykrx는 import되는 순간(모듈 최상위 `website/comm/webio.py:12`의
 # `_session = build_krx_session()`) KRX 로그인을 시도하고, KRX_ID/KRX_PW가 없으면
 # "KRX 로그인 실패..." 노이즈를 stdout에 출력한다 — 이 프로젝트는 그 로그인이 필요한
@@ -23,10 +23,28 @@ TICKER_MARKET_REFRESH_DAYS = 7
 _SUB_MARKETS = ("KOSPI", "KOSDAQ")  # KOSPI/KOSDAQ 동시 상장 종목은 없다(KRX 상장 규정) —
 # 그래서 역방향 매핑이 1:1로 성립한다.
 
+_KRX_SESSION_EXPIRES_AT: datetime | None = None
+
+def ensure_krx_session(buffer_minutes: int = 10) -> None:
+    """KRX 세션 만료 10분 전이거나 세션이 없으면 자동으로 재로그인한다."""
+    global _KRX_SESSION_EXPIRES_AT
+
+    now = datetime.now()
+    # 세션이 처음이거나 만료 버퍼 시간(10분 전)에 도달한 경우
+    if _KRX_SESSION_EXPIRES_AT is None or now >= (_KRX_SESSION_EXPIRES_AT - timedelta(minutes=buffer_minutes)):
+        try:
+            from pykrx.website.comm import webio
+            # pykrx의 전역 세션 객체를 다시 빌드하여 로그인 수행
+            webio._session = webio.build_krx_session()
+            _KRX_SESSION_EXPIRES_AT = now + timedelta(hours=1)
+        except Exception as e:
+            # 실패하더라도 기존 세션으로 시도할 수 있도록 패스하거나 로깅
+            pass
 
 def get_ticker_list(as_of: date, market: str = "ALL") -> list[str]:
     """전체 상장종목 코드 리스트 (KRX)."""
     load_dotenv()
+    ensure_krx_session()
     return stock.get_market_ticker_list(as_of.strftime("%Y%m%d"), market=market)
 
 
@@ -45,6 +63,7 @@ def get_market_cap_detail(ticker: str, as_of: date) -> dict | None:
     펀더멘털 피처용). 일별로 바뀌는 값이라 캐싱하지 않는다(investor_flow.py와
     동일한 "일별 변동 데이터는 캐싱 안 함" 관례)."""
     load_dotenv()
+    ensure_krx_session()
     date_str = as_of.strftime("%Y%m%d")
     df = stock.get_market_cap(date_str, date_str, ticker)
     if df.empty:
@@ -64,6 +83,7 @@ def get_market_fundamental(ticker: str, as_of: date) -> dict | None:
     DIV(배당수익률)/PER/PBR은 당일 종가 기준으로 매일 바뀌므로 캐싱하지 않는다
     (get_market_cap_detail과 동일 원칙)."""
     load_dotenv()
+    ensure_krx_session()
     date_str = as_of.strftime("%Y%m%d")
     df = stock.get_market_fundamental(date_str, date_str, ticker)
     if df.empty:
@@ -83,6 +103,7 @@ def _download_ticker_market_map() -> dict[str, str]:
     """KOSPI/KOSDAQ 각각의 종목코드 리스트를 받아 {ticker: sub_market} 역방향
     매핑으로 뒤집는다. 동시 상장 종목이 없다는 KRX 상장 규정이 전제다."""
     load_dotenv()
+    ensure_krx_session()
     mapping: dict[str, str] = {}
     as_of_str = date.today().strftime("%Y%m%d")
     for sub_market in _SUB_MARKETS:
@@ -127,6 +148,7 @@ def get_market_fundamental_range(ticker: str, start: date, end: date) -> dict[da
     그걸 그대로 쓴다. 거래일이 아닌 날짜(휴장일)는 결과에 없다(에러 아님) — 호출부가 날짜별로
     `.get(d)`로 조회해 없으면 None으로 취급해야 한다."""
     load_dotenv()
+    ensure_krx_session()
     df = stock.get_market_fundamental_by_date(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
     if df.empty:
         return {}
@@ -147,6 +169,7 @@ def get_market_cap_detail_range(ticker: str, start: date, end: date) -> dict[dat
     """`[start, end]` 구간 전체의 시가총액/거래량/거래대금/상장주식수를 날짜별 dict로 반환한다.
     `get_market_fundamental_range`와 동일한 이유로 기간조회 함수를 쓴다."""
     load_dotenv()
+    ensure_krx_session()
     df = stock.get_market_cap_by_date(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker)
     if df.empty:
         return {}

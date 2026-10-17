@@ -242,7 +242,7 @@ SECTOR_THEME_RECURSION_LIMIT = 6      → SECTOR_THEME_LLM_CALL_ESTIMATE = 6
 
 ### market 라우팅 딕셔너리 — 중복 제거(신규 `data/market_routing.py`)
 
-과거 `tools.py`와 `orchestrator/pipeline.py`가 각자 `_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}`/`_SENTIMENT_SOURCE_LABELS = {"KRX": "네이버뉴스", "NASDAQ": "GDELT"}`를 **중복 정의**하고 있었다 — market을 KOSPI/KOSDAQ으로 세분화하는 작업에서 두 파일을 매번 똑같이 고쳐야 하는 번거로움을 없애기 위해, 신규 공용 모듈 `data/market_routing.py`로 통합됐다. `tools.py`는 이제 그 모듈에서 `NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS`/`KRX_MARKETS`/`US_MARKETS`를 import해서 쓴다(tools.py:26):
+과거 `tools.py`와 `orchestrator/pipeline.py`(2026-10-15에 메인 챗봇 미사용으로 삭제됨)가 각자 `_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}`/`_SENTIMENT_SOURCE_LABELS = {"KRX": "네이버뉴스", "NASDAQ": "GDELT"}`를 **중복 정의**하고 있었다 — market을 KOSPI/KOSDAQ으로 세분화하는 작업에서 두 파일을 매번 똑같이 고쳐야 하는 번거로움을 없애기 위해, 신규 공용 모듈 `data/market_routing.py`로 통합됐다. `tools.py`는 이제 그 모듈에서 `NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS`/`KRX_MARKETS`/`US_MARKETS`를 import해서 쓴다(tools.py:26):
 
 ```python
 NEWS_SOURCE_LABELS = {"KOSPI": "DART", "KOSDAQ": "DART", "NASDAQ": "EDGAR", "NYSE": "EDGAR"}
@@ -275,7 +275,7 @@ US_MARKETS = frozenset({"NASDAQ", "NYSE"})
 
 ### 9개 `tool_analyze_*`/`tool_get_*` 함수 — 상세
 
-공통 패턴: **절대 raise하지 않는다**. `orchestrator/pipeline.py`의 `_ml_reasons`/`_llm_reasons`/`_news_reasons`/`_sentiment_reasons`와 동일한 실패격리 원칙을 재사용하되, 반환 형태는 `(reasons, error)` 튜플이 아니라 모델에게 그대로 JSON으로 보여줄 `{"available": bool, ...}` dict다.
+공통 패턴: **절대 raise하지 않는다**. (2026-10-15에 삭제된) `orchestrator/pipeline.py`의 `_ml_reasons`/`_llm_reasons`/`_news_reasons`/`_sentiment_reasons`가 썼던 것과 동일한 실패격리 원칙을 재사용하되, 반환 형태는 `(reasons, error)` 튜플이 아니라 모델에게 그대로 JSON으로 보여줄 `{"available": bool, ...}` dict다.
 
 **`tool_analyze_rule_engine(context, ticker, market)`** (tools.py:98-107)
 `_fetch_records`로 OHLCV 조회(기본 lookback은 `orchestrator.pipeline.DEFAULT_LOOKBACK_DAYS`) → `generate_candidates(records)`. 후보가 없으면 `{"available": True, "candidate": None}`(이건 실패가 아니라 "신호 없음"이라는 정상 결과임을 tool_schemas.py의 description이 모델에게 명시). LLM을 쓰지 않으므로 `QueryBudget`을 소비하지 않는다.

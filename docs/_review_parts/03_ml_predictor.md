@@ -9,17 +9,14 @@
 ## 0. 이 모듈의 위치와 역할
 
 `ml_predictor`는 종목의 과거 시퀀스로 **다음 거래일 수익률**(`close[t+1]/close[t] - 1`)을 예측한다.
-출력은 확률이 아니라 예측 수익률 하나(`MLPrediction.predicted_return`)다. 이 값을 쓰는 곳은 두 경로다
-(둘 다 살아있는 코드).
+출력은 확률이 아니라 예측 수익률 하나(`MLPrediction.predicted_return`)다.
 
-1. **`orchestrator/pipeline.py::run_recommendation_pipeline`** (수동 스크립트 경로) — 규칙엔진이 이미 만든
-   BUY/SELL `Candidate`에 대해서만 ML을 돌려 "보조 근거 문장"을 붙인다(AND). `_ml_reasons`가 예외를 흡수해
-   `PipelineResult.errors`에만 기록하므로 ML 실패가 알림을 막지 않는다. `scripts/run_recommendations_with_ml.py`,
-   `run_recommendations_with_signals.py`가 이 경로다.
-2. **`orchestrator/shortlist.py::build_shortlist`** (챗봇 추천 경로) — 전체 유니버스 종목마다 규칙엔진과 ML을
-   **독립적으로** 돌리고, 둘 중 하나라도 방향성 신호를 내면(OR) ①단계 숏리스트에 올린다. ML만 잡는 종목도
-   숏리스트에 들어가고, 숏리스트에 든 종목만 ②단계(LLM 심층분석, 비용 발생)로 넘어간다.
-   `RecommendationCoordinator`가 이 경로를 쓴다(`05_orchestrator_and_synthesis.md`).
+> **삭제 노트 (2026-10-15)**: 과거 이 값을 쓰던 두 경로 중 "`orchestrator/pipeline.py::run_recommendation_pipeline`(수동 스크립트 경로)"는 메인 챗봇(deepagents 루프)이 전혀 쓰지 않는 코드였다 — `pipeline.py` 자체와 그걸 호출하던 `scripts/run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`를 포함한 수동 스크립트 5개, 그리고 유일한 소비자였던 `notifier/`(텔레그램 발송 모듈)를 전부 삭제했다. 지금 ML 예측 수익률을 쓰는 경로는 아래 하나뿐이다.
+
+**`orchestrator/shortlist.py::build_shortlist`** (챗봇 추천 경로) — 전체 유니버스 종목마다 규칙엔진과 ML을
+**독립적으로** 돌리고, 둘 중 하나라도 방향성 신호를 내면(OR) ①단계 숏리스트에 올린다. ML만 잡는 종목도
+숏리스트에 들어가고, 숏리스트에 든 종목만 ②단계(LLM 심층분석, 비용 발생)로 넘어간다.
+`RecommendationCoordinator`가 이 경로를 쓴다(`05_orchestrator_and_synthesis.md`).
 
 챗봇 도구 `analyze_ml_prediction`(`chat_agent/tools.py`)도 `predict`를 직접 호출한다.
 
@@ -173,13 +170,13 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
   팔레트 1·2번(train `#2a78d6`, val `#eb6834`, CVD 검증 통과). 로그 눈금은 U+2212 글리프 문제를 피하려고 일반 텍스트
   (`1e-03`)로 표시한다.
 
-## 8. `scripts/train_ml_model.py` / `scripts/train_full.sh` — 학습 실행
+## 8. `scripts/train_ml_model.py` / `scripts/collect_ml_dataset.py` / `scripts/train_full.sh` — 학습 실행
 
-`train_ml_model.py`가 데이터 수집과 학습을 한 번에 한다(별도 수집 스크립트 없음).
+> **갱신 (2026-10-15)**: 데이터 수집(OHLCV+펀더멘털 → `SequenceDataset`)이 `ml_predictor/collection.py`(신규)로 추출됐다 — `universe_for`/`atomic_market_for`/`collect_universe_records`(과거엔 `train_ml_model.py`의 `_universe_for`/`_atomic_market_for`/`_collect_universe_records` 사설 헬퍼였음) + `save_dataset`/`load_dataset`(신규, pickle 기반). 신규 `scripts/collect_ml_dataset.py`가 수집만 해서 `data/ml_training_dataset.pkl`(기본 경로, `ML_TRAIN_DATASET_PATH`로 변경 가능)에 저장하고 종료한다. `train_ml_model.py`는 그 파일이 있으면 재수집 없이 로드해서 학습만 하고, 없으면(또는 `ML_TRAIN_FORCE_COLLECT=1`이면) 예전처럼 직접 수집한다 — 즉 "수집+학습 한 번에" 모드와 "수집 따로, 학습 따로" 모드를 둘 다 지원한다.
 
-1. `resolve_device(ML_TRAIN_DEVICE)` — 데이터 수집 **전에** device 확인.
-2. `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]` 각각 `_universe_for(market)[:UNIVERSE_SIZE]`(KRX는 KOSPI+KOSDAQ 합집합)로
-   종목을 고르고, `_collect_universe_records`로 OHLCV(`data/ohlcv.duckdb` 캐시)와 국내 펀더멘털 수집(종목 단위 예외 격리).
+1. `resolve_device(ML_TRAIN_DEVICE)` — 데이터 수집/로드 **전에** device 확인.
+2. `ML_TRAIN_DATASET_PATH`에 파일이 있고 `ML_TRAIN_FORCE_COLLECT`가 아니면 `load_dataset`으로 즉시 로드. 아니면 `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]` 각각 `universe_for(market)[:UNIVERSE_SIZE]`(KRX는 KOSPI+KOSDAQ 합집합)로
+   종목을 고르고, `collect_universe_records`로 OHLCV(`data/ohlcv.duckdb` 캐시)와 국내 펀더멘털 수집(종목 단위 예외 격리) 후 `save_dataset`으로 저장.
    **목록 앞에서부터 자르므로 "상위 200"이 시가총액 순인지는 소스의 목록 순서에 달려 있다(미검증).**
 3. `train_val_test_split(dataset, VAL_RATIO, TEST_RATIO=0.2)` → 구간별 기간·종목 수 출력 → 하이퍼파라미터 출력 → `train`.
 4. `_print_evaluation_report` — validation 전체, test 전체, test 국내/미국 각각에 대해 Mamba와 베이스라인의
@@ -188,7 +185,9 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
 
 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32),
 `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto), `ML_TRAIN_LOG_EVERY`(1),
-`ML_TRAIN_VAL_RATIO`(0.1).
+`ML_TRAIN_VAL_RATIO`(0.1), **신규** `ML_TRAIN_DATASET_PATH`(`data/ml_training_dataset.pkl`), **신규** `ML_TRAIN_FORCE_COLLECT`(1이면 저장된 파일 무시).
+
+`scripts/collect_ml_dataset.py`는 위 1·2단계만 수행하고 종료한다(학습 없음) — 환경변수는 `ML_TRAIN_UNIVERSE_SIZE`/`ML_TRAIN_LOOKBACK_YEARS`/`ML_TRAIN_DATASET_PATH`를 `train_ml_model.py`와 공유한다(같은 유니버스/기간으로 수집해야 나중에 그대로 로드 가능).
 
 `scripts/train_full.sh` — 전체 학습 래퍼. 프로젝트 루트로 이동, `.venv` 파이썬 탐색(Windows/Unix), 기본
 `ML_TRAIN_DEVICE=cuda`·`ML_TRAIN_LOG_EVERY=5`·`PYTHONUTF8=1`, 출력을 `logs/ml_training/train_full_<시각>.log`에 `tee`
@@ -205,7 +204,7 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
 ## 10. `predictor.py` — 추론과 근거 문구
 
 - `ML_LOOKBACK_DAYS = 365 * 3` — 추론 호출부는 규칙엔진용 120일이 아니라 이 기간을 따로 조회해야 한다
-  (`pipeline.py::_ml_reasons`, `shortlist.py`, `chat_agent/tools.py`가 그렇게 함).
+  (`shortlist.py`, `chat_agent/tools.py`가 그렇게 함 — 과거엔 `pipeline.py::_ml_reasons`도 그랬으나 2026-10-15에 삭제됨).
 - `build_model(bundle)` — `model_config`로 `MambaRegressor`를 만들고 state_dict 로드, `eval()`. CPU에서 동작.
 - `predict(bundle, records, fundamentals_by_date=None) -> MLPrediction | None` — 시퀀스 전체를 넣고 **마지막 시점 예측**을 쓴다.
   시퀀스를 못 만들면 `None`.

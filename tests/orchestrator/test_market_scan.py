@@ -84,8 +84,8 @@ def test_one_ticker_failure_does_not_block_the_rest(mocker):
 
 
 def test_scan_market_never_touches_telegram(mocker):
-    """텔레그램 발송은 orchestrator.pipeline의 몫이다 — 이 배치 스캔은 캐시 적재 전용이라
-    market_scan.py 안에 send_notification을 참조하는 코드가 전혀 없어야 한다."""
+    """이 배치 스캔은 캐시 적재 전용이라 market_scan.py 안에 send_notification을
+    참조하는 코드가 전혀 없어야 한다."""
     mocker.patch("auto_stock.orchestrator.market_scan.get_ohlcv", return_value=_records())
     mocker.patch("auto_stock.orchestrator.market_scan.generate_candidates", return_value=[_candidate()])
     mocker.patch("auto_stock.orchestrator.market_scan.suggest_position", return_value=_sizing())

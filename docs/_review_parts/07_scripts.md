@@ -7,71 +7,9 @@
 
 ---
 
-## 1. `run_recommendations.py`
+## 1~3. `run_recommendations.py` / `run_recommendations_with_ml.py` / `run_recommendations_with_signals.py` — **삭제됨 (2026-10-15)**
 
-**목적**: MVP-0(종목 추천) end-to-end 실행의 가장 단순한 형태. 데이터 수집 → 규칙엔진 → 리스크 사이징 → 설명 생성 → 텔레그램 전송까지 전체 파이프라인을 보조 신호(ML/LLM) 없이 돈다(`run_recommendations.py:1-19`).
-
-**실행 방법**:
-```
-.venv/Scripts/python scripts/run_recommendations.py   (Windows)
-.venv/bin/python scripts/run_recommendations.py        (macOS/Linux)
-```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`(`run_recommendations.py:24`에서 `load_telegram_credentials()`가 요구, 없으면 `KeyError`로 즉시 실패).
-선택 환경변수: `ACCOUNT_EQUITY`(기본값 10,000,000 — `run_recommendations.py:30,35`).
-
-**동작 흐름**: `WATCHLIST = ["005930", "000660"]`(삼성전자, SK하이닉스 예시 2종목만, `run_recommendations.py:28`) 대상으로 `run_recommendation_pipeline(cache=OHLCVCache, tickers=WATCHLIST, market="KOSPI", account=AccountState, credentials=...)`를 1회 호출(`run_recommendations.py:40-42`). 전체 유니버스를 돌리지 않는 이유가 docstring에 명시돼 있다 — 전체 상장종목을 돌리면 신호 하나당 텔레그램 메시지 1건이 수백~수천 종목에 대해 발사되므로 의도적으로 작은 예시 리스트만 쓴다(`run_recommendations.py:7-11`).
-
-> **market 세분화(2026-10)**: `MARKET = "KRX"`는 `MARKET = "KOSPI"`로 바뀌었다 — `data/models.py::VALID_MARKETS`가 원자(atomic) 거래소 4개(`KOSPI`/`KOSDAQ`/`NASDAQ`/`NYSE`)만 허용하게 되면서 "KRX"는 더 이상 `OHLCVRecord`/`run_recommendation_pipeline`이 받는 원자 market 값이 아니다(코스피+코스닥 합성 스캔 버킷으로만 쓰인다, 아래 §4/§6 참고). WATCHLIST의 005930/000660 둘 다 코스피 종목이라 `MARKET = "KOSPI"`로 교체됐다.
-
-**API 호출**: 텔레그램 전송만 발생(무료, 실제 메시지 1건/신호 발송됨). OpenAI/ML 호출 없음.
-
-**종료/실패 조건**: `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` 누락 시 `load_telegram_credentials()`에서 `KeyError` 발생, 스크립트가 그대로 죽는다(별도 try/except 없음). 종목별 예외는 파이프라인 내부에서 격리되어 `result.errors`에 담기고 다음 종목으로 계속 진행한다(`run_recommendations.py:46-47`에서 출력).
-
-`AccountState`는 브로커 연동 전이라 `held_tickers=frozenset()`, `total_exposure_pct=0.0`으로 고정된 placeholder다(`run_recommendations.py:13-16`) — 사이징 제안은 항상 참고용일 뿐이다.
-
----
-
-## 2. `run_recommendations_with_ml.py`
-
-**목적**: `run_recommendations.py`에 ML 예측 보조 신호(#2)를 추가한 변형. 그 외 로직은 동일하다(`run_recommendations_with_ml.py:1-16`).
-
-**실행 방법**:
-```
-.venv/Scripts/python scripts/run_recommendations_with_ml.py   (Windows)
-.venv/bin/python scripts/run_recommendations_with_ml.py        (macOS/Linux)
-```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. 추가로 통합 ML 모델 `models/ml_predictor/unified_h1_mamba.pt`(+ `.metadata.json`)가 **파일로** 존재해야 한다.
-선택 환경변수: `ACCOUNT_EQUITY`.
-
-**동작 흐름**: 시작 시 `load_model()`(인자 없음)로 통합 모델을 먼저 로드하고, 성공하면 `run_recommendation_pipeline(..., ml_model=ml_model)`로 ML 근거를 `extra_reasons`에 병합해 호출. `_ml_reasons`는 규칙엔진용 120일이 아니라 `ML_LOOKBACK_DAYS`(3년)치를 따로 조회한다. 나머지는 `run_recommendations.py`와 동일한 2종목 워치리스트(`MARKET = "KOSPI"`).
-
-**API 호출**: 텔레그램만(무료). ML 추론은 로컬 모델(CPU)이라 외부 API 호출 아님. 국내 종목은 pykrx 펀더멘털 조회가 추가된다.
-
-**종료/실패 조건**: `load_model()`이 `ModelArtifactError`를 던지면(모델 파일 없음) 안내 후 `sys.exit(1)` — 먼저 `train_ml_model.py`(또는 `train_full.sh`)로 학습해야 한다. 2026-10-14 기준 로컬에는 스모크 모델(14종목·5 epoch, 실사용 불가)만 있다 — 이 파일이 있으면 스크립트가 그 모델로 동작하므로 주의(`03_ml_predictor.md` §11).
-
----
-
-## 3. `run_recommendations_with_signals.py`
-
-**목적**: ML(#2) + LLM 차트분석(#3) + 뉴스/공시(#4) + 뉴스 감성분석(#4-뉴스) **네 가지 보조 신호를 전부 동시에** 켜는 완전체 버전(`run_recommendations_with_signals.py:1-15`). 이 리포지토리에서 가장 많은 외부 의존성을 요구하는 스크립트다.
-
-**실행 방법**:
-```
-.venv/Scripts/python scripts/run_recommendations_with_signals.py   (Windows)
-.venv/bin/python scripts/run_recommendations_with_signals.py        (macOS/Linux)
-```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `OPENAI_API_KEY`(3개 LLM 클라이언트가 전부 이 키를 공유 재사용 — `run_recommendations_with_signals.py:40,43,45`에서 각각 `load_llm_config()`를 호출하지만 내부적으로 같은 `OPENAI_API_KEY`를 읽음). 추가로 통합 ML 모델 `models/ml_predictor/unified_h1_mamba.pt` 필요.
-선택 환경변수: `ACCOUNT_EQUITY`. `DART_API_KEY`/`SEC_EDGAR_USER_AGENT`/`NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`는 이 스크립트가 **사전 검증하지 않는다** — 각 소스 모듈이 실제 호출 시점에 직접 읽으므로, 없으면 파이프라인 실행 중 `_news_reasons`/`_sentiment_reasons`가 내부적으로 잡아 `PipelineResult.errors`에만 기록되고 스크립트 자체는 죽지 않는다(`run_recommendations_with_signals.py:12-15`). GDELT는 크리덴셜 자체가 없다.
-
-**동작 흐름**: 시작 순서대로 `load_model()` → `load_llm_config()`(차트분석) → `load_llm_config()`(뉴스/공시) → `load_llm_config()`(뉴스감성) 4단계 사전 로드(`run_recommendations_with_signals.py:54-82`), 하나라도 실패하면 그 지점에서 즉시 종료. 전부 성공하면 `run_recommendation_pipeline(..., ml_model=..., llm_client=..., news_client=..., sentiment_client=...)` 1회 호출(`run_recommendations_with_signals.py:92-95`).
-
-> **market 세분화(2026-10)**: `run_recommendations.py`/`_with_ml.py`와 동일하게 `MARKET = "KOSPI"`(WATCHLIST의 005930/000660 둘 다 코스피). ML 모델이 없으면(현재 상태) 시작 단계에서 종료된다(위 §2 참고).
-
-**API 호출**: **실제 OpenAI API를 호출한다(유료)** — docstring에 명시된 경고(`run_recommendations_with_signals.py:21-24`). 종목 1개당 최대 3회의 OpenAI 호출(차트분석/공시해석/뉴스감성)이 발생할 수 있다. 실행 전 각 보조 신호의 `verify_*` 스크립트를 dry-run으로 먼저 돌려보라고 docstring이 권고한다.
-
-**종료/실패 조건**: `ModelArtifactError`(ML 아티팩트 없음) 또는 `KeyError`(`OPENAI_API_KEY` 없음) 발생 시 각각 안내 메시지 출력 후 `sys.exit(1)`(`run_recommendations_with_signals.py:56-80`). DART/EDGAR/네이버 크리덴셜 누락은 스크립트를 죽이지 않고 파이프라인 내부에서 종목별 에러로만 기록된다.
-
-> 이 스크립트는 **작성되었지만 아직 한 번도 실행되지 않았다**(`docs/CODEBASE_REVIEW.md` 기준) — 유료 API 호출 경로이기 때문에 실제 키 발급 전까지는 실행이 보류된 상태다.
+> **삭제 노트**: 이 세 스크립트는 전부 `orchestrator/pipeline.py::run_recommendation_pipeline`(텔레그램 알림을 실제로 발송하는 MVP-0 파이프라인)을 호출하는 수동 실행 진입점이었다 — 각각 ①보조신호 없음(규칙엔진+사이징만), ②ML 보조신호 추가, ③ML+LLM차트+공시+뉴스감성 네 신호 전부 추가 버전이었다. 메인 챗봇(deepagents 루프)이 쓰는 어떤 경로도 `run_recommendation_pipeline`을 호출하지 않아, 그 함수와 유일한 소비자였던 `notifier/`(텔레그램 발송 모듈) 전체를 코드에서 제거하면서 이 세 스크립트도 함께 삭제했다. 수동 알림 경로가 다시 필요해지면(MVP-1 재개 등) `docs/design/orchestrator.md`/`docs/design/telegram-notifier.md`의 설계 근거를 참고해 재구현하면 된다.
 
 ---
 
@@ -101,34 +39,25 @@ MARKET_SCAN_UNIVERSE_SIZE=20 .venv/Scripts/python scripts/run_market_scan.py   (
 
 ---
 
-## 5. `scan_nasdaq_top100_buy_only.py`
+## 5. `scan_nasdaq_top100_buy_only.py` — **삭제됨 (2026-10-15)**
 
-**목적**: NASDAQ 상위 100종목(FDR 리스팅 순서 기준 시가총액 내림차순으로 추정)을 스캔하되 **BUY 신호만** 텔레그램으로 전송하는 변형(`scan_nasdaq_top100_buy_only.py:1-11`). `run_recommendations.py`의 작은 워치리스트 대신 더 넓은 범위를, 그리고 BUY+SELL 대신 BUY만 보내는 별도 스크립트로 분리해 유지한다(기존 스크립트의 기본 동작을 바꾸지 않기 위함).
-
-**실행 방법**:
-```
-.venv/Scripts/python scripts/scan_nasdaq_top100_buy_only.py   (Windows)
-.venv/bin/python scripts/scan_nasdaq_top100_buy_only.py        (macOS/Linux)
-```
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-선택 환경변수: `ACCOUNT_EQUITY`.
-
-**동작 흐름**: `fdr.StockListing("NASDAQ")`로 리스팅을 가져와 `head(100)`으로 상위 100개 심볼을 추림(`scan_nasdaq_top100_buy_only.py:41-42`, docstring에 NVDA/AAPL/MSFT가 상단에 있음을 직접 확인했다고 기록). 각 종목마다 `get_ohlcv → generate_candidates → (action != "BUY"면 skip) → suggest_position → generate_explanation → send_notification` 순으로 처리(`scan_nasdaq_top100_buy_only.py:60-72`). 이 스크립트는 `run_recommendation_pipeline`을 쓰지 않고 하위 함수들을 직접 호출한다는 점이 다른 스크립트와 다르다 — BUY-only 필터링을 파이프라인 밖에서 걸기 위함.
-
-**API 호출**: 텔레그램만(무료).
-
-**종료/실패 조건**: 종목별 예외는 `try/except Exception`으로 잡아 `errors` 리스트에 누적, 다음 종목 계속 진행(`scan_nasdaq_top100_buy_only.py:71-72`). SELL 신호는 에러가 아니라 `skipped_sell`에 집계되어 마지막에 개수와 티커 목록으로 출력(`scan_nasdaq_top100_buy_only.py:74-80`).
+> **삭제 노트**: NASDAQ 상위 100종목을 스캔하되 BUY 신호만 텔레그램으로 전송하던 변형 스크립트. `send_notification`(텔레그램 발송)을 직접 호출하는 유일한 소비자 중 하나였고, 메인 챗봇이 쓰지 않는 알림 경로라 `notifier/` 삭제와 함께 제거했다.
 
 ---
 
-## 6. `train_ml_model.py` / `train_full.sh`
+## 6. `train_ml_model.py` / `collect_ml_dataset.py` / `train_full.sh`
 
-**목적**: ML 예측 모델(#2)을 **KRX(코스피+코스닥)+NASDAQ+NYSE 전체를 합친 통합 Mamba 모델 1개**로 학습해 저장한다. 데이터 수집과 학습을 한 번에 한다(별도 수집 스크립트 없음). 모델 상세는 `03_ml_predictor.md`.
+**목적**: ML 예측 모델(#2)을 **KRX(코스피+코스닥)+NASDAQ+NYSE 전체를 합친 통합 Mamba 모델 1개**로 학습해 저장한다. 모델 상세는 `03_ml_predictor.md`.
+
+> **갱신 (2026-10-15)**: 데이터 수집(OHLCV+펀더멘털 → `SequenceDataset`)과 학습을 분리할 수 있게 됐다. 공유 로직은 신규 모듈 `ml_predictor/collection.py`(`universe_for`/`atomic_market_for`/`collect_universe_records`/`save_dataset`/`load_dataset`)로 추출됐다 — 과거 `train_ml_model.py`에 있던 `_universe_for`/`_atomic_market_for`/`_collect_universe_records` 사설 헬퍼는 이 모듈로 옮겨졌다(이름에서 밑줄 제거, 공개 함수로 전환).
 
 **실행 방법**:
 ```
-.venv/Scripts/python scripts/train_ml_model.py   (Windows)
+.venv/Scripts/python scripts/train_ml_model.py   (Windows, 수집+학습 한 번에 — 기존과 동일)
 .venv/bin/python scripts/train_ml_model.py        (macOS/Linux)
+
+.venv/Scripts/python scripts/collect_ml_dataset.py   (수집만, 학습 안 함 — 신규)
+.venv/Scripts/python scripts/train_ml_model.py        (수집된 파일이 있으면 재수집 없이 바로 학습)
 
 ML_TRAIN_DEVICE=cuda ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5 \
   .venv/Scripts/python scripts/train_ml_model.py   (스모크 테스트)
@@ -136,30 +65,25 @@ ML_TRAIN_DEVICE=cuda ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN
 bash scripts/train_full.sh                        (전체 학습 + 로그 파일, 아래)
 ```
 필수 환경변수 없음(국내 펀더멘털의 매출액은 `DART_API_KEY`가 있으면 채워지고 없으면 그 필드만 빠짐).
-선택 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(시장별, 기본 200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32), `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto|cuda|cpu, 기본 auto), `ML_TRAIN_LOG_EVERY`(1, 0이면 epoch 로그 끔), `ML_TRAIN_VAL_RATIO`(0.1).
+선택 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(시장별, 기본 200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32), `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto|cuda|cpu, 기본 auto), `ML_TRAIN_LOG_EVERY`(1, 0이면 epoch 로그 끔), `ML_TRAIN_VAL_RATIO`(0.1), **신규** `ML_TRAIN_DATASET_PATH`(기본 `data/ml_training_dataset.pkl`, 두 스크립트가 공유), **신규** `ML_TRAIN_FORCE_COLLECT`(`train_ml_model.py`에서 `1`이면 저장된 파일이 있어도 무시하고 재수집).
 
-**동작 흐름**: ① `resolve_device`로 device 확인(`cuda`를 명시했는데 GPU가 없으면 **수집 전에** 실패) → ② `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]`마다 `_universe_for(market)[:UNIVERSE_SIZE]`로 종목을 고르고(KRX는 KOSPI+KOSDAQ 합집합, 목록 앞에서부터 자름 — 시가총액 순인지는 미검증) `_collect_universe_records`가 OHLCV와 국내 펀더멘털을 수집(종목 단위 예외 격리, tqdm 진행바) → ③ `build_sequence_dataset` → `train_val_test_split`(시간순 ~70/10/20, embargo) → ④ 구간별 기간·종목 수, 하이퍼파라미터 출력 → ⑤ `train`(epoch마다 train/val loss·lr 로그) → ⑥ `_print_evaluation_report`(validation/test 전체, test 국내/미국별로 Mamba vs persistence 베이스라인 MSE/MAE/R²/방향적중률) → ⑦ `save_model` + `unified_h1_mamba.history.{csv,png}`(학습 곡선) 저장 → val 최저 epoch가 마지막보다 앞이면 재학습 안내(저장 가중치는 마지막 epoch).
+**`collect_ml_dataset.py` 동작 흐름**: ① `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]`마다 `universe_for(market)[:UNIVERSE_SIZE]`로 종목을 고르고(KRX는 KOSPI+KOSDAQ 합집합, 목록 앞에서부터 자름 — 시가총액 순인지는 미검증) `collect_universe_records`가 OHLCV와 국내 펀더멘털을 수집(종목 단위 예외 격리, tqdm 진행바) → ② `build_sequence_dataset`으로 조립 → ③ `save_dataset`으로 `pickle`에 저장(`SequenceDataset`은 frozen dataclass + 표준 타입만 담아 pickle로 안전하게 왕복, 신뢰 경계 — 이 파일은 로컬에서만 생성·소비됨). 학습은 전혀 하지 않는다.
 
-**API 호출**: 없음(완전 무료) — 시세·펀더멘털 수집(FDR/pykrx/DART)과 로컬 학습뿐. 수집이 전체 시간의 대부분을 차지한다(OHLCV는 `data/ohlcv.duckdb`에 캐시, pykrx 펀더멘털은 캐시 없음).
+**`train_ml_model.py` 동작 흐름**: ① `resolve_device`로 device 확인(`cuda`를 명시했는데 GPU가 없으면 **수집/로드 전에** 실패) → ② `ML_TRAIN_DATASET_PATH`에 파일이 있고 `ML_TRAIN_FORCE_COLLECT`가 아니면 `load_dataset`으로 즉시 로드, 없으면 `collect_ml_dataset.py`와 동일한 수집 로직을 돌리고 끝에 `save_dataset`으로 저장(다음 실행부터 재사용) → ③ `train_val_test_split`(시간순 ~70/10/20, embargo) → ④ 구간별 기간·종목 수, 하이퍼파라미터 출력 → ⑤ `train`(epoch마다 train/val loss·lr 로그) → ⑥ `_print_evaluation_report`(validation/test 전체, test 국내/미국별로 Mamba vs persistence 베이스라인 MSE/MAE/R²/방향적중률) → ⑦ `save_model` + `unified_h1_mamba.history.{csv,png}`(학습 곡선) 저장 → val 최저 epoch가 마지막보다 앞이면 재학습 안내(저장 가중치는 마지막 epoch).
 
-**종료/실패 조건**: 개별 종목 수집 실패는 스킵하고 계속. train/validation/test 중 하나라도 비면 "표본이 부족합니다" 출력 후 저장 없이 종료(기존 모델 파일은 그대로).
+**API 호출**: 없음(완전 무료) — 시세·펀더멘털 수집(FDR/pykrx/DART)과 로컬 학습뿐. 수집이 전체 시간의 대부분을 차지한다(OHLCV는 `data/ohlcv.duckdb`에 캐시, pykrx 펀더멘털은 캐시 없음) — 그래서 분리해두면 하이퍼파라미터를 바꿔가며 재학습할 때마다 이 시간을 반복할 필요가 없다.
 
-**`train_full.sh`**: 전체 학습 래퍼. 프로젝트 루트로 이동 → `.venv` 파이썬 탐색(Windows/Unix) → 기본 `ML_TRAIN_DEVICE=cuda`, `ML_TRAIN_LOG_EVERY=5`, `PYTHONUTF8=1`(파이프 출력 한글 깨짐 방지) → `logs/ml_training/train_full_<YYYYmmdd_HHMM>.log`로 `tee`. `set -euo pipefail`이라 학습이 실패하면 스크립트도 비0으로 끝난다. `ML_TRAIN_*`는 앞에 붙여 덮어쓸 수 있다(`ML_TRAIN_EPOCHS=40 bash scripts/train_full.sh`). `logs/`는 gitignore.
+**종료/실패 조건**: 개별 종목 수집 실패는 스킵하고 계속. train/validation/test 중 하나라도 비면 "표본이 부족합니다" 출력 후 저장 없이 종료(기존 모델 파일은 그대로). `collect_ml_dataset.py`는 수집 결과가 통째로 비면 저장하지 않고 안내만 출력.
+
+**`data/ml_training_dataset.pkl`은 git에 커밋하지 않는다**(`.gitignore`의 `data/*.pkl`) — `data/*.duckdb`와 같은 로컬 캐시 취급.
+
+**`train_full.sh`**: 전체 학습 래퍼. 프로젝트 루트로 이동 → `.venv` 파이썬 탐색(Windows/Unix) → 기본 `ML_TRAIN_DEVICE=cuda`, `ML_TRAIN_LOG_EVERY=5`, `PYTHONUTF8=1`(파이프 출력 한글 깨짐 방지) → `logs/ml_training/train_full_<YYYYmmdd_HHMM>.log`로 `tee`. `set -euo pipefail`이라 학습이 실패하면 스크립트도 비0으로 끝난다. `ML_TRAIN_*`는 앞에 붙여 덮어쓸 수 있다(`ML_TRAIN_EPOCHS=40 bash scripts/train_full.sh`). `logs/`는 gitignore. 이 스크립트는 `train_ml_model.py`를 그대로 호출하므로, 미리 `collect_ml_dataset.py`로 수집해뒀으면 재수집 없이 바로 학습부터 시작한다.
 
 ---
 
-## 7. `verify_telegram.py`
+## 7. `verify_telegram.py` — **삭제됨 (2026-10-15)**
 
-**목적**: 텔레그램 봇 연동만 단독으로 확인 — 실제 메시지 1건을 전송해본다(`verify_telegram.py:1-8`).
-
-**실행 방법**: `.venv/Scripts/python scripts/verify_telegram.py` (Windows) / `.venv/bin/python scripts/verify_telegram.py` (macOS/Linux).
-필수 환경변수: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-
-**동작 흐름**: 더미 `Explanation(ticker="TEST", market="KRX", action="BUY", summary="...")`을 만들어 `send_notification`으로 전송(`verify_telegram.py:15-21`).
-
-**API 호출**: 텔레그램 1건(무료). dry-run 모드 없음(이 스크립트 자체가 가장 가벼운 검증이라 필요 없음).
-
-**종료/실패 조건**: `TelegramNotificationError` 또는 `KeyError`(크리덴셜 누락)를 잡아 `FAILED: ...` 출력, 성공 시 `SUCCESS: 텔레그램 메시지 전송 성공`(`verify_telegram.py:20-26`).
+> **삭제 노트**: 텔레그램 봇 연동만 단독으로 확인하던 수동 검증 스크립트(`send_notification` 호출). `notifier/` 모듈 전체가 메인 챗봇 미사용으로 삭제되면서 함께 제거했다.
 
 ---
 
@@ -343,8 +267,6 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 | 변수 | 필수/선택 | 어느 모듈이 쓰는가 | 비고 |
 |---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | 필수(알림봇 사용 시) | `notifier/credentials.py` | 비밀값 |
-| `TELEGRAM_CHAT_ID` | 필수(알림봇 사용 시) | `notifier/credentials.py` | 비밀값 아님이지만 보통 비공개 취급 |
 | `OPENAI_API_KEY` | 필수(LLM 보조 신호·챗봇 사용 시) | `llm_chart_analyst`, `news_disclosure`, `news_sentiment`, `chat_agent` 공통 | 4개 모듈이 모두 같은 키를 공유 재사용 |
 | `OPENAI_MODEL` | 선택 | `llm_chart_analyst/credentials.py` | 기본값 `gpt-5.6-luna` |
 | `LLM_MAX_CALLS_PER_RUN` | 선택 | `llm_chart_analyst/credentials.py` | 기본값 20 |
@@ -362,7 +284,7 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 | 변수 | 필수/선택 | 사용처 | 비고 |
 |---|---|---|---|
-| `ACCOUNT_EQUITY` | 선택 | 거의 모든 `run_*`/`chat_cli.py` 스크립트 | 기본값 10,000,000 — 브로커 연동 전 placeholder 계좌 자산 |
+| `ACCOUNT_EQUITY` | 선택 | `chat_cli.py`, `run_market_scan.py` (2026-10-15 재정정 — 알림 발송 스크립트들은 삭제됨) | 기본값 10,000,000 — 브로커 연동 전 placeholder 계좌 자산 |
 | `MARKET_SCAN_UNIVERSE_SIZE` | 선택 | `run_market_scan.py`, `chat_cli.py` | 기본값 200 |
 | `MARKET_SCAN_STALE_HOURS` | 선택 | `run_market_scan.py` | 기본값은 `DEFAULT_STALE_AFTER` 환산값 |
 | `RECOMMENDATION_STALE_HOURS` | 선택 | `chat_cli.py` | 기본값 24 |
@@ -385,34 +307,33 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 
 이 프로젝트를 처음 받아 로컬에서 아무것도 실행해보지 않은 상태라면, 아래 순서로 "무료 → 저비용 → 전체 실행" 순으로 올라가는 것을 권장한다.
 
-1. **환경 준비**: `uv sync --extra dev`로 `.venv`를 만든다(Windows는 CUDA 빌드 torch가 설치됨). `.env.example`을 복사해 `.env`를 만들고, 최소한 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`를 채운다. pykrx를 쓸 계획이면 `KRX_ID`/`KRX_PW`도 채운다.
+> **재정정 (2026-10-15)**: 아래 가이드의 "3. 알림 경로 확인"/"4. MVP-0 기본 파이프라인 확인"/"8. 네 가지 보조 신호 동시 실행" 단계가 참조하던 스크립트(`verify_telegram.py`/`run_recommendations.py`/`run_recommendations_with_signals.py`)는 메인 챗봇 미사용으로 전부 삭제됐다 — 아래 번호는 그 단계들을 건너뛰고 재배열했다.
+
+1. **환경 준비**: `uv sync --extra dev`로 `.venv`를 만든다(Windows는 CUDA 빌드 torch가 설치됨). `.env.example`을 복사해 `.env`를 만든다. pykrx를 쓸 계획이면 `KRX_ID`/`KRX_PW`도 채운다.
 2. **데이터 수집 계층 무비용 확인** — API 키 없이도 되는 것부터:
    - `scripts/verify_fdr_nasdaq.py` (키 불필요, NASDAQ 유니버스+OHLCV 확인)
    - `scripts/verify_pykrx.py` (`KRX_ID`/`KRX_PW` 필요, KRX 유니버스+시가총액 확인)
-3. **알림 경로 확인**: `scripts/verify_telegram.py` — 텔레그램 토큰이 유효한지 가장 간단하게 확인.
-4. **MVP-0 기본 파이프라인 확인**: `scripts/run_recommendations.py` — 2종목만 대상으로 전체 추천 파이프라인이 끝까지 도는지 확인(ML/LLM 없음, 텔레그램만 발송).
-5. **ML 모델 준비 및 확인**: `scripts/train_ml_model.py`를 `ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5`로 스모크 테스트 → 리포트·학습 곡선을 확인한 뒤 `bash scripts/train_full.sh`로 전체 학습 → `scripts/run_recommendations_with_ml.py`로 ML 보조 신호가 섞인 추천을 확인.
-6. **OpenAI 키 발급 후, dry-run부터**: `OPENAI_API_KEY` 발급 후 비용이 들지 않는 dry-run 모드부터 각 보조 신호를 하나씩 점검.
+3. **ML 모델 준비 및 확인**: `scripts/train_ml_model.py`를 `ML_TRAIN_UNIVERSE_SIZE=5 ML_TRAIN_LOOKBACK_YEARS=1 ML_TRAIN_EPOCHS=5`로 스모크 테스트 → 리포트·학습 곡선을 확인한 뒤 `bash scripts/train_full.sh`로 전체 학습.
+4. **OpenAI 키 발급 후, dry-run부터**: `OPENAI_API_KEY` 발급 후 비용이 들지 않는 dry-run 모드부터 각 보조 신호를 하나씩 점검.
    - `LLM_VERIFY_DRY_RUN=1 scripts/verify_llm_chart_analyst.py`
    - `NEWS_VERIFY_DRY_RUN=1 scripts/verify_news_disclosure.py` (KOSPI/KOSDAQ/NASDAQ/NYSE 4개 시장 모두 `NEWS_VERIFY_MARKET`로 바꿔가며 — market 세분화 2026-10)
    - `NEWS_SENTIMENT_VERIFY_DRY_RUN=1 scripts/verify_news_sentiment.py` (마찬가지로 4개 시장)
    - `scripts/verify_sources_individually.py all` — DART/EDGAR/네이버/GDELT 데이터 수집 계층만 따로 확인(OpenAI 전혀 안 씀. `etf` 타깃은 실제로는 없음 — 13절 정정 참고)
-7. **OpenAI 실호출 1건씩**: dry-run이 전부 정상이면 같은 스크립트를 환경변수 없이(기본값=실호출) 1회씩 실행해 실제 API 응답 품질을 눈으로 확인. 각 스크립트가 `max_calls_per_run=1`로 강제하므로 비용은 호출당 1건으로 제한된다.
-8. **네 가지 보조 신호 동시 실행**: 위가 전부 통과하면 `scripts/run_recommendations_with_signals.py`로 ML+LLM차트+공시+감성 네 신호를 동시에 켜고 전체 파이프라인을 돈다(유료 — 종목당 최대 3회 OpenAI 호출).
-9. **전체 유니버스 배치 스캔(선택)**: 챗봇의 "추천 종목 있어?" 질의를 미리 빠르게 받으려면 `scripts/run_market_scan.py`로 캐시를 데운다 — **단, `chat_cli.py`가 실행 중이면 절대 같이 돌리지 말 것**(DuckDB 파일 잠금 충돌).
-10. **대화형 챗봇 실행**: 마지막으로 `scripts/chat_cli.py`를 실행해 자유 질의 응답을 테스트. 이 시점이면 어떤 tool이 활성/비활성인지, 어떤 보조 신호가 응답에 포함되는지를 1~9단계에서 이미 다 이해한 상태이므로 디버깅이 쉽다.
+5. **OpenAI 실호출 1건씩**: dry-run이 전부 정상이면 같은 스크립트를 환경변수 없이(기본값=실호출) 1회씩 실행해 실제 API 응답 품질을 눈으로 확인. 각 스크립트가 `max_calls_per_run=1`로 강제하므로 비용은 호출당 1건으로 제한된다.
+6. **전체 유니버스 배치 스캔(선택)**: 챗봇의 "추천 종목 있어?" 질의를 미리 빠르게 받으려면 `scripts/run_market_scan.py`로 캐시를 데운다 — **단, `chat_cli.py`가 실행 중이면 절대 같이 돌리지 말 것**(DuckDB 파일 잠금 충돌).
+7. **대화형 챗봇 실행**: 마지막으로 `scripts/chat_cli.py`를 실행해 자유 질의 응답을 테스트. 이 시점이면 어떤 tool이 활성/비활성인지, 어떤 보조 신호가 응답에 포함되는지를 1~6단계에서 이미 다 이해한 상태이므로 디버깅이 쉽다.
 
-이 순서를 따르면 유료 API 호출을 최소한으로 미루면서, 레이어별로(데이터 수집 → 알림 → MVP-0 파이프라인 → ML → LLM 보조신호 → 챗봇) 문제를 하나씩 격리해 확인할 수 있다.
+이 순서를 따르면 유료 API 호출을 최소한으로 미루면서, 레이어별로(데이터 수집 → ML → LLM 보조신호 → 챗봇) 문제를 하나씩 격리해 확인할 수 있다.
 
 ---
 
 ## market 세분화(2026-10) — 이 디렉터리 전체에 걸친 공통 변경사항
 
-`data/models.py::VALID_MARKETS`가 `{"KRX", "NASDAQ"}` 2개 값에서 원자(atomic) 거래소 4개 `{"KOSPI", "KOSDAQ", "NASDAQ", "NYSE"}`로 확장됐다 — "KRX"(코스피+코스닥 합성)와 "US"(나스닥+NYSE 합성, 이 세션에서 신설), 그리고 "SP500"/"DOW"(지수 구성종목 필터, 이 세션에서 신설)는 더 이상 `OHLCVRecord`/`get_ohlcv`/`run_recommendation_pipeline` 등이 받는 원자 market 값이 아니다 — 이들은 `orchestrator/market_buckets.py`가 정의하는 8개 백그라운드 스캔 버킷(`ALL_SCAN_BUCKETS`) 레벨에만 존재하며, 챗봇의 `get_market_scan_recommendations`/`get_sector_recommendations` 도구(`chat_agent/` 리뷰 문서 참고)만 그 값을 받는다.
+`data/models.py::VALID_MARKETS`가 `{"KRX", "NASDAQ"}` 2개 값에서 원자(atomic) 거래소 4개 `{"KOSPI", "KOSDAQ", "NASDAQ", "NYSE"}`로 확장됐다 — "KRX"(코스피+코스닥 합성)와 "US"(나스닥+NYSE 합성, 이 세션에서 신설), 그리고 "SP500"/"DOW"(지수 구성종목 필터, 이 세션에서 신설)는 더 이상 `OHLCVRecord`/`get_ohlcv`/(2026-10-15에 삭제된) `run_recommendation_pipeline` 등이 받는 원자 market 값이 아니다 — 이들은 `orchestrator/market_buckets.py`가 정의하는 8개 백그라운드 스캔 버킷(`ALL_SCAN_BUCKETS`) 레벨에만 존재하며, 챗봇의 `get_market_scan_recommendations`/`get_sector_recommendations` 도구(`chat_agent/` 리뷰 문서 참고)만 그 값을 받는다.
 
 이 디렉터리의 스크립트들은 전부 **원자 market만 다루는 레거시/배치 경로**라, 위 1~13번 섹션에서 설명한 대로 "KRX"였던 하드코딩 값을 전부 "KOSPI"(또는 4개 원자값 전체 순회)로 교체하는 정도의 변경만 받았다 — 합성 버킷을 다루는 로직 자체는 이 디렉터리에 없다(그건 `orchestrator/recommendation_coordinator.py`와 `chat_agent/tools.py`의 책임이며, 각각의 리뷰 문서가 다룬다). 신규 공용 모듈 `data/market_routing.py`(`KRX_MARKETS`/`US_MARKETS` 멤버십 집합, `NEWS_SOURCE_LABELS`/`SENTIMENT_SOURCE_LABELS` 라우팅 딕셔너리)는 `pipeline.py`/`tools.py`에 과거 중복됐던 시장 분기 로직을 통합한 것이며, `verify_news_disclosure.py`/`verify_news_sentiment.py`도 이번에 이 모듈을 재사용하도록 바뀌었다.
 
-ML 모델은 market과 무관한 통합 아티팩트 하나(`models/ml_predictor/unified_h1_mamba.pt`)다. 과거 `KRX_h5_logreg.metadata.json`은 어떤 스크립트도 참조하지 않는다 — `train_ml_model.py`(또는 `train_full.sh`)로 통합 모델을 학습해야 `run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`가 동작한다.
+ML 모델은 market과 무관한 통합 아티팩트 하나(`models/ml_predictor/unified_h1_mamba.pt`)다. 과거 `KRX_h5_logreg.metadata.json`은 어떤 스크립트도 참조하지 않는다 — `train_ml_model.py`(또는 `train_full.sh`)로 통합 모델을 학습해야 `chat_cli.py`/`run_market_scan.py` 등 메인 챗봇 경로가 ML 신호를 쓸 수 있다(`run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`는 2026-10-15에 메인 챗봇 미사용으로 삭제됨).
 
 ## 15. `eval_main_agent.py` (2026-10-11 신규)
 

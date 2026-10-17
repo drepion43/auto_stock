@@ -23,7 +23,7 @@ from auto_stock.ml_predictor.predictor import (
     ML_LOOKBACK_DAYS,
     predict,
 )
-from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
+from auto_stock.orchestrator.models import DEFAULT_LOOKBACK_DAYS
 from auto_stock.rule_engine.engine import generate_candidates
 from auto_stock.rule_engine.models import Candidate
 

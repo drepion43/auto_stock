@@ -19,7 +19,6 @@ src/auto_stock/data/
 ├── models.py                       # OHLCV/공시/뉴스 레코드 스키마
 ├── cache.py                        # DuckDB 기반 OHLCV 캐시
 ├── service.py                      # 공개 인터페이스 (캐시 우선 조회 등)
-├── scheduler.py                    # APScheduler 기반 장중 폴링
 ├── market_routing.py                # 원자 market -> 공시/뉴스 소스 라벨 매핑(신규)
 └── sources/
     ├── fdr_source.py                # FinanceDataReader — KOSPI/KOSDAQ/NASDAQ/NYSE OHLCV
@@ -163,41 +162,15 @@ class NewsArticle:
 
 **상세 동작**: `markets` 리스트를 순회하며 각 원자 market에 `get_universe(market, as_of)`를 호출하고, `seen` set으로 중복을 걸러내며 **처음 등장한 순서를 보존**해 하나의 리스트로 합친다 — `sector_classification.py::fetch_constituents`가 쓰는 "순서 보존 합집합" 패턴과 동일한 관용구다.
 
-#### `refresh_recent(cache: OHLCVCache, tickers: list[str], market: str, lookback_days: int = 5) -> None`
+#### `refresh_recent` — **삭제됨 (2026-10-15)**
 
-**목표/역할**: 폴링 잡(`scheduler.py`)이 주기적으로 호출해 최근 N일치 시세를 근접-실시간으로 갱신하는 함수(`service.py:46-52`).
-
-**상세 동작**: `end = date.today()`, `start = end - timedelta(days=lookback_days)`로 구간을 정하고, 티커마다 `fdr_source.fetch_ohlcv(...)`를 **캐시 커버리지 확인 없이 무조건 호출**한 뒤 `cache.put(...)`한다. `get_ohlcv`와 달리 캐시 우선 조회 로직을 거치지 않는 이유는, 이 함수의 목적 자체가 "최근 데이터는 항상 최신으로 갱신"이기 때문이다(캐시에 이미 있어도 최신값으로 덮어써야 함).
+> **삭제 노트**: 유일한 호출부였던 `scheduler.py`의 폴링 잡을 메인 챗봇이 쓰지 않아 함께 제거했다(위 `scheduler.py` 섹션 삭제 노트 참고). "캐시 커버리지 확인 없이 무조건 fdr_source를 호출해 최신값으로 덮어쓴다"는 설계는 폴링 자동화를 재구현할 때 참고.
 
 ---
 
-## `scheduler.py` — 장중 폴링 인프라
+## `scheduler.py` — 장중 폴링 인프라 — **삭제됨 (2026-10-15)**
 
-**중요 — 현재 상태**: `docs/CODEBASE_REVIEW.md`에 명시된 대로, 이 파일은 **정의만 되어 있고 어떤 스크립트/오케스트레이터에서도 실제로 호출되지 않는다**. 즉 지금 코드베이스에서 데이터는 수동 트리거(스크립트 실행, 챗봇 tool 호출 등)로만 갱신되며, 장중 자동 폴링은 아직 실행 경로에 연결되지 않았다.
-
-#### `is_market_open(market: str, now: datetime | None = None) -> bool`
-
-**목표/역할**: 시장별 정규장 운영 여부를 판단한다(`scheduler.py:16-24`).
-
-**상세 동작**: `MARKET_HOURS` 딕셔너리(`scheduler.py:14-19`)에서 시장별 타임존·개장/폐장 시각을 가져온다 — **원자 market 4개**로 키가 늘었다(과거엔 KRX/NASDAQ 2개):
-- KOSPI/KOSDAQ: `Asia/Seoul`, 09:00–15:30 (둘 다 한국거래소 정규장이라 동일한 값을 중복해서 가짐)
-- NASDAQ/NYSE: `America/New_York`, 09:30–16:00 (둘 다 미국 정규장이라 동일한 값을 중복해서 가짐)
-
-`scheduler.py:10-13` 주석에 이 중복이 의도적임이 명시돼 있다 — `is_market_open(market)`이 원자 market 하나만 받는 계약을 유지하기 위해, 거래시간이 같아도 각 거래소를 별도 키로 둔다.
-
-`now`가 주어지지 않으면 해당 타임존의 현재 시각을 쓰고, 주어졌다면 `.astimezone(tz)`로 해당 타임존으로 변환한다(타임존 인지 — 호출자가 naive datetime을 넘겨도 올바르게 변환된다는 전제 하에 동작). `weekday() >= 5`(토/일)면 바로 `False`. 그 외에는 `open <= local_now.time() <= close` 비교. **공휴일은 고려하지 않는다** — 설날/추석 등 평일 휴장일에도 이 함수는 `True`를 반환한다는 한계가 있다.
-
-#### `poll_market(cache: OHLCVCache, market: str, get_tickers: Callable[[str], list[str]], now: datetime | None = None) -> None`
-
-**목표/역할**: 장 시간에만 대상 종목 시세를 갱신하는 폴링 잡의 실제 작업 함수(`scheduler.py:27-37`).
-
-**상세 동작**: `is_market_open`이 `False`면 즉시 반환(아무 일도 안 함). `True`면 `get_tickers(market)`로 대상 티커 목록을 얻고 `service.refresh_recent(cache, tickers, market=market)`를 호출. `get_tickers`가 콜백으로 주입되는 이유는 "어떤 종목을 폴링할지"(전체 유니버스? 워치리스트? 보유 종목?)를 이 모듈이 알 필요가 없게 분리하기 위함으로 보인다.
-
-#### `register_polling_jobs(scheduler: BackgroundScheduler, cache: OHLCVCache, get_tickers: Callable[[str], list[str]], interval_minutes: int = 5) -> None`
-
-**목표/역할**: `MARKET_HOURS`에 정의된 각 시장마다 별도의 APScheduler interval job을 등록한다(`scheduler.py:40-55`).
-
-**상세 동작**: `MARKET_HOURS`를 순회하며 `scheduler.add_job(poll_market, trigger="interval", minutes=interval_minutes, args=[cache, market, get_tickers], id=f"poll_{market}", replace_existing=True)`를 호출. `id`를 시장별로 고정하고 `replace_existing=True`를 줘서, 이 함수를 여러 번 호출해도 같은 시장의 job이 중복 등록되지 않고 교체된다. `interval_minutes` 기본값 5분은 docstring에서 "실제 API 응답을 보며 튜닝할 값"이라고 명시 — 확정값이 아니다. market 세분화 이후 `MARKET_HOURS`가 4개 키를 가지므로, 이 함수를 호출하면 자동으로 4개(KOSPI/KOSDAQ/NASDAQ/NYSE) 폴링 job이 등록된다 — 함수 자체는 수정되지 않았고 `MARKET_HOURS` 딕셔너리 확장만으로 범위가 넓어졌다.
+> **삭제 노트**: 이 파일은 어떤 스크립트/오케스트레이터에서도 실제로 호출되지 않는 채로 방치돼 있었다(아래 "현재 상태" 서술이 이미 그 사실을 명시하고 있었다) — 메인 챗봇(deepagents 루프)이 쓰는 어떤 경로도 이 모듈을 import하지 않았으므로 코드에서 제거했다. `is_market_open`/`poll_market`/`register_polling_jobs`/`MARKET_HOURS`(원자 market 4개 타임존·개장/폐장 시각 테이블)가 여기 있었다. 장중 자동 폴링이 다시 필요해지면 이 설계(시장별 `MARKET_HOURS` 키, 공휴일 미고려 한계, `get_tickers` 콜백 주입 패턴)를 참고해 재구현하면 된다 — 대응 테스트(`tests/data/test_scheduler.py`)도 함께 제거했다.
 
 ---
 
@@ -245,7 +218,7 @@ class NewsArticle:
 
 DART API는 KRX 종목코드가 아니라 자체 `corp_code`로 종목을 식별하므로, 이 모듈은 전체 매핑(`corpCode.xml`, zip 압축)을 다운로드해 로컬 JSON 캐시(`data/dart_corp_codes.json`, 기본 7일 갱신)로 관리하고 종목코드로 역조회하는 역할을 한다(`docs/design/news-disclosure.md` 핵심 설계 결정 3 — 해당 파일은 리포에 존재하지 않으나 소스 주석에 참조됨).
 
-`DART_API_KEY`는 `notifier/credentials.py`와 동일한 패턴으로 필요 시점에 직접 `load_dotenv()`를 호출해 로드한다(`_load_dart_api_key`, `dart_source.py:40-42`).
+`DART_API_KEY`는 (2026-10-15에 삭제된) `notifier/credentials.py`가 처음 확립한 패턴과 동일하게 필요 시점에 직접 `load_dotenv()`를 호출해 로드한다(`_load_dart_api_key`, `dart_source.py:40-42`).
 
 ### 캐시 다운로드/관리 내부 함수
 
@@ -413,7 +386,7 @@ DART의 `resolve_ticker_by_name`과 동일한 매칭 규칙(완전일치 우선,
 
 ## `sources/sector_classification.py` — 공식 업종 분류(국내 전용)
 
-`recommendation-synthesis.md` §5의 "1차 매칭 경로"로 쓰이는 모듈(해당 설계 문서는 현재 리포에 파일로 존재하지 않으나 소스 주석에 참조됨). pykrx의 지수 API로 업종명↔코드 매핑과 그 업종의 구성종목을 조회한다.
+`recommendation-synthesis.md` §5의 "1차 매칭 경로"로 쓰이는 모듈. **정정 (2026-10-15): "해당 설계 문서는 현재 리포에 파일로 존재하지 않는다"는 서술은 틀렸다** — `docs/design/recommendation-synthesis.md`가 실제로 존재한다(260줄). pykrx의 지수 API로 업종명↔코드 매핑과 그 업종의 구성종목을 조회한다.
 
 **설계상 비자명한 결정(실제 호출로 확인된 로그인 요구사항)**: 2026-10-05 실제 pykrx 호출로, `KRX_ID`/`KRX_PW` 로그인이 선행되어야 하며 그걸 빼먹으면 모든 호출이 `"Expecting value"`라는 모호한 에러로 실패한다는 사실이 확인됐다(`sector_classification.py:5-8`) — 라이브러리 자체의 버그가 아니라 **로그인 선행 누락이 원인**이었다. 이 때문에 모든 공개 함수가 호출 직전에 `load_dotenv()`를 부른다(`pykrx_source.py`와 동일한 "함수 호출 시점 재로그인" 패턴).
 
@@ -570,14 +543,14 @@ ETF 가격은 구성종목들의 가중평균 움직임을 그대로 반영한�
 
 **중요**: 이 파일은 `data/sources/` 디렉터리가 아니라 `data/` 바로 아래(`src/auto_stock/data/market_routing.py`)에 있다 — 특정 외부 API를 감싸는 "소스" 모듈이 아니라, 여러 모듈이 공유하는 순수 매핑 테이블이기 때문이다.
 
-**신설 배경**: `orchestrator/pipeline.py`와 `chat_agent/tools.py`가 과거 각자 `_NEWS_SOURCE_LABELS`/`_SENTIMENT_SOURCE_LABELS` 딕셔너리를 독립적으로 중복 정의하고 있었다(코드는 공유하지 않는다는 이 리포의 일반 원칙과는 별개로, 이 매핑 테이블만큼은 두 파일이 완전히 똑같은 값을 들고 있었다). market을 KOSPI/KOSDAQ으로 세분화하는 작업에서 "두 파일을 매번 동시에 고쳐야 하는" 번거로움과 누락 위험을 없애기 위해 공용 모듈로 추출했다.
+**신설 배경**: (2026-10-15에 삭제된) `orchestrator/pipeline.py`와 `chat_agent/tools.py`가 과거 각자 `_NEWS_SOURCE_LABELS`/`_SENTIMENT_SOURCE_LABELS` 딕셔너리를 독립적으로 중복 정의하고 있었다(코드는 공유하지 않는다는 이 리포의 일반 원칙과는 별개로, 이 매핑 테이블만큼은 두 파일이 완전히 똑같은 값을 들고 있었다). market을 KOSPI/KOSDAQ으로 세분화하는 작업에서 "두 파일을 매번 동시에 고쳐야 하는" 번거로움과 누락 위험을 없애기 위해 공용 모듈로 추출했다.
 
 **내용**(`market_routing.py:12-30`):
 - `NEWS_SOURCE_LABELS = {"KOSPI": "DART", "KOSDAQ": "DART", "NASDAQ": "EDGAR", "NYSE": "EDGAR"}`
 - `SENTIMENT_SOURCE_LABELS = {"KOSPI": "네이버뉴스", "KOSDAQ": "네이버뉴스", "NASDAQ": "GDELT", "NYSE": "GDELT"}`
 - `KRX_MARKETS = frozenset({"KOSPI", "KOSDAQ"})`, `US_MARKETS = frozenset({"NASDAQ", "NYSE"})` — "국내냐 미국이냐"만 판단하면 되는 분기(공시 ID 해석, 이름 해석 등)가 반복돼서 멤버십 집합도 함께 둔다.
 
-**설계상 비자명한 점**: `.get(market)`이 `None`을 반환하면(즉 지원하지 않는 시장) 호출부가 조용히 스킵하도록 설계돼 있다 — "향후 시장 확장 대비"라는 주석이 모듈 docstring에 있다. 이 파일을 쓰는 두 소비자(`orchestrator/pipeline.py`의 `_news_reasons`/`_sentiment_reasons`, `chat_agent/tools.py`의 `tool_analyze_disclosures`/`tool_analyze_news_sentiment`)는 각각 다른 문서(`05_orchestrator_and_synthesis.md`, `06_chat_agent.md`)에서 상세히 다룬다 — 이 문서는 매핑 테이블 자체의 정의만 다룬다.
+**설계상 비자명한 점**: `.get(market)`이 `None`을 반환하면(즉 지원하지 않는 시장) 호출부가 조용히 스킵하도록 설계돼 있다 — "향후 시장 확장 대비"라는 주석이 모듈 docstring에 있다. 과거 소비자였던 `orchestrator/pipeline.py`의 `_news_reasons`/`_sentiment_reasons`는 2026-10-15에 그 파일과 함께 삭제됐다 — 지금 남은 소비자는 `chat_agent/tools.py`의 `tool_analyze_disclosures`/`tool_analyze_news_sentiment`뿐이며, `06_chat_agent.md`에서 상세히 다룬다. 이 문서는 매핑 테이블 자체의 정의만 다룬다.
 
 ---
 
@@ -585,7 +558,7 @@ ETF 가격은 구성종목들의 가중평균 움직임을 그대로 반영한�
 
 이 계층의 외부 연동 소스(FDR 제외하면 pykrx/DART/EDGAR/네이버/GDELT/index_constituents 여섯)를 리뷰하며 반복적으로 나타나는 설계 패턴을 정리하면:
 
-1. **크리덴셜은 모듈 import 시점이 아니라 함수 호출 시점에 로드한다.** `_load_dart_api_key`/`_load_edgar_user_agent`/`_load_naver_credentials`가 모두 함수 안에서 `load_dotenv()`를 호출한다. 이는 `notifier/credentials.py`에서 처음 확립된 패턴이고, `pykrx_source.py`/`sector_classification.py`도 (크리덴셜이 아니라 로그인 트리거를 위해) 동일 패턴을 따른다 — 모듈 import 순서와 무관하게 `.env`가 항상 반영되도록 하기 위함.
+1. **크리덴셜은 모듈 import 시점이 아니라 함수 호출 시점에 로드한다.** `_load_dart_api_key`/`_load_edgar_user_agent`/`_load_naver_credentials`가 모두 함수 안에서 `load_dotenv()`를 호출한다. 이는 (2026-10-15에 삭제된) `notifier/credentials.py`에서 처음 확립된 패턴이고, `pykrx_source.py`/`sector_classification.py`도 (크리덴셜이 아니라 로그인 트리거를 위해) 동일 패턴을 따른다 — 모듈 import 순서와 무관하게 `.env`가 항상 반영되도록 하기 위함.
 
 2. **원본 예외를 절대 그대로 노출하지 않고 타입명만 남긴다.** DART/EDGAR/네이버/GDELT 모두 `requests.exceptions.RequestException`을 잡아 `f"{API명} API 요청 실패: {type(exc).__name__}"` 형태로 재던진다. 이는 `requests`/`urllib3`의 예외 문자열에 요청 URL(크리덴셜이 쿼리스트링에 담긴 경우)이나 헤더 정보가 그대로 포함될 수 있기 때문이며, 보안 리뷰에서 CRITICAL/HIGH로 지적되어 전체 소스 모듈에 일관되게 적용됐다.
 

@@ -37,7 +37,7 @@ from auto_stock.news_disclosure.models import DisclosureReader
 from auto_stock.news_sentiment.models import NewsSentimentReader
 from auto_stock.orchestrator.deep_scan import run_deep_scan
 from auto_stock.orchestrator.market_buckets import bucket_universe_by_atomic_market
-from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
+from auto_stock.orchestrator.models import DEFAULT_LOOKBACK_DAYS
 from auto_stock.orchestrator.scan_coordinator import _fresh_universe_atomic
 from auto_stock.orchestrator.shortlist import ShortlistEntry, build_shortlist
 from auto_stock.recommendation_synthesis.credentials import (

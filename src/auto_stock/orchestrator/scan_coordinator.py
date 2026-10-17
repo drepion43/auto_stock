@@ -21,7 +21,7 @@ from auto_stock.data.scan_cache import MarketScanCache
 from auto_stock.data.service import get_universe
 from auto_stock.orchestrator.market_buckets import bucket_universe_by_atomic_market
 from auto_stock.orchestrator.market_scan import scan_market
-from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
+from auto_stock.orchestrator.models import DEFAULT_LOOKBACK_DAYS
 from auto_stock.risk_sizing.models import AccountState
 
 DEFAULT_STALE_AFTER = timedelta(hours=12)

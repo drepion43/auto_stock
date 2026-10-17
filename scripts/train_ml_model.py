@@ -27,20 +27,31 @@ GPU를 못 쓰면 데이터 수집 전에 바로 실패한다. 저장되는 아�
 데이터는 시간순 train/validation/test(기본 ~70/10/20, `ML_TRAIN_VAL_RATIO`)로 나뉜다. 학습이 끝나면
 validation/test(국내·미국별) 성능을 persistence 베이스라인과 비교 출력하고, 모델 옆에
 학습 곡선 `unified_h1_mamba.history.png`와 `unified_h1_mamba.history.csv`를 저장한다.
+
+**데이터 수집을 미리 끝내두고 학습만 나중에 하려면**: `scripts/collect_ml_dataset.py`를 먼저
+실행해 `data/ml_training_dataset.pkl`(기본 경로)을 만들어두면, 이 스크립트는 그 파일이 있으면
+OHLCV/펀더멘털을 다시 수집하지 않고 바로 읽어서 학습한다. 경로를 바꾸려면 수집 스크립트와
+이 스크립트 모두에 같은 `ML_TRAIN_DATASET_PATH`를 지정하면 된다. `ML_TRAIN_FORCE_COLLECT=1`을
+주면 저장된 파일이 있어도 무시하고 다시 수집한다(데이터를 갱신하고 싶을 때).
 """
 
 import logging
+
+from tqdm.contrib.logging import logging_redirect_tqdm
 import os
 from datetime import date, timedelta
-
-from tqdm import tqdm
+from pathlib import Path
 
 from auto_stock.data.cache import OHLCVCache
-from auto_stock.data.service import get_ohlcv, get_universe
-from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.ml_predictor.artifact import save_model
+from auto_stock.ml_predictor.collection import (
+    DEFAULT_DATASET_PATH,
+    collect_universe_records,
+    load_dataset,
+    save_dataset,
+    universe_for,
+)
 from auto_stock.ml_predictor.dataset import build_sequence_dataset, train_val_test_split
-from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import SequenceDataset, SequenceDatasetSplit
 from auto_stock.ml_predictor.predictor import build_model
 from auto_stock.ml_predictor.reporting import best_val_epoch, plot_training_history, save_history_csv
@@ -58,7 +69,6 @@ from auto_stock.ml_predictor.training import (
     split_by_region,
     train,
 )
-from auto_stock.orchestrator.market_buckets import bucket_markets
 
 UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]  # bucket_markets로 원자 거래소 전체 합집합
 UNIVERSE_SIZE = int(os.environ.get("ML_TRAIN_UNIVERSE_SIZE", 200))
@@ -72,53 +82,27 @@ DEVICE = os.environ.get("ML_TRAIN_DEVICE", "auto")
 LOG_EVERY = int(os.environ.get("ML_TRAIN_LOG_EVERY", 1))
 VAL_RATIO = float(os.environ.get("ML_TRAIN_VAL_RATIO", 0.1))  # 전체 날짜 대비, test 바로 앞 구간
 TEST_RATIO = 0.2  # chronological_split 기본값과 동일 — test 구간을 바꾸면 이전 결과와 비교 불가
+DATASET_PATH = Path(os.environ.get("ML_TRAIN_DATASET_PATH", DEFAULT_DATASET_PATH))
+FORCE_COLLECT = os.environ.get("ML_TRAIN_FORCE_COLLECT", "").strip() == "1"
 
 
-def _universe_for(market: str) -> list[str]:
-    """`market`이 합성 "KRX"면 `bucket_markets`로 KOSPI+KOSDAQ을 각각 조회해 중복
-    없이 합친다(처음 등장한 순서 보존). 원자 market이면 그대로 `get_universe`."""
-    atomic_markets = bucket_markets(market)
-    if len(atomic_markets) == 1 and atomic_markets[0] == market:
-        return get_universe(market)
-    tickers: list[str] = []
-    seen: set[str] = set()
-    for atomic_market in atomic_markets:
-        for ticker in get_universe(atomic_market):
-            if ticker not in seen:
-                seen.add(ticker)
-                tickers.append(ticker)
-    return tickers
+def _collect_dataset() -> SequenceDataset:
+    cache = OHLCVCache("data/ohlcv.duckdb")
+    end = date.today()
+    start = end - timedelta(days=365 * LOOKBACK_YEARS)
 
+    all_records: list[list] = []
+    all_fundamentals: list = []
+    # Progress/skip log lines go through tqdm.write so they don't break the live progress bar.
+    with logging_redirect_tqdm():
+        for market in UNIVERSE_MARKETS:
+            tickers = universe_for(market)[:UNIVERSE_SIZE]
+            print(f"[{market}] 유니버스: {len(tickers)}종목, 기간: {start} ~ {end}")
+            records, fundamentals = collect_universe_records(cache, tickers, start, end, market)
+            all_records.extend(records)
+            all_fundamentals.extend(fundamentals)
 
-def _atomic_market_for(ticker: str, market: str) -> str:
-    """`market`이 합성 "KRX"면 종목의 실제 소속 거래소(KOSPI/KOSDAQ)를 역조회한다
-    (역조회 실패는 KOSPI로 보수적 폴백). 그 외는 이미 원자값이라 그대로 반환."""
-    if market != "KRX":
-        return market
-    return resolve_market(ticker) or "KOSPI"
-
-
-def _collect_universe_records(
-    cache: OHLCVCache, tickers: list[str], start: date, end: date, market: str
-) -> tuple[list[list], list]:
-    """OHLCV 레코드와, 국내 종목에 대해서만 채워진 펀더멘털(dict | None)을
-    1:1 대응 리스트로 함께 수집한다 — 미국 종목은 fundamentals가 None(중립값 폴백)."""
-    all_records = []
-    all_fundamentals = []
-    skipped = 0
-    progress = tqdm(tickers, desc=f"[{market}] OHLCV 수집", unit="종목")
-    for ticker in progress:
-        try:
-            atomic_market = _atomic_market_for(ticker, market)
-            records = get_ohlcv(cache, ticker, start, end, atomic_market)
-            if records:
-                all_records.append(records)
-                all_fundamentals.append(build_fundamentals_by_date(ticker, atomic_market, start, end))
-        except Exception as exc:  # per-ticker isolation, same principle as the orchestrator
-            skipped += 1
-            tqdm.write(f"  스킵 {ticker}: {exc}")
-        progress.set_postfix(로드=len(all_records), 스킵=skipped)
-    return all_records, all_fundamentals
+    return build_sequence_dataset(all_records, all_fundamentals)
 
 
 def main() -> None:
@@ -131,20 +115,15 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     logging.getLogger("auto_stock").setLevel(logging.INFO)
 
-    cache = OHLCVCache("data/ohlcv.duckdb")
-    end = date.today()
-    start = end - timedelta(days=365 * LOOKBACK_YEARS)
+    if DATASET_PATH.exists() and not FORCE_COLLECT:
+        print(f"수집된 데이터셋 로드: {DATASET_PATH}")
+        dataset = load_dataset(DATASET_PATH)
+    else:
+        dataset = _collect_dataset()
+        saved_path = save_dataset(dataset, DATASET_PATH)
+        print(f"데이터셋 저장: {saved_path} (다음 실행부터 재수집 없이 재사용)")
 
-    all_records: list[list] = []
-    all_fundamentals: list = []
-    for market in UNIVERSE_MARKETS:
-        tickers = _universe_for(market)[:UNIVERSE_SIZE]
-        print(f"[{market}] 유니버스: {len(tickers)}종목, 기간: {start} ~ {end}")
-        records, fundamentals = _collect_universe_records(cache, tickers, start, end, market)
-        all_records.extend(records)
-        all_fundamentals.extend(fundamentals)
-
-    dataset = build_sequence_dataset(all_records, all_fundamentals)
+    universe_size = len(dataset.sequences)
     split = train_val_test_split(dataset, val_ratio=VAL_RATIO, test_ratio=TEST_RATIO)
 
     if not split.train.sequences or not split.validation or not split.validation.sequences or not split.test.sequences:
@@ -162,7 +141,7 @@ def main() -> None:
     )
     bundle = train(
         split,
-        universe_size=len(all_records),
+        universe_size=universe_size,
         hidden_dim=HIDDEN_DIM,
         n_layers=N_LAYERS,
         epochs=EPOCHS,

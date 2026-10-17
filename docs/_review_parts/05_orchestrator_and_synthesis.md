@@ -15,10 +15,11 @@
 
 종목 하나를 다루는 6개 신호 tool(`analyze_rule_engine` 등, `chat_agent/tools.py`)과 ①숏리스트(`build_shortlist`)/무료스캔(`scan_market`)은 여전히 **원자 market 하나**만 받는다 — 종목 하나는 항상 원자 거래소 하나에만 속하므로 이 계약은 바뀌지 않았다. 합성 버킷을 다뤄야 하는 지점은 오직 `RecommendationCoordinator`(아래에서 상세히 설명)뿐이다.
 
-## 전체 그림 — 이 레포에는 서로 다른 두 종류의 파이프라인이 있다
+## 전체 그림 — 이 레포에 남은 추천 파이프라인
 
-1. **MVP-0 알림 파이프라인** (`pipeline.py::run_recommendation_pipeline`) — 호출자가 명시적으로 지정한 소수의 워치리스트 티커를 돌며, 신호가 있으면 **텔레그램으로 실제 알림을 보낸다**. `scripts/run_recommendations*.py` 계열이 이 경로를 쓴다.
-2. **전체 유니버스 배치 추천 파이프라인** — 챗봇이 "지금 추천할 만한 종목 있어?" 질의에 즉답하기 위해 백그라운드에서 전체 시장(또는 섹터)을 훑어 결과를 캐시에 적재하는 경로다. 세 단계로 나뉜다(각 단계는 `docs/design/`에 없는 `recommendation-synthesis.md`라는 계획 문서를 참조하는 주석이 코드 곳곳에 있는데, **그 파일 자체는 현재 디스크에 존재하지 않는다** — 삭제됐거나 다른 이름으로 옮겨진 것으로 보이며, 설계 결정 근거는 각 코드 docstring에 남은 설명으로만 추적 가능하다):
+> **삭제 노트 (2026-10-15)**: 과거 여기 있던 "MVP-0 알림 파이프라인"(`pipeline.py::run_recommendation_pipeline` — 호출자가 지정한 워치리스트를 돌며 신호가 있으면 **텔레그램으로 실제 알림을 발송**하던 경로, `scripts/run_recommendations*.py` 계열이 호출)을 코드에서 제거했다. 메인 챗봇(deepagents 루프)이 쓰는 어떤 경로도 이 함수를 호출하지 않았기 때문이다 — `pipeline.py` 파일 자체, 유일한 소비자였던 `notifier/`(텔레그램 발송 모듈), 호출 스크립트 5개, 대응 테스트(`tests/orchestrator/test_pipeline.py`, `tests/notifier/`)를 함께 삭제했다. `pipeline.py`가 갖고 있던 `DEFAULT_LOOKBACK_DAYS` 상수만 `orchestrator/models.py`로 옮겨 다른 5개 호출부(`chat_agent/tools.py`, `market_scan.py`, `recommendation_coordinator.py`, `scan_coordinator.py`, `shortlist.py`)가 계속 쓰도록 살렸다. 아래는 지금 남은 유일한 파이프라인이다.
+
+**전체 유니버스 배치 추천 파이프라인** — 챗봇이 "지금 추천할 만한 종목 있어?" 질의에 즉답하기 위해 백그라운드에서 전체 시장(또는 섹터)을 훑어 결과를 캐시에 적재하는 경로다. **정정 (2026-10-15): 아래 "그 파일 자체는 현재 디스크에 존재하지 않는다"는 서술은 틀렸다** — `docs/design/recommendation-synthesis.md`가 실제로 디스크에 존재한다(260줄, `find`/`wc -l`로 확인). 코드 주석의 §2~§7 참조도 그 문서의 `### 2.`~`### 7.` 섹션 번호와 정확히 1:1로 대응된다(`shortlist.py`→§2, `deep_scan.py`→§3, `synthesizer.py`→§4, `sector_resolution.py`→§5 등). 아마 이 문서 작성 당시 실제로 `find`/`ls`를 돌려 확인하지 않고 추정만으로 "없다"고 적은 것으로 보인다 — 세 단계는 아래처럼 나뉜다:
    - **① 숏리스트** (`shortlist.py::build_shortlist`) — 규칙엔진 ∪ ML 중 하나라도 방향성 의견을 내면 통과시키는 저비용 1차 필터.
    - **② 심층분석(딥다이브)** (`deep_scan.py::run_deep_scan`) — 숏리스트에 오른 종목마다 기존 `stock_analyst` deepagents 서브에이전트를 재사용해 자율적으로 신호를 골라 심층 판단.
    - **③ 종합(synthesis)** (`recommendation_synthesis/synthesizer.py::run_recommendation_synthesis`) — 숏리스트 전체의 심층판단을 한 번에 비교해 상위 N개만 순위와 근거를 매기는 세 번째 deepagents 서브에이전트.
@@ -59,66 +60,13 @@
 
 ## `orchestrator/models.py`
 
-### `PipelineResult`
-
-```python
-@dataclass(frozen=True, slots=True)
-class PipelineResult:
-    sent: list[Explanation]
-    errors: list[tuple[str, str]]
-```
-
-`run_recommendation_pipeline`의 반환형. `sent`는 실제로 텔레그램 발송에 성공한 `Explanation` 목록, `errors`는 `(ticker, 에러메시지)` 튜플 목록이다. `frozen=True, slots=True`로 불변·경량 값 객체로 고정 — 호출 후 결과를 변형할 일이 없다는 설계 의도.
+**삭제 노트 (2026-10-15)**: 이 파일이 갖고 있던 `PipelineResult`(`run_recommendation_pipeline`의 반환형 — `sent: list[Explanation]`/`errors: list[tuple[str, str]]`)는 `pipeline.py`와 함께 삭제됐다. 지금 `orchestrator/models.py`에는 `DEFAULT_LOOKBACK_DAYS = 120`(SMA60 워밍업 + ATR(14) 계산에 필요한 최소 60거래일 확보용, 과거엔 `pipeline.py`가 들고 있던 상수) 하나만 남아 있고, `chat_agent/tools.py`/`market_scan.py`/`recommendation_coordinator.py`/`scan_coordinator.py`/`shortlist.py` 5곳이 여기서 import한다.
 
 ---
 
-## `orchestrator/pipeline.py` — MVP-0 알림 파이프라인
+## `orchestrator/pipeline.py` — **삭제됨 (2026-10-15)**
 
-`run_recommendation_pipeline`은 이 레포에서 가장 먼저 만들어진 오케스트레이터이자, 유일하게 **실제 텔레그램 알림을 전송하는** 함수다. 상세 설계 근거는 `docs/design/orchestrator.md`가 원본이지만, 코드는 그 문서 작성 이후 ML(#2)/LLM차트(#3)/공시(#4)/뉴스감성(#4-뉴스) 4개 보조신호가 추가 배선되며 크게 확장됐다.
-
-### 상수
-
-- `DEFAULT_LOOKBACK_DAYS = 120` (`pipeline.py:56`) — SMA60 워밍업 + ATR(14) 계산에 필요한 최소 60거래일을 확보하기 위해, 주말·공휴일을 감안해 캘린더 기준 120일로 설정. `market_scan.py`/`shortlist.py`도 이 상수를 그대로 import해서 재사용한다.
-
-### `_ml_reasons(ml_model, cache, ticker, market, action) -> tuple[list[str], str | None]`
-
-- **역할**: ML 예측(#2) 보조신호를 문구로 변환. `ml_model`이 `None`이면 `([], None)` 즉시 반환(스킵).
-- **동작**: 규칙엔진용 짧은 `records`(120일)를 재사용하지 **않는다** — Mamba는 종목 히스토리 전체를 시퀀스로 받으므로 `ML_LOOKBACK_DAYS`(3년)치를 `get_ohlcv`로 다시 조회하고, `build_fundamentals_by_date`로 국내 펀더멘털을 붙인 뒤 `predict(ml_model, ml_records, fundamentals)` → `to_reasons(prediction, action)`.
-- **에러 처리**: `except Exception` 전체를 잡아 `([], str(exc))`로 변환 — **절대 raise하지 않는다**(docstring 명시, 설계 결정 5). ML 실패가 알림 발송 자체를 막으면 안 된다는 원칙.
-- 다른 세 헬퍼와 달리 에러 메시지에 소스 라벨 접두사를 **스스로 붙이지 않는다** — 호출부(`run_recommendation_pipeline`)가 `"ML 예측 실패: {ml_error}"`로 접두사를 붙인다.
-
-### `_llm_reasons(llm_client, records, action) -> tuple[list[str], str | None]`
-
-`_ml_reasons`와 완전히 동일한 패턴(설계 결정 6) — `llm_client`가 `None`이면 스킵, 아니면 `analyze_chart` → `to_chart_reasons`, 실패는 삼켜서 반환, 접두사는 호출부가 붙임(`"LLM 차트분석 실패: ..."`).
-
-### `_news_reasons(news_client, ticker, market, action) -> tuple[list[str], str | None]`
-
-- **역할**: 공시(#4) 보조신호. KOSPI/KOSDAQ은 DART, NASDAQ/NYSE는 EDGAR — **해석 계층(`analyze_disclosures`/`to_disclosure_reasons`)은 시장과 무관하게 완전히 동일한 코드를 재사용**하고, 시장별 분기는 이 함수 내부에만 있다. market→소스 라벨 매핑은 신설된 `data/market_routing.py::NEWS_SOURCE_LABELS`(`{"KOSPI": "DART", "KOSDAQ": "DART", "NASDAQ": "EDGAR", "NYSE": "EDGAR"}`)로 옮겨졌다 — 과거에는 `pipeline.py`와 `chat_agent/tools.py`가 각자 동일한 딕셔너리(`_NEWS_SOURCE_LABELS = {"KRX": "DART", "NASDAQ": "EDGAR"}`)를 중복 정의했는데, market 세분화 작업에서 두 곳을 매번 똑같이 고쳐야 하는 번거로움을 없애려고 공용 모듈로 통합했다. "국내냐 미국이냐" 판정도 `data/market_routing.py::KRX_MARKETS`(`frozenset({"KOSPI", "KOSDAQ"})`) 멤버십으로 통일됐다.
-- **동작 순서**:
-  1. `source_label = NEWS_SOURCE_LABELS.get(market)` — 지원하지 않는 시장이면 조용히 `([], None)` 스킵(향후 시장 확장 대비, 에러 아님).
-  2. 티커 → 공시ID 해석: `market in KRX_MARKETS`면 `resolve_corp_code`, 아니면(NASDAQ/NYSE) `resolve_cik`. `None`이면(미등록 종목) 조용히 스킵.
-  3. `fetch_disclosures`/`fetch_filings`로 최근 `DISCLOSURE_LOOKBACK_DAYS`(90일) 공시 조회.
-  4. `analyze_disclosures(news_client, disclosures, ticker, market, end)` → `to_disclosure_reasons`.
-- **에러 처리**: **공시 조회 단계와 LLM 해석 단계를 별도의 `try/except`로 분리**한다 — 이것이 다른 두 헬퍼(`_ml_reasons`/`_llm_reasons`)와 구조적으로 다른 지점이다. 이 함수는 두 개의 서로 다른 실패 지점(외부 데이터 소스 vs. LLM)이 있어서 **자기 자신이 접두사를 결정**한다: `"DART 조회 실패: ..."`/`"EDGAR 조회 실패: ..."`/`"LLM 공시해석 실패: ..."`.
-
-### `_sentiment_reasons(sentiment_client, ticker, market, action) -> tuple[list[str], str | None]`
-
-- **역할**: 뉴스 감성분석(#4-뉴스) 보조신호. `_news_reasons`와 동일한 시장 분기 골격(KOSPI/KOSDAQ→네이버뉴스, NASDAQ/NYSE→GDELT, `data/market_routing.py::SENTIMENT_SOURCE_LABELS`)이지만, 뉴스 API는 티커가 아니라 **회사명으로 검색해야 하므로** 이름 해석 단계가 하나 더 끼어든다.
-- **동작 순서**:
-  1. 시장 미지원이면 스킵.
-  2. 이름 해석: `market in KRX_MARKETS`면 `resolve_corp_name`(DART 캐시 재사용), 아니면(NASDAQ/NYSE) `resolve_company_title`(EDGAR 캐시 재사용) — **공시용 캐시 인프라를 그대로 재사용**, 새 인프라를 만들지 않음. `None`이면(해석 실패) 조용히 스킵.
-  3. 뉴스 조회: KOSPI/KOSDAQ은 `search_news(name, ...)`, NASDAQ/NYSE는 `search_articles(company_phrase(name), ...)` — `gdelt_source.company_phrase`가 따옴표를 제거하고 SEC 법인 접미사(Corp, Inc, Co, Ltd 등)를 떼어 뉴스 표기와 맞춘 구문 검색어를 만든다("NVIDIA CORP" 27건 → "NVIDIA" 50건 이상, 14일 실측). 상세: `docs/design/us-news-source-reliability.md`.
-  4. `analyze_sentiment` → `to_sentiment_reasons`.
-- **에러 처리**: **이름 해석 / 뉴스 조회 / LLM 해석 세 단계가 각각 분리된 `try/except`**. 이름 해석 실패는 `NEWS_SOURCE_LABELS`(DART/EDGAR)를 재사용한 라벨로("DART 조회 실패: ..."), 뉴스 조회 실패는 `SENTIMENT_SOURCE_LABELS`(네이버뉴스/GDELT)로, LLM 해석 실패는 `"LLM 뉴스감성 해석 실패: ..."`로 각각 구분해서 반환한다. **왜 분리했는지**: 하나로 묶으면 DART/EDGAR 호출 실패가 "네이버뉴스/GDELT 조회 실패"로 잘못 라벨링되는 버그가 실제로 있었고(코드리뷰 MEDIUM으로 발견·수정), 그 재발을 막기 위해 구조적으로 분리됐다.
-- **NYSE 추가로 인한 변화**: 과거엔 `market == "KRX"`/`else`(2-way)였던 분기가 `market in KRX_MARKETS`/`else`(사실상 4-way 중 국내/미국 2분류)로 바뀌었을 뿐, DART/EDGAR/네이버/GDELT 호출 코드 자체는 수정되지 않았다 — NYSE는 그냥 "미국 쪽" 분기를 그대로 탄다.
-
-### `run_recommendation_pipeline(cache, tickers, market, account, credentials, lookback_days=120, ml_model=None, llm_client=None, news_client=None, sentiment_client=None) -> PipelineResult`
-
-- **역할**: 이 모듈의 메인 진입점. 각 티커에 대해 `get_ohlcv → generate_candidates → (각 후보마다) suggest_position → generate_explanation → send_notification` 순서로 실행.
-- **핵심 분기**(`pipeline.py:211-235`): `ml_model`/`llm_client`/`news_client`/`sentiment_client` **네 개가 모두 `None`**이면(기본값 그대로 호출된 경우) `generate_explanation(candidate, sizing)`을 **2-위치인자**로 호출한다 — 보조신호 도입 이전과 **바이트 단위로 동일한 동작**을 보장. 이 분기는 `if`를 네 개 쪼개지 않고 **하나의 `and`-체인 조건**으로 통일했는데(`pipeline.py:211-216`), 그 이유는 기존 회귀 테스트가 2-위치인자 호출을 `assert_called_once_with(ANY, ANY)`로 못박고 있어서, 분기를 쪼개면 그 테스트가 깨지기 때문이다.
-- 하나라도 켜져 있으면 네 헬퍼를 **순서대로**(ML → LLM차트 → 공시 → 뉴스감성, 항상 이 순서) 호출해 `extra_reasons` 리스트에 이어붙이고, `generate_explanation(candidate, sizing, extra_reasons=extra_reasons)`로 호출한다.
-- 네 헬퍼 중 어느 것이 실패해도 **다른 세 개의 결과는 그대로 살아남는다** — 각 헬퍼가 독립적으로 실패를 삼키기 때문. 실패는 `errors` 리스트에 `(ticker, 에러메시지)`로 쌓이되, **알림 발송(`send_notification`) 자체는 멈추지 않는다**.
-- **종목 단위 격리**: 전체 for-loop을 감싸는 바깥쪽 `try/except Exception`(`pipeline.py:207`, `251`)이 있어서, `get_ohlcv` 실패나 `send_notification`(텔레그램 전송) 실패 등 **어떤 단계에서든** 예외가 나면 해당 티커만 `errors`에 기록되고 **다음 티커로 계속 진행**한다. 전체 상장종목을 겨냥한 시스템에서 한 종목의 일시적 오류로 전체 배치가 죽으면 안 된다는 원칙(`docs/design/orchestrator.md` "종목 단위 에러 격리" 절).
+> **삭제 노트**: `run_recommendation_pipeline`은 이 레포에서 가장 먼저 만들어진 오케스트레이터이자, 유일하게 **실제 텔레그램 알림을 전송하는** 함수였다. 메인 챗봇(deepagents 루프)이 쓰는 두 경로(`market_scan.py::scan_market` 무료 스캔, `RecommendationCoordinator`의 숏리스트+딥다이브+종합 유료 경로) 모두 이 함수를 호출하지 않아 제거했다. 이 함수가 갖고 있던 네 보조신호 헬퍼(`_ml_reasons`/`_llm_reasons`/`_news_reasons`/`_sentiment_reasons` — 각각 절대 raise하지 않고 `(reasons, error)`를 반환하는 실패격리 계약, 공시/뉴스감성은 DART/EDGAR·네이버/GDELT로 market 분기)도 함께 사라졌다. 유일한 소비자였던 `notifier/`(텔레그램 발송 모듈)와 호출 스크립트 5개(`scripts/run_recommendations*.py` 등), 대응 테스트(`tests/orchestrator/test_pipeline.py`, `tests/notifier/`)도 같이 제거했다. `DEFAULT_LOOKBACK_DAYS`만 `orchestrator/models.py`로 옮겨 살렸다(위 섹션 참고). 알림/승인 봇이 MVP-1 재개 시 다시 필요해지면 이 설계(네 헬퍼의 접두사 처리 차이, 2-위치인자 회귀 보존 분기, 종목 단위 에러 격리)를 참고해 재구현하면 된다 — 설계 근거는 `docs/design/orchestrator.md`/`docs/design/telegram-notifier.md`에 남아 있다.
 
 ---
 
@@ -127,11 +75,11 @@ class PipelineResult:
 ### `scan_market(cache, tickers, market, account, lookback_days=120) -> tuple[list[Explanation], list[tuple[str, str]]]`
 
 - **역할**: "추천해줄만한 주식 있어?" 같은 전체 스캔형 질의에 챗봇이 즉답할 수 있도록, `MarketScanCache`에 적재할 결과를 만드는 **원샷 스캔**. `scripts/run_market_scan.py`가 직접 호출하고, `ScanCoordinator._run`도 내부적으로 이 함수를 호출한다.
-- **`run_recommendation_pipeline`과의 차이점**(핵심):
-  1. **텔레그램을 발송하지 않는다** — 수백 종목을 스캔하며 매 후보마다 알림을 보내면 스팸이 된다는 이유로 분리된 별도 함수.
+- **특징**(2026-10-15 재정정 — 과거 비교대상이던 `run_recommendation_pipeline`은 삭제됨):
+  1. **텔레그램을 발송하지 않는다** — 캐시 적재 전용. 수백 종목을 스캔하며 매 후보마다 알림을 보내면 스팸이 된다는 이유로 설계 시점부터 알림 발송 코드를 두지 않았다.
   2. **보조신호(ML/LLM차트/공시/뉴스감성)를 전혀 쓰지 않는다** — 규칙엔진 + 사이징만 쓰는 완전 무료 경로(LLM 호출 0회).
-- **동작**: 티커마다 `get_ohlcv → generate_candidates → (각 후보) suggest_position → generate_explanation`(2-위치인자, extra_reasons 없음) → 결과를 `explanations` 리스트에 누적. 티커 단위 `try/except`로 실패 격리(`run_recommendation_pipeline`과 동일 원칙).
-- **반환값**: `(explanations, errors)` 튜플. `PipelineResult`를 쓰지 않고 평범한 튜플을 쓰는 이유는 명시돼 있지 않지만, 이 함수가 텔레그램 발송 결과(`sent`)가 아니라 "스캔된 모든 설명"을 반환하기 때문으로 추정된다(`PipelineResult.sent`는 "발송 성공분"이라는 의미가 실려 있어 의미가 다르다).
+- **동작**: 티커마다 `get_ohlcv → generate_candidates → (각 후보) suggest_position → generate_explanation`(2-위치인자, extra_reasons 없음) → 결과를 `explanations` 리스트에 누적. 티커 단위 `try/except`로 실패 격리.
+- **반환값**: `(explanations, errors)` 평범한 튜플.
 - **market 세분화 이후 영향**: 이 함수 자체는 로직이 바뀌지 않았다 — 여전히 "market 하나 + tickers 리스트"를 받는 범용 함수다. 다만 `scripts/run_market_scan.py`의 `MARKETS` 상수가 `["KRX", "NASDAQ"]`에서 `["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]`(원자 4개)로 바뀌어, 호출부가 이제 원자 market만 넘긴다. 이 레거시 무료경로는 합성 버킷(KRX/US/SP500/DOW) 개념 자체를 모른다.
 
 ---

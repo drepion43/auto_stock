@@ -1,18 +1,18 @@
-# 코드 리뷰: 규칙엔진(#1) · 리스크·포지션 사이징(#5) · 추천 설명 생성기(#6) · 알림봇(#7)
+# 코드 리뷰: 규칙엔진(#1) · 리스크·포지션 사이징(#5) · 추천 설명 생성기(#6) · 알림봇(#7, 2026-10-15 삭제)
 
-> 이 문서는 신규 참여자가 코드만 보고 추론하기보다 빠르게 전체 그림과 세부 동작을 파악할 수 있도록, 4개 모듈의 파일/함수/클래스를 하나씩 상세히 설명한다. 서술은 코드(`src/auto_stock/rule_engine/`, `risk_sizing/`, `explainer/`, `notifier/`)와 각 모듈의 테스트, 그리고 `docs/design/rule-engine.md`, `docs/design/risk-position-sizing.md`, `docs/design/recommendation-explainer.md`, `docs/design/telegram-notifier.md`를 직접 읽고 확인한 내용만 담았다.
+> 이 문서는 신규 참여자가 코드만 보고 추론하기보다 빠르게 전체 그림과 세부 동작을 파악할 수 있도록, 4개 모듈의 파일/함수/클래스를 하나씩 상세히 설명한다. 서술은 코드(`src/auto_stock/rule_engine/`, `risk_sizing/`, `explainer/`, 2026-10-15에 삭제된 `notifier/`)와 각 모듈의 테스트, 그리고 `docs/design/rule-engine.md`, `docs/design/risk-position-sizing.md`, `docs/design/recommendation-explainer.md`, `docs/design/telegram-notifier.md`를 직접 읽고 확인한 내용만 담았다.
 
-이 4개 모듈은 파이프라인에서 다음 순서로 연결된다:
+과거 이 4개 모듈은 파이프라인에서 다음 순서로 연결됐다(마지막 단계는 2026-10-15에 삭제, §4 삭제 노트 참고):
 
 ```
 OHLCVRecord(데이터 수집 계층) 
   → rule_engine.generate_candidates() → Candidate
   → risk_sizing.suggest_position() → SizingSuggestion
   → explainer.generate_explanation() → Explanation
-  → notifier.send_notification() → 텔레그램 메시지 발송
+  → notifier.send_notification() → 텔레그램 메시지 발송 (삭제됨)
 ```
 
-각 단계는 순수 함수(또는 그에 준하는 얇은 I/O 래퍼)이고, 오케스트레이터(`src/auto_stock/orchestrator/pipeline.py`)가 이 순서로 호출을 엮는다. 이 문서는 그 각 단계의 내부를 다룬다.
+앞 세 단계는 순수 함수(또는 그에 준하는 얇은 I/O 래퍼)이고, 지금은 `market_scan.py::scan_market`과 `orchestrator/shortlist.py` 등이 그 세 단계만 엮어 쓴다(마지막 텔레그램 발송 단계 없이). 이 문서는 그 각 단계의 내부를 다룬다.
 
 ---
 
@@ -243,7 +243,7 @@ else:
 
 ### 역할과 "왜 LLM이 아닌가"
 
-규칙엔진의 `Candidate`와 리스크사이징의 `SizingSuggestion`을 사람이 승인 여부를 판단할 수 있는 자연어 문장으로 종합한다. 알림봇(#7)은 이 문장을 그대로 메시지에 실어 보낸다.
+규칙엔진의 `Candidate`와 리스크사이징의 `SizingSuggestion`을 사람이 승인 여부를 판단할 수 있는 자연어 문장으로 종합한다. (2026-10-15에 삭제된) 알림봇(#7)은 이 문장을 그대로 메시지에 실어 보냈었다.
 
 PRD §5.1이 그리는 최종 그림은 "규칙엔진+ML+LLM차트+뉴스" 네 계층의 근거를 LLM으로 종합하는 모습이다. 하지만 이 모듈이 구현된 시점에는 ML(#2)·LLM 차트분석(#3)·뉴스/공시(#4)가 아직 없었고, 이미 구조화된 두 계층(문자열 리스트 + 숫자)을 나열하는 데는 LLM이 필요 없었다. 그래서 **결정론적 템플릿 조합 함수**로 구현했다. 장점은 design 문서에 명시돼 있다: API 키/네트워크 호출/비용/지연시간이 없고, 출력이 결정론적이라 테스트가 쉽고 환각 위험이 없다.
 
@@ -272,90 +272,9 @@ PRD §5.1이 그리는 최종 그림은 "규칙엔진+ML+LLM차트+뉴스" 네 �
 
 ---
 
-## 4. `src/auto_stock/notifier/` — 알림봇 (#7, 알림 전용)
+## 4. `src/auto_stock/notifier/` — 알림봇 (#7, 알림 전용) — **삭제됨 (2026-10-15)**
 
-### 역할과 범위
-
-추천 설명 생성기(#6)가 만든 `Explanation`을 텔레그램 메시지로 사용자에게 보낸다. **승인/거부 버튼이나 콜백 처리는 하지 않는다** — 승인해도 트리거될 주문 자체가 없기 때문이다(주문 실행 에이전트 #8이 아직 없음). 그 흐름은 #8과 함께 MVP-1에서 추가될 예정(현재는 PRD §9 결정에 따라 보류 중).
-
-### 왜 `python-telegram-bot`이 아니라 `requests` 직접 호출인가
-
-`python-telegram-bot` v20 이상은 async 전용 API다. 이 프로젝트의 나머지 모듈은 전부 동기 함수로 작성돼 있어서, 이 한 곳 때문에 asyncio 이벤트 루프를 들여올 이유가 없었다(YAGNI). 텔레그램 Bot API 자체는 단순 REST라서, 이미 다른 데이터 소스를 통해 간접 의존성으로 들어와 있던 `requests`로 `sendMessage` 엔드포인트를 직접 호출하는 쪽이 더 가볍고 일관됐다.
-
-### `models.py` — `TelegramCredentials(bot_token, chat_id)`
-
-```python
-@dataclass(frozen=True, slots=True)
-class TelegramCredentials:
-    bot_token: str = field(repr=False)  # never let dataclass repr/str echo the secret
-    chat_id: str
-```
-
-`bot_token`에 `field(repr=False)`를 붙여서, 이 객체를 로그에 찍거나 `repr()`/`str()`을 호출해도 토큰 값이 출력되지 않는다. 토큰 유출 방지를 코드 레벨에서 강제하는 작은 디테일이다.
-
-### `credentials.py` — `load_telegram_credentials() -> TelegramCredentials`
-
-```python
-def load_telegram_credentials() -> TelegramCredentials:
-    load_dotenv()
-    return TelegramCredentials(
-        bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
-        chat_id=os.environ["TELEGRAM_CHAT_ID"],
-    )
-```
-
-`load_dotenv()`를 호출 시점에 실행해 `.env` 파일을 읽은 뒤, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`를 환경변수에서 읽는다. 둘 중 하나라도 없으면 `KeyError`를 던진다 — "필수 시크릿은 값이 없으면 즉시 실패"하는 패턴이다(이 리포 전체에 반복되는 관례). `send_notification()` 자체는 크리덴셜을 내부에서 직접 읽지 않고 인자로 받는다 — 그래서 테스트할 때 `requests.post`만 모킹하면 실제 `.env` 파일이나 환경변수와 무관하게 순수 함수처럼 검증할 수 있다.
-
-이 함수가 design 문서에서 "이 리포에서 '진입점이 필요 시점에 직접 `load_dotenv()`를 호출'하는 패턴의 원조"로 언급된다 — 이후 추가된 `llm_chart_analyst/credentials.py`, `news_disclosure/credentials.py` 등도 동일한 패턴을 따른다.
-
-### `telegram_bot.py`
-
-#### 상수 (13-14)
-```python
-_ACTION_LABELS = {"BUY": "매수", "SELL": "매도"}
-_REQUEST_TIMEOUT_SECONDS = 10
-```
-
-#### `TelegramNotificationError(Exception)` (17-18)
-
-이 모듈이 던지는 유일한 예외 타입. 네트워크 오류, HTTP 실패, 텔레그램 API 자체 오류를 모두 이 타입으로 통일한다.
-
-#### `_format_message(explanation) -> str` (내부 헬퍼, 21-23)
-
-`f"[{label}] {explanation.summary}"` — `action`을 한국어 라벨("매수"/"매도")로 바꿔 접두어로 붙인다. `_ACTION_LABELS.get(explanation.action, explanation.action)`이라서, 혹시 알 수 없는 action 문자열이 들어와도 그 문자열을 그대로 라벨로 쓸 뿐 예외를 던지지 않는다(방어적).
-
-#### `send_notification(explanation, credentials) -> None` (26-42)
-
-```python
-try:
-    response = requests.post(
-        f"https://api.telegram.org/bot{credentials.bot_token}/sendMessage",
-        json={"chat_id": credentials.chat_id, "text": _format_message(explanation)},
-        timeout=_REQUEST_TIMEOUT_SECONDS,
-    )
-except requests.RequestException as exc:
-    raise TelegramNotificationError(f"텔레그램 요청 중 네트워크 오류: {exc}") from exc
-
-if not response.ok:
-    raise TelegramNotificationError(f"텔레그램 요청 실패 (status={getattr(response, 'status_code', '?')})")
-
-payload = response.json()
-if not payload.get("ok"):
-    raise TelegramNotificationError(f"텔레그램 API 오류: {payload.get('description', 'unknown')}")
-```
-
-3단계 실패 처리:
-1. `requests.RequestException`(타임아웃·연결 실패 등 전송 자체의 실패) → `TelegramNotificationError`로 래핑.
-2. HTTP 레벨 실패(`response.ok`가 거짓, 즉 4xx/5xx) → `TelegramNotificationError`.
-3. HTTP는 200이어도 텔레그램 API 자체가 `{"ok": false}`를 반환하는 경우(예: `Bad Request: chat not found`) → `payload["description"]`을 담아 `TelegramNotificationError`.
-
-**타임아웃이 중요한 이유**: `security-reviewer` 리뷰에서 LOW 항목으로 지적되어 추가됐다 — 타임아웃이 없으면 `api.telegram.org`가 응답하지 않을 때 알림 전송이 무한정 멈춰 있을 수 있었다(자체 가용성 리스크). 동시에 그 리뷰 전에는 `requests.RequestException`이 그대로 호출자에게 새어나갔는데, 지금은 전부 `TelegramNotificationError`로 통일됐다.
-
-**보안 설계**: 어떤 예외 메시지에도 `bot_token`이나 `chat_id` 값 자체는 포함되지 않는다 — 상태 코드와 텔레그램이 돌려준 설명 문자열만 담는다. (단, 그 `description` 문자열 자체에 `chat_id`가 간접적으로 포함될 가능성은 리뷰에서 "정보성"으로만 지적되고 코드 변경은 보류됐다 — 당장 긴급한 문제는 아니라는 판단.)
-
-### 수동 검증 스크립트
-
-`scripts/verify_telegram.py` — `.env`에 실제 토큰/chat_id를 채운 뒤 프로젝트 루트에서 실행하면 실제 텔레그램 메시지 1건을 전송해 연동을 확인할 수 있다. 토큰/chat_id 값 자체는 절대 출력하지 않는다. `TELEGRAM_CHAT_ID`를 모를 때는 봇에게 먼저 메시지를 보낸 뒤 `https://api.telegram.org/bot<TOKEN>/getUpdates`로 `result[0].message.chat.id`를 확인하면 된다.
+> **삭제 노트**: 이 섹션이 설명하던 `src/auto_stock/notifier/`(텔레그램 발송 모듈 전체: `models.py`/`credentials.py`/`telegram_bot.py`)와 유일한 호출부였던 `orchestrator/pipeline.py::run_recommendation_pipeline`을 코드에서 제거했다 — 메인 챗봇(deepagents 루프, `deep_loop.py`)이 쓰는 두 경로(`market_scan.py::scan_market`의 무료 스캔, `RecommendationCoordinator`의 `build_shortlist`+`run_deep_scan`+`run_recommendation_synthesis` 유료 경로) 모두 텔레그램 발송을 쓰지 않고 캐시 적재만 한다. `run_recommendation_pipeline`을 직접 호출하던 수동 스크립트(`scripts/run_recommendations.py`/`run_recommendations_with_ml.py`/`run_recommendations_with_signals.py`/`scan_nasdaq_top100_buy_only.py`/`verify_telegram.py`)와 대응 테스트(`tests/notifier/`, `tests/orchestrator/test_pipeline.py`)도 함께 제거했다. `pipeline.py`가 갖고 있던 `DEFAULT_LOOKBACK_DAYS` 상수만 `orchestrator/models.py`로 옮겨 살렸다(5개 호출부가 여전히 그 값을 쓰므로). PRD §7(브로커 역할)·§6(리스크 정책) 등 아직 미착수인 MVP-1 영역에서 알림/승인 봇이 다시 필요해지면 이 설계(TelegramCredentials, send_notification의 3단계 실패 처리, `field(repr=False)`로 토큰 노출 방지 등)를 참고해 재구현하면 된다 — 설계 근거는 `docs/design/telegram-notifier.md`에 남아 있다(코드는 사라졌지만 문서는 보존).
 
 ---
 
@@ -366,8 +285,7 @@ if not payload.get("ok"):
 - `tests/risk_sizing/test_sizing.py`도 같은 패턴으로 `auto_stock.risk_sizing.sizing.atr`을 모킹해 계산식과 한도 분기 로직을 ATR 계산 자체와 분리해서 검증한다(저변동성/고변동성 배분, 손절/익절 산술, 10종목 한도, 50% 익스포저 한도, PASS, SELL/ATR-불가/종가≤0의 `NOT_APPLICABLE`, 손절가 하한 클램프 등).
 - `tests/risk_sizing/`에서 `AccountState`의 `__post_init__` 검증(음수 equity, 범위 밖 `total_exposure_pct`)도 별도로 테스트된다.
 - `tests/explainer/test_generator.py`는 BUY+PASS(근거·수량·배분·손절·익절 전부 포함), SELL(`NOT_APPLICABLE`, 수량/손절 문장 부재), BUY+`EXCEEDS_MAX_POSITIONS`(경고 포함), `extra_reasons` 전달(확장 포인트 동작 확인) 네 가지 경로를 검증한다.
-- `tests/notifier/test_credentials.py`는 `monkeypatch.setenv`/`delenv`로 환경변수 유무에 따른 정상 로드·`KeyError`를 검증한다(실제 `.env`나 진짜 토큰 불필요). `tests/notifier/test_telegram_bot.py`는 `requests.post`를 모킹해 URL/payload, BUY/SELL 라벨, 실패 응답 시 예외를 검증한다 — 실제 네트워크 호출은 테스트에서 전혀 발생하지 않는다.
-- 실제 텔레그램 서버로의 전송(수동 확인)은 자동화 테스트 범위 밖이며, `scripts/verify_telegram.py`로 사용자가 직접 확인해야 한다.
+- (2026-10-15 삭제) 과거 `tests/notifier/test_credentials.py`/`test_telegram_bot.py`가 환경변수 로드와 `requests.post` 모킹을 검증했으나, `notifier/` 모듈 자체가 삭제되면서 함께 제거됐다.
 
 ## 다음 작업과의 연결 지점
 

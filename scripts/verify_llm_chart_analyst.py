@@ -32,7 +32,7 @@ from auto_stock.llm_chart_analyst.analyst import analyze
 from auto_stock.llm_chart_analyst.credentials import load_llm_config
 from auto_stock.llm_chart_analyst.prompt import SYSTEM_PROMPT, build_user_prompt
 from auto_stock.llm_chart_analyst.snapshot import build_snapshot
-from auto_stock.orchestrator.pipeline import DEFAULT_LOOKBACK_DAYS
+from auto_stock.orchestrator.models import DEFAULT_LOOKBACK_DAYS
 
 SAMPLE_TICKER = "005930"  # 삼성전자 — same smoke-test target as verify_pykrx.py
 SAMPLE_MARKET = "KOSPI"
