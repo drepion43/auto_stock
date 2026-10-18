@@ -34,7 +34,8 @@ def build_model(bundle: ModelBundle) -> MambaRegressor:
     model = MambaRegressor(
         in_dim=config["in_dim"], hidden_dim=config["hidden_dim"], n_layers=config["n_layers"]
     )
-    model.load_state_dict(bundle.estimator)
+    # Pre-2026-10-18 artifacts have no input-normalization buffers; they load as an identity transform.
+    model.load_compatible_state_dict(bundle.estimator)
     model.eval()
     return model
 

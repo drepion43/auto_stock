@@ -25,8 +25,12 @@ GPU를 못 쓰면 데이터 수집 전에 바로 실패한다. 저장되는 아�
 파일로 남기려면: ... python -u scripts/train_ml_model.py 2>&1 | tee train.log
 
 데이터는 시간순 train/validation/test(기본 ~70/10/20, `ML_TRAIN_VAL_RATIO`)로 나뉜다. 학습이 끝나면
-validation/test(국내·미국별) 성능을 persistence 베이스라인과 비교 출력하고, 모델 옆에
+validation/test(국내·미국별) 구간의 **모든 (종목, 날짜)**를 채점해 Mamba를 `0 예측`·`persistence`
+베이스라인과 비교하고 예측값 분포를 출력한 뒤(`ml_predictor/evaluation.py`), 모델 옆에
 학습 곡선 `unified_h1_mamba.history.png`와 `unified_h1_mamba.history.csv`를 저장한다.
+
+`ML_TRAIN_EVAL_ONLY=1`이면 학습하지 않고 저장된 `unified_h1_mamba.pt`를 같은 분할로 다시 평가만 한다
+(모델·학습 곡선 파일은 바꾸지 않음).
 
 **데이터 수집을 미리 끝내두고 학습만 나중에 하려면**: `scripts/collect_ml_dataset.py`를 먼저
 실행해 `data/ml_training_dataset.pkl`(기본 경로)을 만들어두면, 이 스크립트는 그 파일이 있으면
@@ -43,7 +47,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from auto_stock.data.cache import OHLCVCache
-from auto_stock.ml_predictor.artifact import save_model
+from auto_stock.ml_predictor.artifact import load_model, save_model
 from auto_stock.ml_predictor.collection import (
     DEFAULT_DATASET_PATH,
     collect_universe_records,
@@ -52,21 +56,22 @@ from auto_stock.ml_predictor.collection import (
     universe_for,
 )
 from auto_stock.ml_predictor.dataset import build_sequence_dataset, train_val_test_split
+from auto_stock.ml_predictor.evaluation import WindowEvaluation, evaluate_window, split_by_region
 from auto_stock.ml_predictor.models import SequenceDataset, SequenceDatasetSplit
-from auto_stock.ml_predictor.predictor import build_model
+from auto_stock.ml_predictor.predictor import ML_AGREE_RETURN_THRESHOLD, build_model
 from auto_stock.ml_predictor.reporting import best_val_epoch, plot_training_history, save_history_csv
 from auto_stock.ml_predictor.training import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_EPOCHS,
+    DEFAULT_FEATURE_CLIP_SIGMA,
+    DEFAULT_GRAD_CLIP,
     DEFAULT_HIDDEN_DIM,
+    DEFAULT_LABEL_CLIP,
     DEFAULT_LEARNING_RATE,
     DEFAULT_N_LAYERS,
     DEFAULT_WEIGHT_DECAY,
     MambaRegressor,
-    evaluate,
-    persistence_baseline_metrics,
     resolve_device,
-    split_by_region,
     train,
 )
 
@@ -84,6 +89,8 @@ VAL_RATIO = float(os.environ.get("ML_TRAIN_VAL_RATIO", 0.1))  # 전체 날짜 �
 TEST_RATIO = 0.2  # chronological_split 기본값과 동일 — test 구간을 바꾸면 이전 결과와 비교 불가
 DATASET_PATH = Path(os.environ.get("ML_TRAIN_DATASET_PATH", DEFAULT_DATASET_PATH))
 FORCE_COLLECT = os.environ.get("ML_TRAIN_FORCE_COLLECT", "").strip() == "1"
+# 학습 없이 저장된 모델(unified_h1_mamba.pt)을 같은 분할로 다시 평가만 한다(모델 파일은 건드리지 않음).
+EVAL_ONLY = os.environ.get("ML_TRAIN_EVAL_ONLY", "").strip() == "1"
 
 
 def _collect_dataset() -> SequenceDataset:
@@ -134,10 +141,16 @@ def main() -> None:
     _print_window("검증", split.validation)
     _print_window("테스트", split.test)
 
+    if EVAL_ONLY:
+        model = build_model(load_model()).to(device)
+        _print_evaluation_report(model, dataset, split)
+        return
+
     print(
         f"[하이퍼파라미터] epochs={EPOCHS} batch_size={BATCH_SIZE} lr={LEARNING_RATE} "
         f"weight_decay={DEFAULT_WEIGHT_DECAY} hidden_dim={HIDDEN_DIM} n_layers={N_LAYERS} "
-        f"features={len(split.train.feature_names)}"
+        f"features={len(split.train.feature_names)} | 입력 표준화 후 ±{DEFAULT_FEATURE_CLIP_SIGMA:g}σ 자르기, "
+        f"학습 레이블 ±{DEFAULT_LABEL_CLIP:.0%} 자르기, grad_clip={DEFAULT_GRAD_CLIP:g}, epoch마다 종목 순서 섞기"
     )
     bundle = train(
         split,
@@ -152,7 +165,7 @@ def main() -> None:
         log_every=LOG_EVERY,
     )
 
-    _print_evaluation_report(build_model(bundle), split)
+    _print_evaluation_report(build_model(bundle).to(device), dataset, split)
 
     path = save_model(bundle)
     print(f"저장 완료: {path} (+ {path.with_suffix('.metadata.json')})")
@@ -179,22 +192,42 @@ def _format_metrics(metrics: dict[str, float]) -> str:
     )
 
 
-def _print_evaluation_report(model: MambaRegressor, split: SequenceDatasetSplit) -> None:
-    """학습 후 검증 리포트 — validation/test 전체, 그리고 test를 국내/미국으로 나눠
-    Mamba와 persistence 베이스라인(내일 수익률 = 오늘 수익률)을 나란히 비교한다.
-    지표는 종목별 마지막 시점 예측 기준(추론 경로와 같은 조건)."""
+def _window_dates(window: SequenceDataset | None) -> set[date]:
+    return {s.feature.date for seq in window.sequences for s in seq.samples} if window else set()
+
+
+def _print_window_evaluation(name: str, evaluation: WindowEvaluation, n_tickers: int) -> None:
+    print(f"[{name}] {evaluation.n_samples:,}표본 / {evaluation.n_dates}거래일 / {n_tickers}종목")
+    print(f"  mamba       : {_format_metrics(evaluation.model)}")
+    print(f"  0 예측      : {_format_metrics(evaluation.zero)}")
+    print(f"  persistence : {_format_metrics(evaluation.persistence)}")
+    print(
+        f"  예측 분포   : 평균={evaluation.prediction_mean:+.4%} 표준편차={evaluation.prediction_std:.4%} "
+        f"|예측|>={ML_AGREE_RETURN_THRESHOLD:.1%} 비율={evaluation.directional_share:.1%} "
+        f"양수 비율={evaluation.positive_share:.1%}"
+    )
+
+
+def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, split: SequenceDatasetSplit) -> None:
+    """학습 후 검증 리포트 — validation/test 구간의 **모든 (종목, 날짜)**를 채점한다(evaluation.py).
+    모델에는 종목의 전체 히스토리를 넣고 구간 안 시점만 채점한다(추론과 같은 조건). 비교 기준:
+    `0 예측`(예측력이 없으면 MSE로는 이게 최선 — mamba MSE가 이보다 낮아야 의미가 있음)과
+    `persistence`(내일 = 오늘). 예측 분포의 표준편차가 0에 가까우면 모델이 평균값만 내는 상태다."""
     feature_names = split.train.feature_names
-    print("\n===== 검증 리포트 =====")
-    sections = [("validation 전체", split.validation), ("test 전체", split.test)]
-    sections += [(f"test {region}", ds) for region, ds in split_by_region(split.test).items()]
-    for name, dataset in sections:
-        if dataset is None or not dataset.sequences:
-            print(f"[{name}] 종목 없음")
+    validation_dates, test_dates = _window_dates(split.validation), _window_dates(split.test)
+    sections = [("validation 전체", dataset, validation_dates), ("test 전체", dataset, test_dates)]
+    sections += [(f"test {region}", ds, test_dates) for region, ds in split_by_region(dataset).items()]
+
+    print("\n===== 검증 리포트 (구간 내 모든 시점) =====")
+    for name, section_dataset, window in sections:
+        if not section_dataset.sequences or not window:
+            print(f"[{name}] 표본 없음")
             continue
-        print(f"[{name}] ({len(dataset.sequences)}종목)")
-        print(f"  mamba    : {_format_metrics(evaluate(model, dataset, feature_names))}")
-        print(f"  baseline : {_format_metrics(persistence_baseline_metrics(dataset, feature_names))}")
-    print("=======================\n")
+        evaluation = evaluate_window(
+            model, section_dataset, feature_names, window, directional_threshold=ML_AGREE_RETURN_THRESHOLD
+        )
+        _print_window_evaluation(name, evaluation, len(section_dataset.sequences))
+    print("==========================================\n")
 
 
 if __name__ == "__main__":

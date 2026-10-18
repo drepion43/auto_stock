@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 import torch
 
+import auto_stock.ml_predictor.training as training_module
 from auto_stock.ml_predictor.dataset import chronological_split, train_val_test_split
-from auto_stock.ml_predictor.features import FEATURE_NAMES
 from auto_stock.ml_predictor.models import (
     FeatureVector,
     LabeledSample,
@@ -14,11 +14,11 @@ from auto_stock.ml_predictor.models import (
     TickerSequence,
 )
 from auto_stock.ml_predictor.training import (
-    split_by_region,
     RANDOM_STATE,
     MambaRegressor,
-    evaluate,
-    persistence_baseline_metrics,
+    epoch_order,
+    fit_feature_normalization,
+    prepare_training_batch,
     resolve_device,
     train,
 )
@@ -148,16 +148,15 @@ def test_train_is_silent_when_log_every_is_zero(synthetic_sequence_dataset, capl
 
 
 @pytest.mark.slow
-def test_evaluate_reports_mse_rmse_mae_r2(synthetic_sequence_dataset):
+def test_train_metadata_scores_every_step_of_the_test_window(synthetic_sequence_dataset):
+    # The synthetic test window holds a single ticker: last-step-only scoring had 1 sample -> nan.
+    # Scoring every step of the window yields real numbers.
     split = chronological_split(synthetic_sequence_dataset, test_ratio=0.2)
-    model = MambaRegressor(in_dim=len(split.train.feature_names), hidden_dim=4, n_layers=1)
 
-    metrics = evaluate(model, split.test, split.train.feature_names)
+    bundle = train(split, universe_size=2, epochs=1, hidden_dim=4, n_layers=1, device="cpu")
 
-    assert set(metrics.keys()) == {"mse", "rmse", "mae", "r2", "hit_rate"}
-    # The small test window holds a single ticker (-> nan by the <2 guard); use both tickers for the range check.
-    full_metrics = evaluate(model, synthetic_sequence_dataset, split.train.feature_names)
-    assert 0.0 <= full_metrics["hit_rate"] <= 1.0
+    assert bundle.metadata.test_mse >= 0.0
+    assert bundle.metadata.test_mae >= 0.0
 
 
 @pytest.mark.slow
@@ -191,67 +190,102 @@ def test_train_log_line_includes_val_loss_when_validation_given(synthetic_sequen
     assert any("val_loss=" in r.getMessage() for r in caplog.records)
 
 
-def _sequence(ticker: str, market: str, return_1d: float, label: float) -> TickerSequence:
-    values = {name: 0.0 for name in FEATURE_NAMES} | {"return_1d": return_1d}
-    feature = FeatureVector(ticker=ticker, market=market, date=date(2024, 1, 1), values=values)
-    return TickerSequence(ticker=ticker, market=market, samples=[LabeledSample(feature=feature, label=label)])
-
-
-def test_split_by_region_groups_domestic_and_us_tickers():
-    dataset = SequenceDataset(
-        sequences=[
-            _sequence("005930", "KOSPI", 0.01, 0.02),
-            _sequence("035720", "KOSDAQ", 0.01, 0.02),
-            _sequence("AAPL", "NASDAQ", 0.01, 0.02),
-            _sequence("JPM", "NYSE", 0.01, 0.02),
-        ],
-        feature_names=FEATURE_NAMES,
-    )
-
-    regions = split_by_region(dataset)
-
-    assert {seq.ticker for seq in regions["domestic"].sequences} == {"005930", "035720"}
-    assert {seq.ticker for seq in regions["us"].sequences} == {"AAPL", "JPM"}
-
-
-def test_persistence_baseline_hit_rate_counts_sign_agreement():
-    # return_1d is the baseline's prediction: 3 of 4 signs agree with the label.
-    dataset = SequenceDataset(
-        sequences=[
-            _sequence("A", "KOSPI", 0.01, 0.02),
-            _sequence("B", "KOSPI", -0.01, -0.03),
-            _sequence("C", "KOSPI", 0.02, 0.01),
-            _sequence("D", "KOSPI", 0.01, -0.01),
-        ],
-        feature_names=FEATURE_NAMES,
-    )
-
-    metrics = persistence_baseline_metrics(dataset, FEATURE_NAMES)
-
-    assert metrics["hit_rate"] == pytest.approx(0.75)
-
-
-def test_persistence_baseline_uses_return_1d_feature(synthetic_sequence_dataset):
-    # 전체 데이터셋(두 종목 다 포함, split 없이)에 대해 계산해 "표본이 2개 미만"
-    # 가드에 걸리지 않도록 한다 — chronological_split 적용 후의 작은 test 세트는
-    # 종목이 1개뿐이라 nan을 반환할 수 있다(그 자체가 의도된 방어 동작).
-    metrics = persistence_baseline_metrics(synthetic_sequence_dataset, synthetic_sequence_dataset.feature_names)
-
-    assert set(metrics.keys()) == {"mse", "rmse", "mae", "r2", "hit_rate"}
-    assert metrics["mse"] >= 0.0
-
-
-def test_persistence_baseline_returns_nan_when_fewer_than_two_sequences():
-    import auto_stock.ml_predictor.training as training_module
-    from auto_stock.ml_predictor.models import SequenceDataset
-
-    empty = SequenceDataset(sequences=[], feature_names=["return_1d"])
-    metrics = persistence_baseline_metrics(empty, empty.feature_names)
-    assert metrics["mse"] != metrics["mse"]  # nan != nan
-
-
 def test_training_module_never_uses_random_shuffle_split():
-    import auto_stock.ml_predictor.training as training_module
-
     assert "train_test_split" not in dir(training_module)
     assert "KFold" not in dir(training_module)
+
+
+# --- input normalization / label hygiene / training stability (2026-10-18) ---
+
+
+def _seq(ticker: str, market: str, rows: list[tuple[float, float]], labels: list[float]) -> TickerSequence:
+    start = date(2025, 1, 1)
+    samples = [
+        LabeledSample(
+            feature=FeatureVector(ticker=ticker, market=market, date=start + timedelta(days=i), values={"a": a, "b": b}),
+            label=label,
+        )
+        for i, ((a, b), label) in enumerate(zip(rows, labels))
+    ]
+    return TickerSequence(ticker=ticker, market=market, samples=samples)
+
+
+def test_fit_feature_normalization_uses_train_statistics_and_guards_constant_features():
+    dataset = SequenceDataset(
+        sequences=[_seq("A", "NASDAQ", [(1.0, 5.0), (3.0, 5.0)], [0.0, 0.0]), _seq("B", "NASDAQ", [(5.0, 5.0)], [0.0])],
+        feature_names=["a", "b"],
+    )
+
+    mean, std = fit_feature_normalization(dataset, ["a", "b"])
+
+    assert mean == pytest.approx([3.0, 5.0])
+    assert std[0] == pytest.approx((8 / 3) ** 0.5)
+    assert std[1] == 1.0  # constant feature: no division by zero
+
+
+def test_regressor_standardizes_and_clips_inputs_inside_forward():
+    torch.manual_seed(0)
+    normalized = MambaRegressor(in_dim=2, hidden_dim=4, n_layers=1)
+    normalized.set_normalization(mean=[1.0, 10.0], std=[2.0, 0.5], clip_sigma=5.0)
+    plain = MambaRegressor(in_dim=2, hidden_dim=4, n_layers=1)
+    plain.load_state_dict({k: v for k, v in normalized.state_dict().items() if not k.startswith("feature_")}, strict=False)
+    x = torch.tensor([[[3.0, 100.0], [1.0, 10.0]]])
+
+    expected_input = torch.clamp((x - torch.tensor([1.0, 10.0])) / torch.tensor([2.0, 0.5]), -5.0, 5.0)
+
+    assert torch.allclose(normalized(x), plain(expected_input), atol=1e-6)
+
+
+def test_legacy_state_dict_without_normalization_buffers_still_loads():
+    legacy = {k: v for k, v in MambaRegressor(in_dim=3, hidden_dim=4, n_layers=1).state_dict().items()
+              if not k.startswith("feature_")}
+    model = MambaRegressor(in_dim=3, hidden_dim=4, n_layers=1)
+
+    model.load_compatible_state_dict(legacy)
+
+    assert torch.equal(model.feature_mean, torch.zeros(3))
+    assert torch.equal(model.feature_std, torch.ones(3))
+    assert torch.isinf(model.feature_clip_sigma)
+
+
+def test_prepare_training_batch_clips_labels_and_masks_impossible_krx_moves():
+    batch = [
+        _seq("001465", "KOSPI", [(0.0, 0.0), (0.0, 0.0)], [-0.914, 0.01]),  # -91% is beyond KRX's ±30% limit
+        _seq("MRNA", "NASDAQ", [(0.0, 0.0), (0.0, 0.0)], [1.77, -0.05]),  # real, just extreme
+    ]
+
+    _, y, mask = prepare_training_batch(batch, ["a", "b"], torch.device("cpu"), label_clip=0.2)
+
+    assert mask.tolist() == [[0.0, 1.0], [1.0, 1.0]]
+    assert y[1].tolist() == pytest.approx([0.2, -0.05])
+    assert y[0, 1].item() == pytest.approx(0.01)
+
+
+def test_epoch_order_is_a_deterministic_permutation_that_changes_per_epoch():
+    first = epoch_order(20, epoch=1)
+
+    assert sorted(first) == list(range(20))
+    assert epoch_order(20, epoch=1) == first
+    assert epoch_order(20, epoch=2) != first
+
+
+@pytest.mark.slow
+def test_train_fits_normalization_into_the_saved_state_dict(synthetic_sequence_dataset):
+    split = chronological_split(synthetic_sequence_dataset, test_ratio=0.2)
+
+    bundle = train(split, universe_size=2, epochs=1, hidden_dim=4, n_layers=1, device="cpu")
+
+    assert not torch.equal(bundle.estimator["feature_std"], torch.ones_like(bundle.estimator["feature_std"]))
+    assert float(bundle.estimator["feature_clip_sigma"]) == pytest.approx(training_module.DEFAULT_FEATURE_CLIP_SIGMA)
+
+
+@pytest.mark.slow
+def test_train_clips_gradient_norm(synthetic_sequence_dataset, monkeypatch):
+    calls = []
+    real_clip = training_module.clip_grad_norm_
+    monkeypatch.setattr(training_module, "clip_grad_norm_", lambda params, max_norm: calls.append(max_norm) or real_clip(params, max_norm))
+    split = chronological_split(synthetic_sequence_dataset, test_ratio=0.2)
+
+    train(split, universe_size=2, epochs=1, hidden_dim=4, n_layers=1, device="cpu", grad_clip=0.5)
+
+    assert calls and all(max_norm == 0.5 for max_norm in calls)

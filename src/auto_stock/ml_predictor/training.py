@@ -12,10 +12,11 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from torch.nn.utils import clip_grad_norm_
 
 from auto_stock.data.market_routing import KRX_MARKETS
 from auto_stock.ml_predictor.dataset import collate_sequences
+from auto_stock.ml_predictor.evaluation import evaluate_window
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS
 from auto_stock.ml_predictor.mamba_block import Mamba, MambaConfig
 from auto_stock.ml_predictor.models import (
@@ -37,17 +38,25 @@ DEFAULT_LEARNING_RATE = 0.01
 DEFAULT_WEIGHT_DECAY = 1e-5
 DEFAULT_BATCH_SIZE = 32
 
-# "다음날 수익률 = 전일 수익률 그대로 유지(persistence)" 베이스라인 — regression용
-# 하한선 지표. MambaStock 원본엔 벤치마크 알고리즘(rf/dummy류)이 없어 이 지표를
-# 그 대체로 둔다(§12 실행 순서 "regression 베이스라인으로 교체").
-PERSISTENCE_FEATURE_NAME = "return_1d"
+# 2026-10-18 데이터 진단(docs/_review_parts/03_ml_predictor.md §11): 피처 스케일이 제각각
+# (수익률 std≈0.03 vs sales_yield std≈2.3·최대 41.7, pbr 최대 50)이고 레이블 꼬리가 두꺼워
+# (|r|>20%가 표본의 0.1%인데 MSE의 13.6%) 학습이 epoch ~50에서 반복적으로 발산했다.
+DEFAULT_FEATURE_CLIP_SIGMA = 5.0  # 표준화 후 ±5σ로 자른다
+DEFAULT_LABEL_CLIP = 0.2  # 학습 손실에서만 레이블을 ±20%로 자른다(평가는 원래 레이블)
+DEFAULT_GRAD_CLIP = 1.0  # gradient norm 상한
+KRX_PRICE_LIMIT = 0.3001  # 국내 일일 가격제한폭 ±30% — 넘는 레이블은 수정주가 미반영 등 데이터 오류
+_NORMALIZATION_BUFFERS = ("feature_mean", "feature_std", "feature_clip_sigma")
 
 
 class MambaRegressor(nn.Module):
-    """`nn.Linear(in_dim, hidden) -> Mamba -> nn.Linear(hidden, 1)` — MambaStock
-    `main.py::Net`과 동일한 구조. `Tanh()`는 두지 않는다(원본은 일별 % 변화량이
-    [-1,1] 근방이라 뒀지만, 이 프로젝트의 레이블은 그 가정이 없어 범위를 인위적으로
-    제한하지 않는다). 입력 (B, L, in_dim) -> 출력 (B, L) 시점별 예측 수익률."""
+    """`normalize -> nn.Linear(in_dim, hidden) -> Mamba -> nn.Linear(hidden, 1)` — MambaStock
+    `main.py::Net`과 같은 구조에 입력 표준화를 앞에 붙였다. `Tanh()`는 두지 않는다(원본은 일별 %
+    변화량이 [-1,1] 근방이라 뒀지만, 이 프로젝트의 레이블은 그 가정이 없다). 입력 (B, L, in_dim)
+    -> 출력 (B, L) 시점별 예측 수익률.
+
+    표준화 통계(`feature_mean`/`feature_std`/`feature_clip_sigma`)는 학습 때 train 구간으로 맞춘
+    **버퍼**라 state_dict에 함께 저장된다 — 학습·평가·추론이 별도 처리 없이 같은 변환을 쓴다.
+    기본값(평균 0, 표준편차 1, 자르기 없음)은 항등 변환이다."""
 
     def __init__(self, in_dim: int, hidden_dim: int = DEFAULT_HIDDEN_DIM, n_layers: int = DEFAULT_N_LAYERS):
         super().__init__()
@@ -55,16 +64,52 @@ class MambaRegressor(nn.Module):
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
 
+        self.register_buffer("feature_mean", torch.zeros(in_dim))
+        self.register_buffer("feature_std", torch.ones(in_dim))
+        self.register_buffer("feature_clip_sigma", torch.tensor(float("inf")))
         config = MambaConfig(d_model=hidden_dim, n_layers=n_layers)
         self.input_proj = nn.Linear(in_dim, hidden_dim)
         self.mamba = Mamba(config)
         self.output_proj = nn.Linear(hidden_dim, 1)
 
+    def set_normalization(self, mean: list[float], std: list[float], clip_sigma: float) -> None:
+        with torch.no_grad():
+            self.feature_mean.copy_(torch.tensor(mean, dtype=torch.float32))
+            self.feature_std.copy_(torch.tensor(std, dtype=torch.float32))
+            self.feature_clip_sigma.fill_(clip_sigma)
+
+    def load_compatible_state_dict(self, state_dict: dict) -> None:
+        """표준화 버퍼가 없는 예전(2026-10-18 이전) state_dict도 받는다 — 빠진 버퍼는 항등 변환
+        기본값으로 채우고, 그 외 키는 엄격하게 검사한다."""
+        defaults = {name: buffer for name, buffer in self.state_dict().items() if name in _NORMALIZATION_BUFFERS}
+        self.load_state_dict({**defaults, **state_dict})
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x : (B, L, in_dim) -> (B, L)
+        x = (x - self.feature_mean) / self.feature_std
+        x = torch.clamp(x, min=-self.feature_clip_sigma, max=self.feature_clip_sigma)
         h = self.input_proj(x)
         h = self.mamba(h)
         return self.output_proj(h).squeeze(-1)
+
+
+def fit_feature_normalization(dataset: SequenceDataset, feature_names: list[str]) -> tuple[list[float], list[float]]:
+    """train 구간 전체 시점의 피처별 평균·표준편차(모집단). 상수 피처는 표준편차 1로 둔다(0 나눗셈 방지)."""
+    values = torch.tensor(
+        [[s.feature.values[name] for name in feature_names] for seq in dataset.sequences for s in seq.samples],
+        dtype=torch.float64,
+    )
+    mean = values.mean(dim=0)
+    std = values.std(dim=0, unbiased=False)
+    std = torch.where(std < 1e-12, torch.ones_like(std), std)
+    return mean.tolist(), std.tolist()
+
+
+def epoch_order(n_sequences: int, epoch: int) -> list[int]:
+    """epoch마다 다른, 재현 가능한 종목 순서. 섞는 단위는 종목 시퀀스 전체라 시간 순서는 그대로다
+    (날짜를 섞는 게 아니므로 미래 정보 누출과 무관) — 같은 배치가 매 epoch 같은 시점에 반복되는 것만 막는다."""
+    generator = torch.Generator().manual_seed(RANDOM_STATE * 100_003 + epoch)
+    return torch.randperm(n_sequences, generator=generator).tolist()
 
 
 def _set_seed(seed: int) -> None:
@@ -108,13 +153,25 @@ def _batches(sequences: list, batch_size: int) -> list[list]:
     return [sequences[i : i + batch_size] for i in range(0, len(sequences), batch_size)]
 
 
-def _to_tensors(
-    batch: list, feature_names: list[str], device: torch.device
+def prepare_training_batch(
+    batch: list, feature_names: list[str], device: torch.device, label_clip: float | None
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """학습 손실용 (X, y, mask). 국내 종목에서 가격제한폭(±30%)을 넘는 레이블은 데이터 오류로 보고
+    mask에서 빼고(예: 001465 2024-04-16 −91%), 나머지 레이블은 ±`label_clip`으로 자른다 — 소수의
+    폭등·폭락이 MSE를 지배하지 않게. 평가(`evaluation.py`)는 이 처리 없이 원래 레이블을 쓴다."""
     X, y, mask = collate_sequences(batch, feature_names)
+    for row, seq in enumerate(batch):
+        if seq.market not in KRX_MARKETS:
+            continue
+        for step, sample in enumerate(seq.samples):
+            if abs(sample.label) > KRX_PRICE_LIMIT:
+                mask[row][step] = False
+    y_tensor = torch.tensor(y, dtype=torch.float32, device=device)
+    if label_clip is not None:
+        y_tensor = torch.clamp(y_tensor, -label_clip, label_clip)
     return (
         torch.tensor(X, dtype=torch.float32, device=device),
-        torch.tensor(y, dtype=torch.float32, device=device),
+        y_tensor,
         torch.tensor(mask, dtype=torch.float32, device=device),
     )
 
@@ -126,18 +183,25 @@ def _train_one_epoch(
     feature_names: list[str],
     batch_size: int,
     device: torch.device,
+    epoch: int,
+    label_clip: float | None,
+    grad_clip: float | None,
 ) -> float:
-    """1 epoch 학습 후 패딩 제외 타임스텝 가중평균 train loss를 반환한다. loss는 GPU에서
-    누적하고 epoch 끝에 한 번만 꺼낸다(배치마다 GPU 동기화하지 않도록)."""
+    """1 epoch 학습 후 패딩 제외 타임스텝 가중평균 train loss를 반환한다. 종목 순서는 epoch마다
+    섞고(`epoch_order`), gradient norm은 `grad_clip`으로 자른다. loss는 GPU에서 누적하고 epoch 끝에
+    한 번만 꺼낸다(배치마다 GPU 동기화하지 않도록)."""
     model.train()
+    shuffled = [sequences[i] for i in epoch_order(len(sequences), epoch)]
     weighted_loss_sum = torch.zeros((), device=device)
     valid_steps = torch.zeros((), device=device)
-    for batch in _batches(sequences, batch_size):
-        x_tensor, y_tensor, mask_tensor = _to_tensors(batch, feature_names, device)
+    for batch in _batches(shuffled, batch_size):
+        x_tensor, y_tensor, mask_tensor = prepare_training_batch(batch, feature_names, device, label_clip)
         loss = _masked_mse_loss(model(x_tensor), y_tensor, mask_tensor)
 
         optimizer.zero_grad()
         loss.backward()
+        if grad_clip is not None and grad_clip > 0:
+            clip_grad_norm_(model.parameters(), max_norm=grad_clip)
         optimizer.step()
 
         batch_valid = mask_tensor.sum()
@@ -147,16 +211,21 @@ def _train_one_epoch(
 
 
 def _masked_loss_on(
-    model: MambaRegressor, dataset: SequenceDataset, feature_names: list[str], batch_size: int, device: torch.device
+    model: MambaRegressor,
+    dataset: SequenceDataset,
+    feature_names: list[str],
+    batch_size: int,
+    device: torch.device,
+    label_clip: float | None,
 ) -> float:
-    """train loss와 같은 정의(패딩 제외 전체 타임스텝 masked MSE)로 계산한 loss — 학습
-    곡선에서 train/val을 같은 척도로 비교하기 위함. 가중치는 바꾸지 않는다."""
+    """train loss와 같은 정의(같은 레이블 자르기·마스킹)로 계산한 loss — 학습 곡선에서
+    train/val을 같은 척도로 비교하기 위함. 가중치는 바꾸지 않는다."""
     model.eval()
     weighted_loss_sum = torch.zeros((), device=device)
     valid_steps = torch.zeros((), device=device)
     with torch.no_grad():
         for batch in _batches(dataset.sequences, batch_size):
-            x_tensor, y_tensor, mask_tensor = _to_tensors(batch, feature_names, device)
+            x_tensor, y_tensor, mask_tensor = prepare_training_batch(batch, feature_names, device, label_clip)
             batch_valid = mask_tensor.sum()
             weighted_loss_sum += _masked_mse_loss(model(x_tensor), y_tensor, mask_tensor) * batch_valid
             valid_steps += batch_valid
@@ -174,6 +243,9 @@ def train(
     batch_size: int = DEFAULT_BATCH_SIZE,
     device: str | None = None,
     log_every: int = 0,
+    label_clip: float | None = DEFAULT_LABEL_CLIP,
+    grad_clip: float | None = DEFAULT_GRAD_CLIP,
+    feature_clip_sigma: float = DEFAULT_FEATURE_CLIP_SIGMA,
 ) -> ModelBundle:
     """통합(unified) 단일 모델 학습 — market/종목별로 모델을 나누지 않는다(사용자 결정).
     `split.train.sequences`를 종목 단위로 미니배치로 묶어 PyTorch epoch 루프를 돈다.
@@ -187,7 +259,11 @@ def train(
 
     feature_names = split.train.feature_names
     in_dim = len(feature_names)
-    model = MambaRegressor(in_dim=in_dim, hidden_dim=hidden_dim, n_layers=n_layers).to(torch_device)
+    model = MambaRegressor(in_dim=in_dim, hidden_dim=hidden_dim, n_layers=n_layers)
+    # Normalization statistics come from the train window only (no peeking at validation/test).
+    feature_mean, feature_std = fit_feature_normalization(split.train, feature_names)
+    model.set_normalization(feature_mean, feature_std, feature_clip_sigma)
+    model = model.to(torch_device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     validation = split.validation if split.validation is not None and split.validation.sequences else None
 
@@ -195,10 +271,13 @@ def train(
     train_start = time.perf_counter()
     for epoch in range(1, epochs + 1):
         epoch_start = time.perf_counter()
-        train_loss = _train_one_epoch(model, optimizer, split.train.sequences, feature_names, batch_size, torch_device)
+        train_loss = _train_one_epoch(
+            model, optimizer, split.train.sequences, feature_names, batch_size, torch_device,
+            epoch, label_clip, grad_clip,
+        )
         val_loss = (
             None if validation is None
-            else _masked_loss_on(model, validation, feature_names, batch_size, torch_device)
+            else _masked_loss_on(model, validation, feature_names, batch_size, torch_device, label_clip)
         )
         now = time.perf_counter()
         record = EpochRecord(
@@ -212,7 +291,8 @@ def train(
         if log_every > 0 and (epoch % log_every == 0 or epoch == epochs):
             _log_epoch(record, epochs, now - epoch_start)
 
-    metrics = evaluate(model, split.test, feature_names)
+    # Every step of the test window (not just each ticker's last day — see evaluation.py).
+    metrics = evaluate_window(model, split.test, feature_names).model
 
     train_dates = [s.feature.date for seq in split.train.sequences for s in seq.samples]
     test_dates = [s.feature.date for seq in split.test.sequences for s in seq.samples]
@@ -239,78 +319,3 @@ def train(
     # 추론은 CPU 전용 환경에서도 돌아야 하므로 GPU 학습이어도 CPU 텐서로 저장한다.
     cpu_state_dict = {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()}
     return ModelBundle(estimator=cpu_state_dict, metadata=metadata, history=tuple(history))
-
-
-def _nan_metrics() -> dict[str, float]:
-    return {key: float("nan") for key in ("mse", "rmse", "mae", "r2", "hit_rate")}
-
-
-def _hit_rate(actuals: list[float], predictions: list[float]) -> float:
-    """방향 적중률 — 예측 수익률과 실제 수익률의 부호가 같은 비율. 실제 수익률이 정확히
-    0인 표본은 방향이 없으므로 분모에서 뺀다(예측 0은 어느 방향도 맞히지 못한 것으로 침)."""
-    pairs = [(a, p) for a, p in zip(actuals, predictions) if a != 0]
-    if not pairs:
-        return float("nan")
-    return sum(1 for a, p in pairs if (a > 0) == (p > 0) and p != 0) / len(pairs)
-
-
-def _regression_metrics(actuals: list[float], predictions: list[float]) -> dict[str, float]:
-    if len(actuals) < 2:
-        return _nan_metrics()
-    mse = mean_squared_error(actuals, predictions)
-    return {
-        "mse": float(mse),
-        "rmse": float(mse**0.5),
-        "mae": float(mean_absolute_error(actuals, predictions)),
-        "r2": float(r2_score(actuals, predictions)),
-        "hit_rate": _hit_rate(actuals, predictions),
-    }
-
-
-def split_by_region(dataset: SequenceDataset) -> dict[str, SequenceDataset]:
-    """시장별 성능 비교용 — 국내(KOSPI/KOSDAQ)와 미국(NASDAQ/NYSE)으로 종목 시퀀스를 나눈다."""
-    domestic = [seq for seq in dataset.sequences if seq.market in KRX_MARKETS]
-    us = [seq for seq in dataset.sequences if seq.market not in KRX_MARKETS]
-    return {
-        "domestic": SequenceDataset(sequences=domestic, feature_names=dataset.feature_names),
-        "us": SequenceDataset(sequences=us, feature_names=dataset.feature_names),
-    }
-
-
-def evaluate(model: MambaRegressor, dataset: SequenceDataset, feature_names: list[str]) -> dict[str, float]:
-    """시퀀스별로 마지막 시점의 예측만 평가에 쓴다 — `predict()`(추론 경로)가 매 호출마다
-    "그 시점까지의 전체 과거"를 받아 마지막 예측만 꺼내는 것과 동일한 평가 조건을 만들기
-    위함(패딩된 중간 시점을 평가에 섞지 않음)."""
-    if not dataset.sequences:
-        return _nan_metrics()
-
-    model.eval()
-    model_device = next(model.parameters()).device
-    predictions: list[float] = []
-    actuals: list[float] = []
-    with torch.no_grad():
-        for seq in dataset.sequences:
-            rows = [[s.feature.values[name] for name in feature_names] for s in seq.samples]
-            x = torch.tensor([rows], dtype=torch.float32, device=model_device)
-            predicted = model(x)[0]
-            predictions.append(float(predicted[-1]))
-            actuals.append(seq.samples[-1].label)
-
-    return _regression_metrics(actuals, predictions)
-
-
-def persistence_baseline_metrics(dataset: SequenceDataset, feature_names: list[str]) -> dict[str, float]:
-    """"다음날 수익률 = 어제의 1일 수익률(return_1d) 그대로" 베이스라인. 모델이 이 단순
-    규칙보다 나은지 가늠하는 하한선 — MambaStock 원본엔 없는 비교 지표지만, 기존
-    REPORT_ALGORITHMS(rf/dummy)가 하던 "하한선 리포트" 역할을 regression에서 대신한다."""
-    if PERSISTENCE_FEATURE_NAME not in feature_names:
-        return _nan_metrics()
-
-    predictions: list[float] = []
-    actuals: list[float] = []
-    for seq in dataset.sequences:
-        sample = seq.samples[-1]
-        predictions.append(sample.feature.values[PERSISTENCE_FEATURE_NAME])
-        actuals.append(sample.label)
-
-    return _regression_metrics(actuals, predictions)
