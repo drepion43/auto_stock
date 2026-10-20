@@ -5,7 +5,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from auto_stock.ml_predictor.evaluation import evaluate_window, regression_metrics, split_by_region
+from auto_stock.ml_predictor.evaluation import daily_rank_ic, evaluate_window, regression_metrics, split_by_region
 from auto_stock.ml_predictor.models import FeatureVector, LabeledSample, SequenceDataset, TickerSequence
 
 FEATURES = ["return_1d"]
@@ -130,6 +130,63 @@ def test_regression_metrics_hit_rate_counts_sign_agreement():
 
     assert metrics["hit_rate"] == pytest.approx(0.75)
     assert set(metrics) == {"mse", "rmse", "mae", "r2", "hit_rate"}
+
+
+class ReturnEchoModel(nn.Module):
+    """Predicts today's return_1d — ranks tickers exactly like the persistence baseline."""
+
+    def __init__(self):
+        super().__init__()
+        self.anchor = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x[..., 0] + self.anchor * 0
+
+
+def _cross_section(n_tickers: int, n_days: int, label_sign: float) -> SequenceDataset:
+    """Ticker i has return_1d = i/100 every day; next-day label = label_sign * that (perfectly (anti-)ranked)."""
+    return SequenceDataset(
+        sequences=[
+            _sequence(f"T{i}", "NASDAQ", [i / 100] * n_days, [label_sign * i / 100] * n_days)
+            for i in range(1, n_tickers + 1)
+        ],
+        feature_names=FEATURES,
+    )
+
+
+def test_daily_rank_ic_is_one_for_a_perfect_ranking():
+    summary = daily_rank_ic([[0.1, 0.2, 0.3, 0.4, 0.5]] * 3, [[1.0, 2.0, 3.0, 4.0, 5.0]] * 3, min_tickers=5)
+
+    assert summary.n_days == 3
+    assert summary.mean_ic == pytest.approx(1.0)
+    assert summary.positive_day_share == pytest.approx(1.0)
+    # top 20% (1 ticker, label 5) minus bottom 20% (1 ticker, label 1)
+    assert summary.mean_top_bottom_spread == pytest.approx(4.0)
+
+
+def test_daily_rank_ic_skips_days_with_too_few_tickers_or_constant_predictions():
+    summary = daily_rank_ic([[0.1, 0.2], [0.0, 0.0, 0.0, 0.0, 0.0]], [[1.0, 2.0], [1.0, 2.0, 3.0, 4.0, 5.0]], min_tickers=5)
+
+    assert summary.n_days == 0
+    assert math.isnan(summary.mean_ic)
+
+
+def test_evaluate_window_reports_cross_sectional_ic_for_model_and_persistence():
+    dataset = _cross_section(n_tickers=10, n_days=4, label_sign=-1.0)  # tomorrow reverses today's ranking
+
+    result = evaluate_window(ReturnEchoModel(), dataset, FEATURES, min_ic_tickers=10)
+
+    assert result.model_ic.n_days == 4
+    assert result.model_ic.mean_ic == pytest.approx(-1.0)
+    assert result.persistence_ic.mean_ic == pytest.approx(-1.0)
+    assert result.model_ic.mean_top_bottom_spread < 0
+
+
+def test_constant_model_has_no_ranking_ic(two_tickers):
+    result = evaluate_window(ConstantModel(0.01), _cross_section(10, 3, 1.0), FEATURES, min_ic_tickers=10)
+
+    assert result.model_ic.n_days == 0
+    assert result.persistence_ic.mean_ic == pytest.approx(1.0)
 
 
 def test_split_by_region_groups_domestic_and_us_tickers(two_tickers):

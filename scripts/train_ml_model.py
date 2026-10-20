@@ -30,7 +30,8 @@ validation/test(국내·미국별) 구간의 **모든 (종목, 날짜)**를 채�
 학습 곡선 `unified_h1_mamba.history.png`와 `unified_h1_mamba.history.csv`를 저장한다.
 
 `ML_TRAIN_EVAL_ONLY=1`이면 학습하지 않고 저장된 `unified_h1_mamba.pt`를 같은 분할로 다시 평가만 한다
-(모델·학습 곡선 파일은 바꾸지 않음).
+(모델·학습 곡선 파일은 바꾸지 않음). `ML_TRAIN_MODEL_DIR=models/ml_predictor/archive/<이름>`을 함께 주면
+보관한 모델을 평가한다. 리포트에는 날짜별 종목 간 순위 상관(IC)과 예측 상위/하위 20% 수익률 차이도 나온다.
 
 **데이터 수집을 미리 끝내두고 학습만 나중에 하려면**: `scripts/collect_ml_dataset.py`를 먼저
 실행해 `data/ml_training_dataset.pkl`(기본 경로)을 만들어두면, 이 스크립트는 그 파일이 있으면
@@ -56,7 +57,7 @@ from auto_stock.ml_predictor.collection import (
     universe_for,
 )
 from auto_stock.ml_predictor.dataset import build_sequence_dataset, train_val_test_split
-from auto_stock.ml_predictor.evaluation import WindowEvaluation, evaluate_window, split_by_region
+from auto_stock.ml_predictor.evaluation import IcSummary, WindowEvaluation, evaluate_window, split_by_region
 from auto_stock.ml_predictor.models import SequenceDataset, SequenceDatasetSplit
 from auto_stock.ml_predictor.predictor import ML_AGREE_RETURN_THRESHOLD, build_model
 from auto_stock.ml_predictor.reporting import best_val_epoch, plot_training_history, save_history_csv
@@ -91,6 +92,8 @@ DATASET_PATH = Path(os.environ.get("ML_TRAIN_DATASET_PATH", DEFAULT_DATASET_PATH
 FORCE_COLLECT = os.environ.get("ML_TRAIN_FORCE_COLLECT", "").strip() == "1"
 # 학습 없이 저장된 모델(unified_h1_mamba.pt)을 같은 분할로 다시 평가만 한다(모델 파일은 건드리지 않음).
 EVAL_ONLY = os.environ.get("ML_TRAIN_EVAL_ONLY", "").strip() == "1"
+# EVAL_ONLY에서 평가할 모델 폴더(기본 models/ml_predictor). 보관 모델 비교용: models/ml_predictor/archive/<이름>
+EVAL_MODEL_DIR = os.environ.get("ML_TRAIN_MODEL_DIR")
 
 
 def _collect_dataset() -> SequenceDataset:
@@ -142,7 +145,9 @@ def main() -> None:
     _print_window("테스트", split.test)
 
     if EVAL_ONLY:
-        model = build_model(load_model()).to(device)
+        bundle = load_model(EVAL_MODEL_DIR) if EVAL_MODEL_DIR else load_model()
+        print(f"평가할 모델: {EVAL_MODEL_DIR or 'models/ml_predictor'} (학습 {bundle.metadata.trained_at})")
+        model = build_model(bundle).to(device)
         _print_evaluation_report(model, dataset, split)
         return
 
@@ -205,6 +210,15 @@ def _print_window_evaluation(name: str, evaluation: WindowEvaluation, n_tickers:
         f"  예측 분포   : 평균={evaluation.prediction_mean:+.4%} 표준편차={evaluation.prediction_std:.4%} "
         f"|예측|>={ML_AGREE_RETURN_THRESHOLD:.1%} 비율={evaluation.directional_share:.1%} "
         f"양수 비율={evaluation.positive_share:.1%}"
+    )
+    print(f"  순위IC mamba      : {_format_ic(evaluation.model_ic)}")
+    print(f"  순위IC persistence: {_format_ic(evaluation.persistence_ic)}")
+
+
+def _format_ic(ic: IcSummary) -> str:
+    return (
+        f"평균IC={ic.mean_ic:+.4f} t={ic.ic_t_stat:+.2f} IC>0인날={ic.positive_day_share:.1%} "
+        f"상위20%-하위20%={ic.mean_top_bottom_spread:+.3%}/일 ({ic.n_days}일)"
     )
 
 

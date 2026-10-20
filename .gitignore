@@ -10,6 +10,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+models/*
+data/*
+
 # local data cache / secrets
 data/*.duckdb
 data/*.duckdb.wal
