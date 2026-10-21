@@ -85,3 +85,13 @@ def test_get_universe_nyse_delegates_to_fdr_listing(mocker):
 def test_get_universe_raises_on_unknown_market():
     with pytest.raises(ValueError, match="market"):
         service.get_universe("KRX")
+
+
+def test_refresh_recent_fetches_and_caches_each_ticker(mocker):
+    cache = mocker.Mock()
+    fetch = mocker.patch("auto_stock.data.service.fdr_source.fetch_ohlcv", return_value=[_record()])
+
+    service.refresh_recent(cache, ["005930", "000660"], market="KOSPI", lookback_days=3)
+
+    assert fetch.call_count == 2
+    assert cache.put.call_count == 2

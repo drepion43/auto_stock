@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import FinanceDataReader as fdr
 
@@ -27,3 +27,12 @@ def get_universe(market: str, as_of: date | None = None) -> list[str]:
         listing = fdr.StockListing(market)
         return listing["Symbol"].tolist()
     raise ValueError(f"unsupported market: {market!r}")
+
+
+def refresh_recent(cache: OHLCVCache, tickers: list[str], market: str, lookback_days: int = 5) -> None:
+    """폴링 잡이 호출하는 근접-실시간 갱신 함수."""
+    end = date.today()
+    start = end - timedelta(days=lookback_days)
+    for ticker in tickers:
+        records = fdr_source.fetch_ohlcv(ticker, start, end, market)
+        cache.put(records)

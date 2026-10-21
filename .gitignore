@@ -18,6 +18,8 @@ data/*.duckdb
 data/*.duckdb.wal
 # main-agent eval results (full conversation text) — local only
 data/eval/
+# deepeval local state dir (created in cwd on import; never log in / upload — llm-answer-evaluation-plan.md §9)
+.deepeval/
 .env
 
 # ML model artifacts (metadata.json sidecars ARE committed — see docs/design/ml-predictor-plan.md)
