@@ -26,16 +26,11 @@ from pathlib import Path
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from auto_stock.data.cache import OHLCVCache
-from auto_stock.ml_predictor.collection import (
-    DEFAULT_DATASET_PATH,
-    collect_universe_records,
-    save_dataset,
-    universe_for,
-)
+from auto_stock.ml_predictor.collection import DEFAULT_DATASET_PATH, collect_training_records, save_dataset
 from auto_stock.ml_predictor.dataset import build_sequence_dataset
 from auto_stock.ml_predictor.run_logging import configure_run_logging
 
-UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]  # bucket_markets로 원자 거래소 전체 합집합
+# 원자 시장(KOSPI/KOSDAQ/NASDAQ/NYSE)마다 이 개수 — 국내는 수집 시작일 기준 시가총액 상위 보통주(universe.py).
 UNIVERSE_SIZE = int(os.environ.get("ML_TRAIN_UNIVERSE_SIZE", 200))
 LOOKBACK_YEARS = int(os.environ.get("ML_TRAIN_LOOKBACK_YEARS", 5))
 DATASET_PATH = Path(os.environ.get("ML_TRAIN_DATASET_PATH", DEFAULT_DATASET_PATH))
@@ -51,17 +46,10 @@ def main() -> None:
     end = date.today()
     start = end - timedelta(days=365 * LOOKBACK_YEARS)
 
-    all_records: list[list] = []
-    all_fundamentals: list = []
     # Log lines go through tqdm.write on screen so they don't break the live progress bar
     # (the file handler is untouched and gets every line).
     with logging_redirect_tqdm():
-        for market in UNIVERSE_MARKETS:
-            tickers = universe_for(market)[:UNIVERSE_SIZE]
-            logger.info("[%s] 유니버스: %d종목, 기간: %s ~ %s", market, len(tickers), start, end)
-            records, fundamentals = collect_universe_records(cache, tickers, start, end, market)
-            all_records.extend(records)
-            all_fundamentals.extend(fundamentals)
+        all_records, all_fundamentals, _universes = collect_training_records(cache, start, end, UNIVERSE_SIZE)
 
     dataset = build_sequence_dataset(all_records, all_fundamentals)
     if not dataset.sequences:

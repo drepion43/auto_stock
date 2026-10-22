@@ -9,6 +9,7 @@
 import logging
 import pickle
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -16,14 +17,16 @@ from tqdm import tqdm
 
 from auto_stock.data.cache import OHLCVCache
 from auto_stock.data.market_routing import KRX_MARKETS
-from auto_stock.data.service import get_ohlcv, get_universe
+from auto_stock.data.service import get_ohlcv
 from auto_stock.data.sources.pykrx_source import resolve_market
 from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import SequenceDataset
-from auto_stock.orchestrator.market_buckets import bucket_markets
+from auto_stock.ml_predictor.universe import select_universe
 
 logger = logging.getLogger(__name__)
 
+# 원자 시장마다 따로 고른다 — 합성 "KRX"를 한 리스트로 잘라 KOSDAQ이 빠졌던 문제(universe.py 참고).
+TRAINING_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
 DEFAULT_DATASET_PATH = Path("data/ml_training_dataset.pkl")
 PROGRESS_LOG_EVERY = 10  # tickers between progress log lines (the tqdm bar stays per-ticker on screen)
 
@@ -39,20 +42,26 @@ def format_duration(seconds: float) -> str:
     return f"{minutes // 60}시간{minutes % 60}분"
 
 
-def universe_for(market: str) -> list[str]:
-    """`market`이 합성 "KRX"면 `bucket_markets`로 KOSPI+KOSDAQ을 각각 조회해 중복
-    없이 합친다(처음 등장한 순서 보존). 원자 market이면 그대로 `get_universe`."""
-    atomic_markets = bucket_markets(market)
-    if len(atomic_markets) == 1 and atomic_markets[0] == market:
-        return get_universe(market)
-    tickers: list[str] = []
-    seen: set[str] = set()
-    for atomic_market in atomic_markets:
-        for ticker in get_universe(atomic_market):
-            if ticker not in seen:
-                seen.add(ticker)
-                tickers.append(ticker)
-    return tickers
+def collect_training_records(
+    cache: OHLCVCache,
+    start: date,
+    end: date,
+    size: int,
+    select: Callable[[str, date, int], list[str]] = select_universe,
+) -> tuple[list[list], list, dict[str, list[str]]]:
+    """원자 시장마다 학습 구간 시작일(`start`) 기준으로 `size`개를 골라(universe.py) OHLCV·펀더멘털을
+    모은다 — 학습 스크립트와 수집 스크립트가 공유한다. 셋째 반환값은 시장별 선정 종목(기록용)."""
+    all_records: list[list] = []
+    all_fundamentals: list = []
+    universes: dict[str, list[str]] = {}
+    for market in TRAINING_MARKETS:
+        tickers = select(market, start, size)
+        universes[market] = tickers
+        logger.info("[%s] 유니버스 %d종목(%s 시점 기준), 수집 기간 %s ~ %s", market, len(tickers), start, start, end)
+        records, fundamentals = collect_universe_records(cache, tickers, start, end, market)
+        all_records.extend(records)
+        all_fundamentals.extend(fundamentals)
+    return all_records, all_fundamentals, universes
 
 
 def atomic_market_for(ticker: str, market: str) -> str:

@@ -48,6 +48,30 @@ def get_ticker_list(as_of: date, market: str = "ALL") -> list[str]:
     return stock.get_market_ticker_list(as_of.strftime("%Y%m%d"), market=market)
 
 
+def get_market_cap_table(as_of: date, market: str, max_lookback_days: int = 10) -> dict[str, dict]:
+    """`as_of` 시점 한 시장(KOSPI/KOSDAQ) 전 종목의 시가총액·거래대금 — 과거 시점 기준 유니버스
+    선정용(ml_predictor/universe.py). 휴장일이면 하루씩 거슬러 올라가 첫 거래일 값을 쓴다
+    (`max_lookback_days`일 안에 없으면 빈 dict — 호출부가 실패로 처리한다).
+
+    휴장일 판정: pykrx는 휴장일에 빈 표가 아니라 **전 종목 시가총액·거래대금이 0인 표**를 돌려준다
+    (2026-10-22 실측: 2021-10-23(토) KOSPI 939행 전부 0). 빈 표뿐 아니라 시가총액이 양수인 종목이
+    하나도 없는 표도 휴장일로 본다."""
+    load_dotenv()
+    ensure_krx_session()
+    for back in range(max_lookback_days):
+        day = as_of - timedelta(days=back)
+        df = stock.get_market_cap(day.strftime("%Y%m%d"), market=market)
+        if df.empty:
+            continue
+        table = {
+            str(ticker): {"market_cap": int(row["시가총액"]), "trading_value": int(row["거래대금"])}
+            for ticker, row in df.iterrows()
+        }
+        if any(row["market_cap"] > 0 for row in table.values()):
+            return table
+    return {}
+
+
 def get_market_cap(ticker: str, as_of: date) -> int | None:
     """특정 종목의 특정일자 시가총액. 데이터가 없으면 None."""
     detail = get_market_cap_detail(ticker, as_of)

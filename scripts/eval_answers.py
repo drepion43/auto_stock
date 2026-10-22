@@ -16,6 +16,7 @@ Run from the project root (WSL venv 예: .venv/bin/python):
 """
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -27,9 +28,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.messages import AIMessage
 
-from auto_stock.evaluation.answer_capture import DEFAULT_CONTEXT_LIMIT, CapturedTurn, ToolCallSink
+from auto_stock.evaluation.answer_capture import DEFAULT_CONTEXT_LIMIT, CapturedTurn, ToolCallSink, main_visible
 from auto_stock.evaluation.budget import BudgetExceeded, BudgetLimits, CostLedger
 from auto_stock.evaluation.faults import describe, fault_patchers, injection_patchers, new_marker
 from auto_stock.evaluation.golden import ALL_CASES, ALL_METRICS, GoldenCase, cases_by_id
@@ -38,7 +40,13 @@ from auto_stock.evaluation.mutations import MUTATION_KINDS
 from auto_stock.evaluation.numeric_grounding import cross_turn_conflicts
 from auto_stock.evaluation.pricing import cost_usd, price_for
 from auto_stock.evaluation.replay import FixtureRecorder, ReplayStore, replay_patchers
-from auto_stock.evaluation.report import compare_to_baseline, mutation_detection_rates, summarize, summary_lines
+from auto_stock.evaluation.report import (
+    compare_to_baseline,
+    mutation_detection_rates,
+    summarize,
+    summary_lines,
+    turn_status,
+)
 from auto_stock.evaluation.scoring import JUDGE_BUDGET_SKIP, MutationDetection, TurnScore, score_mutation, score_turn
 from auto_stock.evaluation.tool_patching import applied
 
@@ -146,6 +154,15 @@ def _charge_generation(state: dict, new_messages: Sequence, main_calls: int, sub
     return input_tokens, output_tokens
 
 
+def measured_usage(by_model: dict) -> dict:
+    """`UsageMetadataCallbackHandler.usage_metadata`(모델별 누적) → 입출력 토큰 합."""
+    totals = {"input_tokens": 0, "output_tokens": 0}
+    for usage in by_model.values():
+        for key in totals:
+            totals[key] += int(usage.get(key) or 0)
+    return totals
+
+
 def run_turn(state: dict, case: GoldenCase, turn_index: int, repeat: int, history: tuple, marker: str | None) -> CapturedTurn:
     session = state["session"]
     if state["cap"].exhausted(reserve=MAX_LLM_CALLS_PER_QUERY + 5):
@@ -161,12 +178,16 @@ def run_turn(state: dict, case: GoldenCase, turn_index: int, repeat: int, histor
 
     question = case.turns[turn_index].question
     before, calls_before, started = len(session.messages), session.model_calls, time.perf_counter()
-    answer = run_turn_deep(session, context, question, on_event=on_event)
+    # 실측 토큰(메인 + 서브에이전트 모든 모델 호출) — 비용 상한 장부는 보수적 추정을 그대로 쓰고, 이건 모드 비교용
+    # (docs/design/stock-analyst-subagent-migration.md §8: tool vs subagent 비용 +20% 기준).
+    with get_usage_metadata_callback() as usage_cb:
+        answer = run_turn_deep(session, context, question, on_event=on_event)
     main_calls, sub_calls = session.model_calls - calls_before, context.budget.llm_calls_made
     new_messages = session.messages[before:] if len(session.messages) >= before else session.messages[-1:]
     input_tokens, output_tokens = _charge_generation(state, new_messages, main_calls, sub_calls)
     usage = {"main_calls": main_calls, "sub_llm_calls": sub_calls, "input_tokens": input_tokens,
-             "output_tokens": output_tokens, "latency_s": round(time.perf_counter() - started, 2)}
+             "output_tokens": output_tokens, "latency_s": round(time.perf_counter() - started, 2),
+             "measured": measured_usage(usage_cb.usage_metadata)}
     return CapturedTurn(
         case_id=f"{case.query_id}#t{turn_index}#r{repeat}", query_id=case.query_id, turn_index=turn_index, repeat=repeat,
         question=question, answer=answer, tool_calls=sink.records, history_tool_calls=history,
@@ -251,9 +272,36 @@ def reference_date(args: argparse.Namespace) -> str:
     return date.today().isoformat()
 
 
-def load_answers(path: Path) -> list[CapturedTurn]:
+def load_answers(path: Path) -> tuple[list[CapturedTurn], dict]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return [CapturedTurn.from_dict(item) for item in payload["cases"]]
+    return [CapturedTurn.from_dict(item) for item in payload["cases"]], payload.get("meta", {})
+
+
+def fixture_sha256(path: Path) -> str:
+    """재생 픽스처의 내용 해시 — 기준선 비교는 같은 해시끼리만 유효하다(report.comparability_problem)."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def expected_counts(cases: Sequence[GoldenCase], repeats: int) -> dict[str, list[int]]:
+    """질의별 (턴 수, 반복 수) — 생성 단계에서 빠진 회차·턴을 pass^k에서 판정 불가로 세기 위해 남긴다."""
+    return {case.query_id: [len(case.turns), repeats] for case in cases}
+
+
+def build_meta(args: argparse.Namespace, cases: Sequence[GoldenCase], metrics: frozenset[str], agent_model: str) -> dict:
+    """재채점(--answers)은 생성 실행의 재생 정보·기대 회차를 이어받는다 — 그래야 기준선 비교 자격이 유지된다."""
+    meta = {
+        "run_id": f"{datetime.now():%Y%m%d_%H%M%S}", "git_commit": git_commit(), "agent_model": agent_model,
+        "judge_model": args.judge_model, "loop": "deep", "metrics": sorted(metrics),
+        "replay_fixture": str(args.replay) if args.replay else None,
+        "replay_fixture_sha256": fixture_sha256(args.replay) if args.replay else None,
+        "expected": expected_counts(cases, args.repeats),
+        "reference_date": reference_date(args),
+    }
+    if args.answers:
+        source = json.loads(Path(args.answers).read_text(encoding="utf-8")).get("meta", {})
+        meta.update({key: source.get(key) for key in ("replay_fixture", "replay_fixture_sha256", "expected")})
+        meta["rescored_from"] = str(args.answers)
+    return meta
 
 
 def add_consistency(scores: list[TurnScore], captured: Sequence[CapturedTurn]) -> list[TurnScore]:
@@ -264,7 +312,7 @@ def add_consistency(scores: list[TurnScore], captured: Sequence[CapturedTurn]) -
     updated = list(scores)
     for indexes in conversations.values():
         if len(indexes) > 1:
-            result = cross_turn_conflicts([(captured[i].answer, captured[i].tool_calls) for i in indexes])
+            result = cross_turn_conflicts([(captured[i].answer, main_visible(captured[i].tool_calls)) for i in indexes])
             updated[indexes[-1]] = updated[indexes[-1]].with_result(result)
     return updated
 
@@ -286,20 +334,29 @@ def score_all(
 def run_mutations(
     captured: Sequence[CapturedTurn], scores: Sequence[TurnScore], judge, limit: int, today: date
 ) -> list[MutationDetection]:
-    """정상으로 채점된 턴만 골라(실패 주입·폴백 제외) 변이를 만든다 — 원래 답이 이미 실패면 탐지 여부를 알 수 없다.
-    채점 예산이 바닥난 뒤의 변이는 `skipped`로 남아 탐지율에서 빠진다(scoring.score_mutation)."""
+    """확정 통과로 채점된 턴만 골라(실패 주입·폴백·판정 불가 제외) 변이를 만든다 — 원래 답이 실패이거나
+    판정 불가면 변이를 잡았는지 알 수 없다. 채점 예산이 바닥난 뒤의 변이는 `skipped`로 탐지율에서 빠진다."""
     by_id = cases_by_id()
     normal = [
         turn
         for turn, score in zip(captured, scores, strict=True)
-        if turn.injected_fault is None and not turn.fallback and all(r.passed is not False for r in score.results)
+        if turn.injected_fault is None and not turn.fallback and turn_status(score) == "pass"
     ][:limit]
     return [score_mutation(turn, by_id[turn.query_id], kind, judge, today) for turn in normal for kind in MUTATION_KINDS]
 
 
-def load_scores(path: Path) -> list[TurnScore]:
+def load_scores(path: Path) -> tuple[list[TurnScore], dict]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return [TurnScore.from_dict(item) for item in payload["turns"]]
+    return [TurnScore.from_dict(item) for item in payload["turns"]], payload.get("meta", {})
+
+
+def save_baseline(path: Path, meta: dict, turns: list[dict]) -> bool:
+    """재생 실행만 기준선이 될 수 있다 — 라이브 실행을 기준선으로 두면 이후 어떤 비교도 유효하지 않다."""
+    if not meta.get("replay_fixture_sha256"):
+        print("error: baseline not saved — only --replay runs (or --answers from a replay run) can be baselines", flush=True)
+        return False
+    write_json(path, {"meta": meta, "turns": turns})
+    return True
 
 
 def _dry_run(cases: Sequence[GoldenCase], args: argparse.Namespace, metrics: frozenset[str], agent_model: str, ledger: CostLedger) -> None:
@@ -325,24 +382,25 @@ def main() -> None:
         _dry_run(cases, args, metrics, agent_model, ledger)
 
     check_tracing_allowed()
-    run_id = f"{datetime.now():%Y%m%d_%H%M%S}"
-    meta = {"run_id": run_id, "git_commit": git_commit(), "agent_model": agent_model, "judge_model": args.judge_model,
-            "loop": "deep", "metrics": sorted(metrics), "replay_fixture": str(args.replay) if args.replay else None,
-            "reference_date": reference_date(args)}
+    meta = build_meta(args, cases, metrics, agent_model)
     today = date.fromisoformat(meta["reference_date"])
-    captured = load_answers(args.answers) if args.answers else generate(args, cases, ledger, meta)
+    captured = load_answers(args.answers)[0] if args.answers else generate(args, cases, ledger, meta)
     judge = BudgetedOpenAIJudge(ledger, args.judge_model) if metrics & JUDGED_METRICS else None
     scores = score_all(captured, judge, metrics, args.context_limit, today)
     mutations = run_mutations(captured, scores, judge, args.mutation_limit, today) if args.mutations else []
-    summary, rates = summarize(scores), mutation_detection_rates(mutations)
-    comparison = compare_to_baseline(scores, load_scores(args.baseline)) if args.baseline else None
+    expected = {qid: tuple(counts) for qid, counts in (meta.get("expected") or {}).items()}
+    summary, rates = summarize(scores, expected), mutation_detection_rates(mutations)
+    comparison = None
+    if args.baseline:
+        baseline_turns, baseline_meta = load_scores(args.baseline)
+        comparison = compare_to_baseline(scores, baseline_turns, meta, baseline_meta)
     payload = {"meta": meta, "cost": ledger.snapshot(), "summary": summary, "comparison": comparison,
                "mutations": {"rates": rates, "rows": [_row(m) for m in mutations]},
                "turns": [score.to_dict() for score in scores]}
-    out = OUT_DIR / f"scores_{run_id}.json"
+    out = OUT_DIR / f"scores_{meta['run_id']}.json"
     write_json(out, payload)
     if args.save_baseline:
-        write_json(args.save_baseline, {"meta": meta, "turns": payload["turns"]})
+        save_baseline(args.save_baseline, meta, payload["turns"])
     print("\n".join(["", "=== answer evaluation ===", *summary_lines(summary, payload["cost"], comparison, rates), f"results: {out}"]))
 
 

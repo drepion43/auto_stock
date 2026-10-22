@@ -67,7 +67,7 @@ bash scripts/train_full.sh                        (전체 학습 + 로그 파일
 필수 환경변수 없음(국내 펀더멘털의 매출액은 `DART_API_KEY`가 있으면 채워지고 없으면 그 필드만 빠짐).
 선택 환경변수: `ML_TRAIN_UNIVERSE_SIZE`(시장별, 기본 200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32), `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto|cuda|cpu, 기본 auto), `ML_TRAIN_LOG_EVERY`(1, 0이면 epoch 로그 끔), `ML_TRAIN_VAL_RATIO`(0.1), **신규** `ML_TRAIN_DATASET_PATH`(기본 `data/ml_training_dataset.pkl`, 두 스크립트가 공유), **신규** `ML_TRAIN_FORCE_COLLECT`(`train_ml_model.py`에서 `1`이면 저장된 파일이 있어도 무시하고 재수집).
 
-**`collect_ml_dataset.py` 동작 흐름**: ① `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]`마다 `universe_for(market)[:UNIVERSE_SIZE]`로 종목을 고르고(KRX는 KOSPI+KOSDAQ 합집합, 목록 앞에서부터 자름 — 시가총액 순인지는 미검증) `collect_universe_records`가 OHLCV와 국내 펀더멘털을 수집(종목 단위 예외 격리, tqdm 진행바) → ② `build_sequence_dataset`으로 조립 → ③ `save_dataset`으로 `pickle`에 저장(`SequenceDataset`은 frozen dataclass + 표준 타입만 담아 pickle로 안전하게 왕복, 신뢰 경계 — 이 파일은 로컬에서만 생성·소비됨). 학습은 전혀 하지 않는다.
+**`collect_ml_dataset.py` 동작 흐름**: ① `collection.collect_training_records`가 원자 시장(KOSPI/KOSDAQ/NASDAQ/NYSE)마다 `universe.select_universe`로 `UNIVERSE_SIZE`개를 고르고(**2026-10-22 갱신**: 국내 = 수집 시작일 시점 시가총액 상위 보통주, 미국 = 현재 FDR 목록. 이전 `universe_for("KRX")[:200]`은 KOSDAQ이 빠지고 KOSPI가 가나다순이었음) `collect_universe_records`가 OHLCV와 국내 펀더멘털을 수집(종목 단위 예외 격리, tqdm 진행바) → ② `build_sequence_dataset`으로 조립 → ③ `save_dataset`으로 `pickle`에 저장(`SequenceDataset`은 frozen dataclass + 표준 타입만 담아 pickle로 안전하게 왕복, 신뢰 경계 — 이 파일은 로컬에서만 생성·소비됨). 학습은 전혀 하지 않는다.
 
 **`train_ml_model.py` 동작 흐름**: ① `resolve_device`로 device 확인(`cuda`를 명시했는데 GPU가 없으면 **수집/로드 전에** 실패) → ② `ML_TRAIN_DATASET_PATH`에 파일이 있고 `ML_TRAIN_FORCE_COLLECT`가 아니면 `load_dataset`으로 즉시 로드, 없으면 `collect_ml_dataset.py`와 동일한 수집 로직을 돌리고 끝에 `save_dataset`으로 저장(다음 실행부터 재사용) → ③ `train_val_test_split`(시간순 ~70/10/20, embargo) → ④ 구간별 기간·종목 수, 하이퍼파라미터 출력 → ⑤ `train`(epoch마다 train/val loss·lr 로그) → ⑥ `_print_evaluation_report`(validation/test 전체, test 국내/미국별로 Mamba vs persistence 베이스라인 MSE/MAE/R²/방향적중률) → ⑦ `save_model` + `unified_h1_mamba.history.{csv,png}`(학습 곡선) 저장 → val 최저 epoch가 마지막보다 앞이면 재학습 안내(저장 가중치는 마지막 epoch).
 
@@ -294,6 +294,9 @@ NEWS_SENTIMENT_VERIFY_DRY_RUN=1 .venv/Scripts/python scripts/verify_news_sentime
 | `ML_TRAIN_DEVICE` | 선택 | `train_ml_model.py`, `train_full.sh` | `auto`(기본, GPU 있으면 GPU) / `cuda` / `cpu`. `train_full.sh` 기본은 `cuda` |
 | `ML_TRAIN_LOG_EVERY` | 선택 | `train_ml_model.py`, `train_full.sh` | epoch 로그 간격, 기본 1(`train_full.sh`는 5), 0이면 끔 |
 | `ML_TRAIN_VAL_RATIO` | 선택 | `train_ml_model.py` | validation 구간 비율(전체 날짜 대비), 기본 0.1 |
+| `ML_TRAIN_TARGET` | 선택 | `train_ml_model.py` | 학습 타깃: `demeaned`(기본, 같은 날·같은 지역 평균 차감) / `raw`(원래 다음날 수익률) — 2026-10-22 |
+| `ML_TRAIN_REGIONS` | 선택 | `train_ml_model.py` | 학습·평가 지역 `KR,US`(기본) — `KR`만 주면 국내만 학습 — 2026-10-22 |
+| `ML_EVAL_COST_KR` / `ML_EVAL_COST_US` | 선택 | `train_ml_model.py` | 순 스프레드용 왕복비용(비율), 기본 0.0025 / 0.0005(가정값) — 2026-10-22 |
 | `CHAT_AGENT_LOOP` | 선택 | `chat_cli.py` | `legacy`면 구 루프. 기본은 deep |
 | `LLM_VERIFY_DRY_RUN` | 선택 | `verify_llm_chart_analyst.py` | `"1"`이면 dry-run |
 | `NEWS_VERIFY_MARKET` | 선택 | `verify_news_disclosure.py` | `KOSPI`(기본) 또는 `KOSDAQ`/`NASDAQ`/`NYSE` (market 세분화 2026-10 — 과거엔 `KRX`/`NASDAQ` 2개뿐) |

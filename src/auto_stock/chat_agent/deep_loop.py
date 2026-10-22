@@ -21,6 +21,7 @@ import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from deepagents import FilesystemMiddleware, create_deep_agent
 from deepagents.backends import StateBackend
@@ -47,6 +48,7 @@ from auto_stock.chat_agent.credentials import (
     MAIN_AGENT_INPUT_TOKEN_LIMIT,
     MAIN_AGENT_RUN_LIMIT,
     MAIN_AGENT_SESSION_CALL_LIMIT,
+    load_stock_analyst_mode,
 )
 from auto_stock.chat_agent.fallbacks import (
     API_ERROR_FALLBACK,
@@ -54,8 +56,9 @@ from auto_stock.chat_agent.fallbacks import (
     TOOL_LIMIT_FALLBACK,
 )
 from auto_stock.chat_agent.models import LLMConfig, QueryBudget
-from auto_stock.chat_agent.prompt import SYSTEM_PROMPT
-from auto_stock.chat_agent.tool_registry import TOOL_SPECS, as_langchain_tools
+from auto_stock.chat_agent.prompt import SUBAGENT_MODE_ADDENDUM, SYSTEM_PROMPT
+from auto_stock.chat_agent.stock_analyst_subagent import StockAnalystTaskPolicy, stock_analyst_spec
+from auto_stock.chat_agent.tool_registry import as_langchain_tools, main_tool_specs
 from auto_stock.chat_agent.tools import ChatToolContext
 
 __all__ = [
@@ -91,6 +94,9 @@ class DeepChatSession:
     session_call_limit: int = MAIN_AGENT_SESSION_CALL_LIMIT
     input_token_limit: int = MAIN_AGENT_INPUT_TOKEN_LIMIT
     turn_lock: threading.Lock = field(default_factory=threading.Lock)
+    # subagent 모드에서 stock_analyst 서브에이전트가 쓸 모델 — None이면 기존과 같은 "openai:<agent_model>".
+    # 테스트·노출 점검이 가짜 모델을 넣는 자리다.
+    subagent_model: Any = None
 
 
 def make_chat_model(llm_config: LLMConfig) -> ChatOpenAI:
@@ -115,20 +121,38 @@ def check_tracing_allowed() -> None:
         )
 
 
+def _allowed_tool_names(mode: str) -> frozenset[str]:
+    """모델에 보여야 하는 도구 정확히 — subagent 모드는 신호 도구·stock_analyst 대신 `task`
+    (docs/design/stock-analyst-subagent-migration.md, 결정 D1 안 A)."""
+    names = frozenset(spec.name for spec in main_tool_specs(mode))
+    return names | {"task"} if mode == "subagent" else names
+
+
 def _expected_tool_names() -> frozenset[str]:
-    return frozenset(spec.name for spec in TOOL_SPECS)
+    """`verify_exposure`의 기대값 — 현재 모드 기준."""
+    return _allowed_tool_names(load_stock_analyst_mode())
+
+
+def _subagent_kwargs(mode: str, session: DeepChatSession, context: ChatToolContext, on_event: EventCallback | None) -> dict:
+    if mode != "subagent":
+        return {}
+    model = session.subagent_model or f"openai:{context.agent_model}"
+    return {"subagents": [stock_analyst_spec(context, model, on_event)]}
 
 
 def _build_main_agent(session: DeepChatSession, context: ChatToolContext, on_event: EventCallback | None):
-    allowed = _expected_tool_names()
+    mode = load_stock_analyst_mode()
+    allowed = _allowed_tool_names(mode)
+    task_policy = StockAnalystTaskPolicy(context.budget) if mode == "subagent" else None
     backend = StateBackend()  # 실제 파일시스템·셸 백엔드 금지(내장 도구는 어차피 노출·실행 차단)
     return create_deep_agent(
         model=session.model,
         # 실행 직렬화는 ToolCallGuard의 턴 Lock이 맡는다 — 레지스트리 래퍼에는 별도 Lock을 줘서
         # 같은 Lock을 두 번 잡는(교착) 일이 없게 한다.
-        tools=as_langchain_tools(context, threading.Lock()),
-        system_prompt=SYSTEM_PROMPT,
+        tools=as_langchain_tools(context, threading.Lock(), main_tool_specs(mode)),
+        system_prompt=SYSTEM_PROMPT + (SUBAGENT_MODE_ADDENDUM if mode == "subagent" else ""),
         backend=backend,
+        **_subagent_kwargs(mode, session, context, on_event),
         middleware=[
             # after_model 훅은 목록의 역순으로 실행된다. 깨진 호출 피드백은 jump_to="model"로 다른
             # after_model을 건너뛰므로 반드시 맨 앞(= 마지막 실행)에 둔다 — 그렇지 않으면
@@ -141,7 +165,7 @@ def _build_main_agent(session: DeepChatSession, context: ChatToolContext, on_eve
             TurnEvents(on_event),
             ExposureGuard(allowed),
             StrictToolSchemas(),
-            ToolCallGuard(allowed, session.turn_lock, on_event),
+            ToolCallGuard(allowed, session.turn_lock, on_event, task_policy=task_policy),
             # 대용량 결과를 가상 파일로 빼는 기본 동작 끄기 — read_file을 숨겼으니 회수할 수 없다.
             FilesystemMiddleware(
                 backend=backend, tool_token_limit_before_evict=None, human_message_token_limit_before_evict=None
@@ -228,7 +252,7 @@ def verify_exposure() -> None:
         budget=QueryBudget(max_llm_calls=0), account=None, agent_model="", scan_cache=None,
         recommendation_coordinator=None,
     )
-    agent = _build_main_agent(DeepChatSession(model=probe), context, on_event=None)
+    agent = _build_main_agent(DeepChatSession(model=probe, subagent_model=_ProbeModel()), context, on_event=None)
     agent.invoke({"messages": [HumanMessage(content="exposure probe")]})
     if set(probe.bound_names) != _expected_tool_names():
         raise ExposureError(f"model-visible tools {sorted(probe.bound_names)} != registry")

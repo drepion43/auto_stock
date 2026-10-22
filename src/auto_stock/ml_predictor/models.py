@@ -57,6 +57,8 @@ class EpochRecord:
     val_loss: float | None  # validation 구간이 없으면 None
     learning_rate: float
     elapsed_seconds: float
+    # validation 구간의 날짜별 순위 IC 평균 — epoch 선택 기준(손실이 아니라 순위를 맞히는 능력, 2026-10-22).
+    val_ic: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

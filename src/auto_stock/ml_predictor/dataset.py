@@ -9,8 +9,11 @@ pooled 구조에서 "표본 1개 = 종목의 (가변 길이) 시퀀스" 구조�
 전역 날짜 컷오프를 구한 뒤, 각 종목의 시퀀스를 그 컷오프(+embargo)로 "같은 지점에서"
 자른다 — 종목마다 길이가 달라도 자르는 **날짜**는 전부 동일하다."""
 
+from collections import defaultdict
+from collections.abc import Collection
 from datetime import date
 
+from auto_stock.data.market_routing import KRX_MARKETS
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.features import FEATURE_NAMES, build_feature_vectors
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS, forward_returns
@@ -56,6 +59,43 @@ def build_sequence_dataset(
         if sequence is not None:
             sequences.append(sequence)
     return SequenceDataset(sequences=sequences, feature_names=FEATURE_NAMES)
+
+
+def region_of(market: str) -> str:
+    return "KR" if market in KRX_MARKETS else "US"
+
+
+def filter_regions(dataset: SequenceDataset, regions: Collection[str]) -> SequenceDataset:
+    """국내(KR)·미국(US) 중 일부만 남긴다 — 2026-10-22 진단: 신호가 국내에만 있고 미국 대형주는 IC≈0이라
+    합쳐 학습하면 국내 신호가 표본 2/3인 미국에 희석된다. 지역별 학습·비교용."""
+    kept = [seq for seq in dataset.sequences if region_of(seq.market) in regions]
+    return SequenceDataset(sequences=kept, feature_names=dataset.feature_names)
+
+
+def cross_sectional_demean(dataset: SequenceDataset) -> SequenceDataset:
+    """레이블에서 같은 날·같은 지역(KR/US) 평균을 뺀 새 데이터셋 — "시장보다 더 오를 종목" 맞히기(학습 타깃).
+
+    날짜별 시장 전체 움직임은 개별 종목 피처로 맞힐 수 없는데, 원래 레이블(다음날 수익률)에서는 라벨 분산의
+    9~25%를 차지해 MSE 학습을 평균 수렴으로 끌고 갔다(2026-10-22 진단). 같은 피처의 선형 모델도 이 변환만으로
+    국내 IC가 0.025→0.046으로 올랐다. 평가(IC·스프레드)는 원래 레이블로 한다 — 같은 날 순위는 이 변환에
+    영향받지 않는다(지역 안에서는 상수를 빼는 것이므로)."""
+    sums: dict[tuple[str, date], float] = defaultdict(float)
+    counts: dict[tuple[str, date], int] = defaultdict(int)
+    for seq in dataset.sequences:
+        for sample in seq.samples:
+            key = (region_of(seq.market), sample.feature.date)
+            sums[key] += sample.label
+            counts[key] += 1
+
+    def _demeaned(seq: TickerSequence) -> TickerSequence:
+        region = region_of(seq.market)
+        samples = [
+            LabeledSample(feature=s.feature, label=s.label - sums[(region, s.feature.date)] / counts[(region, s.feature.date)])
+            for s in seq.samples
+        ]
+        return TickerSequence(ticker=seq.ticker, market=seq.market, samples=samples)
+
+    return SequenceDataset(sequences=[_demeaned(seq) for seq in dataset.sequences], feature_names=dataset.feature_names)
 
 
 def _all_dates(dataset: SequenceDataset) -> list[date]:

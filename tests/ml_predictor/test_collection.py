@@ -28,6 +28,22 @@ def fake_sources(monkeypatch):
     return state
 
 
+def test_collect_training_records_selects_each_atomic_market_point_in_time(fake_sources):
+    calls = []
+
+    def fake_select(market, as_of, size):
+        calls.append((market, as_of, size))
+        return [f"{market}-1"]
+
+    records, fundamentals, universes = collection.collect_training_records(None, START, END, size=7, select=fake_select)
+
+    assert calls == [(market, START, 7) for market in ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")]
+    assert universes == {market: [f"{market}-1"] for market in ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")}
+    assert len(records) == 4
+    # 국내만 펀더멘털, 미국은 None — 원자 market이 그대로 전달됐다는 뜻
+    assert [f is not None for f in fundamentals] == [True, True, False, False]
+
+
 def _progress_lines(caplog) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == LOGGER and r.levelno == logging.INFO]
 

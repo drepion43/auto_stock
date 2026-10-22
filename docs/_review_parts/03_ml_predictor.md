@@ -149,7 +149,7 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
 5. 학습이 끝난 뒤 `evaluate(model, split.test)`로 test 지표를 한 번 계산해 메타데이터에 넣는다.
 6. state_dict를 **CPU 텐서로 복사**해 반환(추론 환경이 CPU 전용이어도 로드 가능). `history`도 함께 반환.
 
-**저장되는 가중치는 마지막 epoch의 것**이다. val loss가 가장 낮았던 epoch의 가중치를 따로 보관하는 early stopping은 없다.
+~~**저장되는 가중치는 마지막 epoch의 것**이다.~~ **갱신 (2026-10-22)**: 매 epoch validation 구간의 날짜별 순위 IC(`EpochRecord.val_ic`, history CSV `val_ic` 열)를 계산하고, **val IC가 가장 높았던 epoch의 가중치**를 저장한다(`train(select_by_val_ic=True)` 기본). 학습 타깃은 기본으로 같은 날·같은 지역 평균을 뺀 수익률(`dataset.cross_sectional_demean`, 스크립트가 train·validation에만 적용, test는 원래 레이블로 평가). 진단·근거: `docs/design/ml-predictor-mamba-plan.md` "2026-10-22 진단".
 
 ### 평가 함수
 - `evaluate(model, dataset, feature_names)` — **종목별 마지막 시점 예측만** 평가(추론 경로와 같은 조건). 반환 키:
@@ -175,17 +175,25 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
 > **갱신 (2026-10-15)**: 데이터 수집(OHLCV+펀더멘털 → `SequenceDataset`)이 `ml_predictor/collection.py`(신규)로 추출됐다 — `universe_for`/`atomic_market_for`/`collect_universe_records`(과거엔 `train_ml_model.py`의 `_universe_for`/`_atomic_market_for`/`_collect_universe_records` 사설 헬퍼였음) + `save_dataset`/`load_dataset`(신규, pickle 기반). 신규 `scripts/collect_ml_dataset.py`가 수집만 해서 `data/ml_training_dataset.pkl`(기본 경로, `ML_TRAIN_DATASET_PATH`로 변경 가능)에 저장하고 종료한다. `train_ml_model.py`는 그 파일이 있으면 재수집 없이 로드해서 학습만 하고, 없으면(또는 `ML_TRAIN_FORCE_COLLECT=1`이면) 예전처럼 직접 수집한다 — 즉 "수집+학습 한 번에" 모드와 "수집 따로, 학습 따로" 모드를 둘 다 지원한다.
 
 1. `resolve_device(ML_TRAIN_DEVICE)` — 데이터 수집/로드 **전에** device 확인.
-2. `ML_TRAIN_DATASET_PATH`에 파일이 있고 `ML_TRAIN_FORCE_COLLECT`가 아니면 `load_dataset`으로 즉시 로드. 아니면 `UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]` 각각 `universe_for(market)[:UNIVERSE_SIZE]`(KRX는 KOSPI+KOSDAQ 합집합)로
-   종목을 고르고, `collect_universe_records`로 OHLCV(`data/ohlcv.duckdb` 캐시)와 국내 펀더멘털 수집(종목 단위 예외 격리) 후 `save_dataset`으로 저장.
-   **목록 앞에서부터 자르므로 "상위 200"이 시가총액 순인지는 소스의 목록 순서에 달려 있다(미검증).**
-3. `train_val_test_split(dataset, VAL_RATIO, TEST_RATIO=0.2)` → 구간별 기간·종목 수 출력 → 하이퍼파라미터 출력 → `train`.
-4. `_print_evaluation_report` — validation 전체, test 전체, test 국내/미국 각각에 대해 Mamba와 베이스라인의
-   MSE/MAE/R²/방향적중률을 나란히 출력.
-5. `save_model` → `unified_h1_mamba.history.{csv,png}` 저장 → val 최저 epoch가 마지막 epoch보다 앞이면 재학습 안내.
+2. `ML_TRAIN_DATASET_PATH`에 파일이 있고 `ML_TRAIN_FORCE_COLLECT`가 아니면 `load_dataset`으로 즉시 로드. 아니면
+   `collection.collect_training_records`로 수집 후 `save_dataset`으로 저장. **갱신 (2026-10-22)**: 원자 시장
+   `TRAINING_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")`마다 `universe.select_universe(market, 수집 시작일, UNIVERSE_SIZE)` —
+   국내는 **수집 시작일 시점 시가총액 상위 보통주**(우선주·거래정지 제외, `pykrx_source.get_market_cap_table`, 휴장일의 "전부 0인 표"는
+   건너뜀), 미국은 현재 FDR 목록(시가총액 순). 이전 `universe_for("KRX")[:200]`은 KOSPI 뒤에 KOSDAQ을 붙인 목록의 앞 200개라
+   **KOSDAQ이 통째로 빠졌고**, KOSPI도 가나다순(우선주 포함) 임의 200개였다. `collect_universe_records`가 OHLCV(`data/ohlcv.duckdb` 캐시)와
+   국내 펀더멘털을 수집(종목 단위 예외 격리)하는 것은 같다.
+3. `filter_regions(dataset, ML_TRAIN_REGIONS)` → `train_val_test_split(dataset, VAL_RATIO, TEST_RATIO=0.2)` → 구간별 기간·종목 수 출력 →
+   하이퍼파라미터 출력 → `train(training_split(split))`(타깃이 `demeaned`면 train·validation 레이블을 같은 날·같은 지역 평균 차감).
+4. `_print_evaluation_report` — **validation/test × 지역(KR/US)**마다 Mamba·0 예측·persistence의 MSE/방향적중률과, Mamba·persistence·
+   **ridge 기준선**(`baseline.fit_ridge`, 같은 피처·타깃)의 순위 IC·상위−하위 스프레드·**회전율·왕복비용 차감 스프레드**를 출력하고,
+   validation IC로 "Mamba 사용 가능 / 선형 기준선을 이기지 못함 → 배포하지 말 것"을 판정한다.
+5. `save_model` → `unified_h1_mamba.history.{csv,png}` 저장 → 저장된 가중치의 epoch(val IC 최고)와 val loss 최저 epoch 출력.
 
-환경변수: `ML_TRAIN_UNIVERSE_SIZE`(200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32),
+환경변수: `ML_TRAIN_UNIVERSE_SIZE`(원자 시장별, 200), `ML_TRAIN_LOOKBACK_YEARS`(5), `ML_TRAIN_EPOCHS`(100), `ML_TRAIN_BATCH_SIZE`(32),
 `ML_TRAIN_LR`(0.01), `ML_TRAIN_HIDDEN_DIM`(16), `ML_TRAIN_N_LAYERS`(2), `ML_TRAIN_DEVICE`(auto), `ML_TRAIN_LOG_EVERY`(1),
-`ML_TRAIN_VAL_RATIO`(0.1), **신규** `ML_TRAIN_DATASET_PATH`(`data/ml_training_dataset.pkl`), **신규** `ML_TRAIN_FORCE_COLLECT`(1이면 저장된 파일 무시).
+`ML_TRAIN_VAL_RATIO`(0.1), `ML_TRAIN_DATASET_PATH`(`data/ml_training_dataset.pkl`), `ML_TRAIN_FORCE_COLLECT`(1이면 저장된 파일 무시),
+**신규(2026-10-22)** `ML_TRAIN_TARGET`(`demeaned` 기본 | `raw`), `ML_TRAIN_REGIONS`(`KR,US` 기본), `ML_EVAL_COST_KR`(0.0025)·`ML_EVAL_COST_US`(0.0005)
+(순 스프레드용 왕복비용 — 가정값).
 
 `scripts/collect_ml_dataset.py`는 위 1·2단계만 수행하고 종료한다(학습 없음) — 환경변수는 `ML_TRAIN_UNIVERSE_SIZE`/`ML_TRAIN_LOOKBACK_YEARS`/`ML_TRAIN_DATASET_PATH`를 `train_ml_model.py`와 공유한다(같은 유니버스/기간으로 수집해야 나중에 그대로 로드 가능).
 
@@ -227,10 +235,13 @@ DART 실패(키 없음 등)는 매출액만 `None`으로 만들고 나머지는 
 - **국내 펀더멘털 조회 실패(2026-10-14 로그)** — pykrx `get_market_fundamental_by_date`가 `None of [Index(['TRD_DD','BPS','PER',…])]
   are in the [columns]` 에러를 내며 빈 결과를 돌려준다. 이 경우 `fundamentals.py`는 예외 없이 중립값으로 채우므로 국내 종목의
   PER/PBR/배당 피처가 조용히 전부 중립값(`fundamental_available=0`)이 될 수 있다. 원인(pykrx/KRX 쪽 변경, 로그인 필요 여부)은 미확인.
-- **early stopping 없음** — 마지막 epoch 가중치를 저장한다.
-- **평가는 종목당 마지막 시점 1개** — 표본이 적어 지표 분산이 크다. 전략 레벨 백테스트(거래비용, 누적손익, MDD)는 없다.
-- **생존편향 미보정** — 유니버스가 "오늘 상장된 종목"이다.
-- **유니버스 순서 미검증** — "시장별 상위 200"이 시가총액 순이 아닐 수 있다.
+- ~~**early stopping 없음**~~ — 2026-10-22부터 validation 순위 IC 최고 epoch 가중치를 저장한다.
+- ~~**평가는 종목당 마지막 시점 1개**~~ — 구간 내 모든 시점을 채점한다(evaluation.py). 2026-10-22부터 회전율·왕복비용 차감 스프레드도
+  나온다(비용은 가정값). 누적손익·MDD 같은 전략 백테스트는 여전히 없다.
+- **생존편향** — 국내는 2026-10-22부터 수집 시작일 시점 상장 종목으로 골라 줄었다. 미국은 과거 시점 목록 소스가 없어 "오늘 상장된 종목" 그대로다.
+- ~~**유니버스 순서 미검증**~~ — 확인 결과 국내는 가나다순이었고 KOSDAQ이 빠져 있었다(2026-10-22 수정, 위 2단계).
+- **예측력 미확인** — 2026-10-22 진단에서 기존 Mamba는 같은 피처의 선형 ridge보다 못했다. 새 유니버스 데이터(`data/ml_training_dataset_v2.pkl`, 수집 중)로
+  재학습해 리포트의 판정을 본 뒤에 ML 신호 사용 여부를 정한다.
 - **설명가능성 없음** — 블랙박스 모델이라 "왜 그 예측인지"를 피처 단위로 설명하지 못한다(사용자 승인 트레이드오프).
 - 4계층 신호(규칙엔진/ML/LLM차트/뉴스)의 가중 결합은 PRD §5/§11에서 미확정.
 

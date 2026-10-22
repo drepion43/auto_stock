@@ -51,16 +51,32 @@ from auto_stock.data.cache import OHLCVCache
 from auto_stock.ml_predictor.artifact import load_model, save_model
 from auto_stock.ml_predictor.collection import (
     DEFAULT_DATASET_PATH,
-    collect_universe_records,
+    collect_training_records,
     load_dataset,
     save_dataset,
-    universe_for,
 )
-from auto_stock.ml_predictor.dataset import build_sequence_dataset, train_val_test_split
-from auto_stock.ml_predictor.evaluation import IcSummary, WindowEvaluation, evaluate_window, split_by_region
+from auto_stock.ml_predictor.baseline import fit_ridge, ridge_predictions
+from auto_stock.ml_predictor.dataset import (
+    build_sequence_dataset,
+    cross_sectional_demean,
+    filter_regions,
+    train_val_test_split,
+)
+from auto_stock.ml_predictor.evaluation import (
+    IcSummary,
+    WindowEvaluation,
+    evaluate_window,
+    split_by_region,
+    summarize_predictions,
+)
 from auto_stock.ml_predictor.models import SequenceDataset, SequenceDatasetSplit
 from auto_stock.ml_predictor.predictor import ML_AGREE_RETURN_THRESHOLD, build_model
-from auto_stock.ml_predictor.reporting import best_val_epoch, plot_training_history, save_history_csv
+from auto_stock.ml_predictor.reporting import (
+    best_val_epoch,
+    best_val_ic_epoch,
+    plot_training_history,
+    save_history_csv,
+)
 from auto_stock.ml_predictor.training import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_EPOCHS,
@@ -76,7 +92,7 @@ from auto_stock.ml_predictor.training import (
     train,
 )
 
-UNIVERSE_MARKETS = ["KRX", "NASDAQ", "NYSE"]  # bucket_markets로 원자 거래소 전체 합집합
+# 원자 시장(KOSPI/KOSDAQ/NASDAQ/NYSE)마다 이 개수 — 국내는 수집 시작일 기준 시가총액 상위 보통주(universe.py).
 UNIVERSE_SIZE = int(os.environ.get("ML_TRAIN_UNIVERSE_SIZE", 200))
 LOOKBACK_YEARS = int(os.environ.get("ML_TRAIN_LOOKBACK_YEARS", 5))
 EPOCHS = int(os.environ.get("ML_TRAIN_EPOCHS", DEFAULT_EPOCHS))
@@ -94,6 +110,15 @@ FORCE_COLLECT = os.environ.get("ML_TRAIN_FORCE_COLLECT", "").strip() == "1"
 EVAL_ONLY = os.environ.get("ML_TRAIN_EVAL_ONLY", "").strip() == "1"
 # EVAL_ONLY에서 평가할 모델 폴더(기본 models/ml_predictor). 보관 모델 비교용: models/ml_predictor/archive/<이름>
 EVAL_MODEL_DIR = os.environ.get("ML_TRAIN_MODEL_DIR")
+# 학습 타깃(2026-10-22 진단): demeaned = 같은 날·같은 지역 평균을 뺀 다음날 수익률(기본), raw = 원래 다음날 수익률.
+TARGET = os.environ.get("ML_TRAIN_TARGET", "demeaned").strip().lower()
+# 학습·평가할 지역(KR=KOSPI+KOSDAQ, US=NASDAQ+NYSE). 진단상 신호는 KR에만 있었다 — KR만 따로 학습해 비교할 수 있다.
+REGIONS = frozenset(r.strip().upper() for r in os.environ.get("ML_TRAIN_REGIONS", "KR,US").split(",") if r.strip())
+# 순 스프레드용 왕복 거래비용(비율) — 가정값: 국내 = 매도 거래세 약 0.18% + 수수료·슬리피지, 미국 = 수수료·슬리피지.
+ROUND_TRIP_COST = {
+    "KR": float(os.environ.get("ML_EVAL_COST_KR", 0.0025)),
+    "US": float(os.environ.get("ML_EVAL_COST_US", 0.0005)),
+}
 
 
 def _collect_dataset() -> SequenceDataset:
@@ -101,16 +126,11 @@ def _collect_dataset() -> SequenceDataset:
     end = date.today()
     start = end - timedelta(days=365 * LOOKBACK_YEARS)
 
-    all_records: list[list] = []
-    all_fundamentals: list = []
     # Progress/skip log lines go through tqdm.write so they don't break the live progress bar.
     with logging_redirect_tqdm():
-        for market in UNIVERSE_MARKETS:
-            tickers = universe_for(market)[:UNIVERSE_SIZE]
-            print(f"[{market}] 유니버스: {len(tickers)}종목, 기간: {start} ~ {end}")
-            records, fundamentals = collect_universe_records(cache, tickers, start, end, market)
-            all_records.extend(records)
-            all_fundamentals.extend(fundamentals)
+        all_records, all_fundamentals, universes = collect_training_records(cache, start, end, UNIVERSE_SIZE)
+    for market, tickers in universes.items():
+        print(f"[{market}] 유니버스: {len(tickers)}종목 ({start} 시점 기준), 기간: {start} ~ {end}")
 
     return build_sequence_dataset(all_records, all_fundamentals)
 
@@ -133,6 +153,10 @@ def main() -> None:
         saved_path = save_dataset(dataset, DATASET_PATH)
         print(f"데이터셋 저장: {saved_path} (다음 실행부터 재수집 없이 재사용)")
 
+    if TARGET not in ("demeaned", "raw") or not REGIONS <= {"KR", "US"} or not REGIONS:
+        raise SystemExit(f"ML_TRAIN_TARGET must be demeaned|raw and ML_TRAIN_REGIONS a subset of KR,US (got {TARGET!r}, {sorted(REGIONS)})")
+    dataset = filter_regions(dataset, REGIONS)
+    print(f"[설정] 타깃={TARGET} 지역={','.join(sorted(REGIONS))} 왕복비용={ROUND_TRIP_COST}")
     universe_size = len(dataset.sequences)
     split = train_val_test_split(dataset, val_ratio=VAL_RATIO, test_ratio=TEST_RATIO)
 
@@ -158,7 +182,7 @@ def main() -> None:
         f"학습 레이블 ±{DEFAULT_LABEL_CLIP:.0%} 자르기, grad_clip={DEFAULT_GRAD_CLIP:g}, epoch마다 종목 순서 섞기"
     )
     bundle = train(
-        split,
+        training_split(split),
         universe_size=universe_size,
         hidden_dim=HIDDEN_DIM,
         n_layers=N_LAYERS,
@@ -177,12 +201,20 @@ def main() -> None:
     csv_path = save_history_csv(bundle.history, path.with_name(f"{path.stem}.history.csv"))
     png_path = plot_training_history(bundle.history, path.with_name(f"{path.stem}.history.png"))
     print(f"학습 곡선: {png_path} (+ {csv_path})")
-    best = best_val_epoch(bundle.history)
-    if best is not None and best < EPOCHS:
-        print(
-            f"참고: val loss 최저는 epoch {best}이고 저장된 모델은 마지막 epoch {EPOCHS}의 가중치입니다 "
-            f"(과적합 가능성 — ML_TRAIN_EPOCHS={best}로 재학습을 고려)."
-        )
+    best_ic, best_loss = best_val_ic_epoch(bundle.history), best_val_epoch(bundle.history)
+    print(f"저장된 가중치: validation IC 최고 epoch {best_ic} (참고: val loss 최저 epoch {best_loss})")
+
+
+def training_split(split: SequenceDatasetSplit) -> SequenceDatasetSplit:
+    """학습 타깃 변환은 train·validation에만 — test는 원래 레이블로 평가한다(날짜별 순위 IC는 같은 지역 안에서
+    상수를 빼도 변하지 않고, 스프레드는 실제 수익률로 재야 하므로)."""
+    if TARGET == "raw":
+        return split
+    return SequenceDatasetSplit(
+        train=cross_sectional_demean(split.train),
+        test=split.test,
+        validation=cross_sectional_demean(split.validation) if split.validation else None,
+    )
 
 
 def _print_window(name: str, dataset: SequenceDataset) -> None:
@@ -218,29 +250,46 @@ def _print_window_evaluation(name: str, evaluation: WindowEvaluation, n_tickers:
 def _format_ic(ic: IcSummary) -> str:
     return (
         f"평균IC={ic.mean_ic:+.4f} t={ic.ic_t_stat:+.2f} IC>0인날={ic.positive_day_share:.1%} "
-        f"상위20%-하위20%={ic.mean_top_bottom_spread:+.3%}/일 ({ic.n_days}일)"
+        f"상위20%-하위20%={ic.mean_top_bottom_spread:+.3%}/일 → 비용차감 {ic.mean_net_spread:+.3%}/일 "
+        f"(회전율 {ic.mean_turnover:.0%}, {ic.n_days}일)"
     )
 
 
-def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, split: SequenceDatasetSplit) -> None:
-    """학습 후 검증 리포트 — validation/test 구간의 **모든 (종목, 날짜)**를 채점한다(evaluation.py).
-    모델에는 종목의 전체 히스토리를 넣고 구간 안 시점만 채점한다(추론과 같은 조건). 비교 기준:
-    `0 예측`(예측력이 없으면 MSE로는 이게 최선 — mamba MSE가 이보다 낮아야 의미가 있음)과
-    `persistence`(내일 = 오늘). 예측 분포의 표준편차가 0에 가까우면 모델이 평균값만 내는 상태다."""
-    feature_names = split.train.feature_names
-    validation_dates, test_dates = _window_dates(split.validation), _window_dates(split.test)
-    sections = [("validation 전체", dataset, validation_dates), ("test 전체", dataset, test_dates)]
-    sections += [(f"test {region}", ds, test_dates) for region, ds in split_by_region(dataset).items()]
+_REGION_DATASET_KEY = {"KR": "domestic", "US": "us"}
 
-    print("\n===== 검증 리포트 (구간 내 모든 시점) =====")
-    for name, section_dataset, window in sections:
-        if not section_dataset.sequences or not window:
-            print(f"[{name}] 표본 없음")
-            continue
-        evaluation = evaluate_window(
-            model, section_dataset, feature_names, window, directional_threshold=ML_AGREE_RETURN_THRESHOLD
-        )
-        _print_window_evaluation(name, evaluation, len(section_dataset.sequences))
+
+def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, split: SequenceDatasetSplit) -> None:
+    """학습 후 검증 리포트 — validation/test 구간의 **모든 (종목, 날짜)**를 지역별로 채점한다(evaluation.py).
+    모델에는 종목의 전체 히스토리를 넣고 구간 안 시점만 채점한다(추론과 같은 조건). 비교 기준:
+    `0 예측`·`persistence`(내일 = 오늘)·**선형 기준선(ridge, 같은 피처·같은 타깃)**. 순위 IC와 거래비용을 뺀
+    상위−하위 스프레드가 판단 기준이다(MSE는 시장 전체 움직임과 극단값에 끌려 판단에 쓰지 않는다)."""
+    feature_names = split.train.feature_names
+    windows = {"validation": _window_dates(split.validation), "test": _window_dates(split.test)}
+    by_region = {region: split_by_region(dataset)[_REGION_DATASET_KEY[region]] for region in sorted(REGIONS)}
+    ridge = fit_ridge(training_split(split).train, feature_names)
+    verdict: dict[str, tuple[float, float]] = {}
+
+    print("\n===== 검증 리포트 (구간 내 모든 시점, 지역별) =====")
+    for window_name, window in windows.items():
+        for region, region_dataset in by_region.items():
+            name = f"{window_name} {region}"
+            if not region_dataset.sequences or not window:
+                print(f"[{name}] 표본 없음")
+                continue
+            cost = ROUND_TRIP_COST[region]
+            evaluation = evaluate_window(
+                model, region_dataset, feature_names, window,
+                directional_threshold=ML_AGREE_RETURN_THRESHOLD, round_trip_cost=cost,
+            )
+            _print_window_evaluation(name, evaluation, len(region_dataset.sequences))
+            ridge_ic = summarize_predictions(*ridge_predictions(ridge, region_dataset, feature_names, window), round_trip_cost=cost)
+            print(f"  순위IC ridge      : {_format_ic(ridge_ic)}")
+            if window_name == "validation":
+                verdict[region] = (evaluation.model_ic.mean_ic, ridge_ic.mean_ic)
+    print("-- 판정(validation IC 기준 — test는 판정에 쓰지 않음) --")
+    for region, (mamba_ic, ridge_ic) in verdict.items():
+        status = "Mamba 사용 가능" if mamba_ic > ridge_ic else "Mamba가 선형 기준선을 이기지 못함 → 배포하지 말 것"
+        print(f"  {region}: mamba {mamba_ic:+.4f} vs ridge {ridge_ic:+.4f} → {status}")
     print("==========================================\n")
 
 

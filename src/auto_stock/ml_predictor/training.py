@@ -143,6 +143,8 @@ def _masked_mse_loss(predicted: torch.Tensor, target: torch.Tensor, mask: torch.
 
 def _log_epoch(record: EpochRecord, epochs: int, epoch_seconds: float) -> None:
     val_part = "" if record.val_loss is None else f"  val_loss={record.val_loss:.6e}"
+    if record.val_ic is not None:
+        val_part += f"  val_ic={record.val_ic:+.4f}"
     logger.info(
         "epoch %3d/%d  loss=%.6e%s  lr=%.3e  time=%.2fs  elapsed=%.1fs",
         record.epoch, epochs, record.train_loss, val_part, record.learning_rate, epoch_seconds, record.elapsed_seconds,
@@ -246,6 +248,7 @@ def train(
     label_clip: float | None = DEFAULT_LABEL_CLIP,
     grad_clip: float | None = DEFAULT_GRAD_CLIP,
     feature_clip_sigma: float = DEFAULT_FEATURE_CLIP_SIGMA,
+    select_by_val_ic: bool = True,
 ) -> ModelBundle:
     """통합(unified) 단일 모델 학습 — market/종목별로 모델을 나누지 않는다(사용자 결정).
     `split.train.sequences`를 종목 단위로 미니배치로 묶어 PyTorch epoch 루프를 돈다.
@@ -268,6 +271,7 @@ def train(
     validation = split.validation if split.validation is not None and split.validation.sequences else None
 
     history: list[EpochRecord] = []
+    best: tuple[float, dict] | None = None  # (val IC, 그때의 CPU state_dict)
     train_start = time.perf_counter()
     for epoch in range(1, epochs + 1):
         epoch_start = time.perf_counter()
@@ -279,6 +283,9 @@ def train(
             None if validation is None
             else _masked_loss_on(model, validation, feature_names, batch_size, torch_device, label_clip)
         )
+        val_ic = None if validation is None else evaluate_window(model, validation, feature_names).model_ic.mean_ic
+        if select_by_val_ic and val_ic is not None and val_ic == val_ic and (best is None or val_ic > best[0]):
+            best = (val_ic, {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()})
         now = time.perf_counter()
         record = EpochRecord(
             epoch=epoch,
@@ -286,10 +293,16 @@ def train(
             val_loss=val_loss,
             learning_rate=optimizer.param_groups[0]["lr"],
             elapsed_seconds=now - train_start,
+            val_ic=val_ic,
         )
         history.append(record)
         if log_every > 0 and (epoch % log_every == 0 or epoch == epochs):
             _log_epoch(record, epochs, now - epoch_start)
+
+    if best is not None:
+        # 마지막 epoch이 아니라 validation 순위 IC가 가장 높았던 epoch의 가중치를 쓴다(2026-10-22 진단:
+        # 이전에는 val loss 최저가 epoch 58인데 epoch 100 가중치를 저장했다). test는 여전히 학습 중에 보지 않는다.
+        model.load_state_dict(best[1])
 
     # Every step of the test window (not just each ticker's last day — see evaluation.py).
     metrics = evaluate_window(model, split.test, feature_names).model

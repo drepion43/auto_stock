@@ -231,7 +231,7 @@ MVP-0+신호 소스 확장(#1~#4)의 4개 분석 함수 + 신규 사이징 tool�
 | `run_recommendations_with_ml.py` | 위와 동일 + `load_model()`(인자 없음, 통합 Mamba 아티팩트 `models/ml_predictor/unified_h1_mamba.pt`)로 ML 보조신호 활성화. 아티팩트 없으면 안내 후 종료. *(2026-10-13 갱신: 이전엔 `load_model("KRX")`)* |
 | `run_recommendations_with_signals.py` | 위와 동일 + ML(`load_model`) **및** LLM차트(`load_llm_config`+`OpenAIChartClient`) **및** 뉴스공시(`news_disclosure.credentials.load_llm_config`+`OpenAIDisclosureClient`) **및** 뉴스감성(`news_sentiment.credentials.load_llm_config`+`OpenAINewsSentimentClient`) 보조신호를 동시 활성화. 넷 중 하나라도 아티팩트/키가 없으면 안내 후 종료. **실제 OpenAI API를 호출한다(유료)** — 작성만 하고 실행하지 않았다. |
 | `scan_nasdaq_top100_buy_only.py` | 나스닥 상위 100종목 BUY 신호만 스캔하는 변형 스크립트. |
-| `train_ml_model.py` | KRX·NASDAQ·NYSE 각 상위 200종목·5년치를 합쳐(pooled) 통합 Mamba 모델 1개를 학습해 `unified_h1_mamba.pt`로 저장. `ML_TRAIN_UNIVERSE_SIZE`(시장별 종목 수)/`ML_TRAIN_LOOKBACK_YEARS`/`ML_TRAIN_EPOCHS` 등 환경변수로 스모크 테스트 규모 조정 가능. *(2026-10-13 갱신: 이전엔 KRX 200종목으로 logreg/rf/dummy 비교 후 logreg 저장)* |
+| `train_ml_model.py` | *(2026-10-22 갱신: 원자 시장 KOSPI·KOSDAQ·NASDAQ·NYSE마다 200종목 — 국내는 수집 시작일 시점 시가총액 상위 보통주. 타깃 기본은 시장평균 차감 수익률, 가중치는 validation IC 최고 epoch, 리포트에 ridge 기준선·비용 차감 스프레드·배포 판정. `docs/design/ml-predictor-mamba-plan.md` "2026-10-22 진단")* KRX·NASDAQ·NYSE 각 상위 200종목·5년치를 합쳐(pooled) 통합 Mamba 모델 1개를 학습해 `unified_h1_mamba.pt`로 저장. `ML_TRAIN_UNIVERSE_SIZE`(시장별 종목 수)/`ML_TRAIN_LOOKBACK_YEARS`/`ML_TRAIN_EPOCHS` 등 환경변수로 스모크 테스트 규모 조정 가능. *(2026-10-13 갱신: 이전엔 KRX 200종목으로 logreg/rf/dummy 비교 후 logreg 저장)* |
 | `verify_telegram.py` | 텔레그램 연동만 단독 확인(실제 메시지 1건 전송). |
 | `verify_pykrx.py` | pykrx 로그인·유니버스 조회·시가총액 조회 단독 확인(이번 세션에 추가). |
 | `verify_fdr_nasdaq.py` | FinanceDataReader의 나스닥 유니버스·OHLCV 조회 단독 확인(이번 세션에 추가). |

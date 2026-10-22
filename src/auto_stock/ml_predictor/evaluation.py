@@ -43,7 +43,12 @@ class IcSummary:
     mean_ic: float
     ic_t_stat: float  # mean / std * sqrt(n_days) — 대략 2를 넘으면 우연이 아닐 가능성이 크다
     positive_day_share: float  # IC > 0 인 날 비율
-    mean_top_bottom_spread: float  # 예측 상위 20% 평균 실제수익률 − 하위 20% (일평균)
+    mean_top_bottom_spread: float  # 예측 상위 20% 평균 실제수익률 − 하위 20% (일평균, 비용 전)
+    # 매일 상위·하위 20%를 다시 짠다고 볼 때 — 두 다리(상위·하위)에서 전날 대비 바뀐 종목 비율의 평균(0~1).
+    mean_turnover: float = math.nan
+    # 비용 차감 스프레드: 스프레드 − 왕복비용 × (상위 교체비율 + 하위 교체비율). 첫날은 전부 새로 산 것으로 친다.
+    # 단기 반전처럼 매일 종목이 바뀌는 신호는 비용 전 스프레드가 양수여도 이 값이 음수일 수 있다.
+    mean_net_spread: float = math.nan
 
 
 def _nan_ic() -> IcSummary:
@@ -51,24 +56,46 @@ def _nan_ic() -> IcSummary:
                      mean_top_bottom_spread=math.nan)
 
 
+def _replaced_share(current: set[str], previous: set[str] | None) -> float:
+    if previous is None:
+        return 1.0
+    return len(current - previous) / len(current) if current else 0.0
+
+
 def daily_rank_ic(
     predictions_by_day: list[list[float]],
     actuals_by_day: list[list[float]],
     min_tickers: int = MIN_IC_TICKERS,
     quantile: float = TOP_BOTTOM_QUANTILE,
+    *,
+    tickers_by_day: list[list[str]] | None = None,
+    round_trip_cost: float = 0.0,
 ) -> IcSummary:
     """날짜마다 (예측, 실제) 순위 상관과 상위−하위 스프레드를 구해 평균낸다. 종목이 `min_tickers`
-    미만이거나 예측/실제가 그날 전부 같은 값이면(순위가 없음) 그날은 뺀다."""
+    미만이거나 예측/실제가 그날 전부 같은 값이면(순위가 없음) 그날은 뺀다. `tickers_by_day`가 있으면
+    상위·하위 종목 교체 비율(회전율)과 `round_trip_cost`(왕복 거래비용, 비율)를 뺀 순 스프레드도 낸다."""
     ics: list[float] = []
     spreads: list[float] = []
-    for predictions, actuals in zip(predictions_by_day, actuals_by_day):
+    turnovers: list[float] = []
+    net_spreads: list[float] = []
+    previous_legs: tuple[set[str], set[str]] | None = None
+    for day_index, (predictions, actuals) in enumerate(zip(predictions_by_day, actuals_by_day)):
         p, a = np.asarray(predictions, dtype=float), np.asarray(actuals, dtype=float)
         if len(p) < min_tickers or np.ptp(p) == 0 or np.ptp(a) == 0:
             continue
         ics.append(float(np.corrcoef(rankdata(p), rankdata(a))[0, 1]))
         k = max(1, int(len(p) * quantile))
         order = np.argsort(p)
-        spreads.append(float(a[order[-k:]].mean() - a[order[:k]].mean()))
+        spread = float(a[order[-k:]].mean() - a[order[:k]].mean())
+        spreads.append(spread)
+        if tickers_by_day is not None:
+            names = tickers_by_day[day_index]
+            legs = ({names[i] for i in order[-k:]}, {names[i] for i in order[:k]})
+            long_share = _replaced_share(legs[0], previous_legs[0] if previous_legs else None)
+            short_share = _replaced_share(legs[1], previous_legs[1] if previous_legs else None)
+            turnovers.append((long_share + short_share) / 2)
+            net_spreads.append(spread - round_trip_cost * (long_share + short_share))
+            previous_legs = legs
     if not ics:
         return _nan_ic()
     std = statistics.stdev(ics) if len(ics) >= 2 else 0.0
@@ -78,16 +105,36 @@ def daily_rank_ic(
         ic_t_stat=statistics.fmean(ics) / std * math.sqrt(len(ics)) if std > 0 else math.nan,
         positive_day_share=sum(1 for ic in ics if ic > 0) / len(ics),
         mean_top_bottom_spread=statistics.fmean(spreads),
+        mean_turnover=statistics.fmean(turnovers) if turnovers else math.nan,
+        mean_net_spread=statistics.fmean(net_spreads) if net_spreads else math.nan,
     )
 
 
-def _group_by_day(values: list[float], actuals: list[float], dates: list[date]) -> tuple[list[list[float]], list[list[float]]]:
-    by_day: dict[date, tuple[list[float], list[float]]] = defaultdict(lambda: ([], []))
-    for value, actual, day in zip(values, actuals, dates):
+def _group_by_day(
+    values: list[float], actuals: list[float], dates: list[date], tickers: list[str] | None = None
+) -> tuple[list[list[float]], list[list[float]], list[list[str]]]:
+    by_day: dict[date, tuple[list[float], list[float], list[str]]] = defaultdict(lambda: ([], [], []))
+    names = tickers if tickers is not None else [""] * len(values)
+    for value, actual, day, name in zip(values, actuals, dates, names):
         by_day[day][0].append(value)
         by_day[day][1].append(actual)
+        by_day[day][2].append(name)
     days = sorted(by_day)
-    return [by_day[d][0] for d in days], [by_day[d][1] for d in days]
+    return [by_day[d][0] for d in days], [by_day[d][1] for d in days], [by_day[d][2] for d in days]
+
+
+def summarize_predictions(
+    predictions: list[float],
+    actuals: list[float],
+    dates: list[date],
+    tickers: list[str],
+    *,
+    round_trip_cost: float = 0.0,
+    min_tickers: int = MIN_IC_TICKERS,
+) -> IcSummary:
+    """임의 모델(예: baseline.ridge_predictions)의 시점별 예측을 같은 IC·비용 지표로 요약한다."""
+    by_value, by_actual, by_ticker = _group_by_day(predictions, actuals, dates, tickers)
+    return daily_rank_ic(by_value, by_actual, min_tickers, tickers_by_day=by_ticker, round_trip_cost=round_trip_cost)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,14 +194,15 @@ def _window_points(
     feature_names: list[str],
     window_dates: set[date] | None,
     batch_size: int,
-) -> tuple[list[float], list[float], list[float], list[date]]:
-    """(모델 예측, 실제 레이블, persistence 예측, 각 시점의 날짜) — 구간 안 시점만, 같은 순서."""
+) -> tuple[list[float], list[float], list[float], list[date], list[str]]:
+    """(모델 예측, 실제 레이블, persistence 예측, 날짜, 티커) — 구간 안 시점만, 같은 순서."""
     model.eval()
     device = next(model.parameters()).device
     predictions: list[float] = []
     actuals: list[float] = []
     persistence: list[float] = []
     dates: list[date] = []
+    tickers: list[str] = []
     sequences = dataset.sequences
     with torch.no_grad():
         for start in range(0, len(sequences), batch_size):
@@ -169,7 +217,8 @@ def _window_points(
                     actuals.append(sample.label)
                     persistence.append(sample.feature.values.get(PERSISTENCE_FEATURE_NAME, math.nan))
                     dates.append(sample.feature.date)
-    return predictions, actuals, persistence, dates
+                    tickers.append(seq.ticker)
+    return predictions, actuals, persistence, dates, tickers
 
 
 def evaluate_window(
@@ -181,15 +230,22 @@ def evaluate_window(
     directional_threshold: float = 0.0,
     batch_size: int = EVAL_BATCH_SIZE,
     min_ic_tickers: int = MIN_IC_TICKERS,
+    round_trip_cost: float = 0.0,
 ) -> WindowEvaluation:
     """`window_dates`(None이면 전 구간) 안의 모든 시점을 채점한다. `dataset`에는 종목의 전체
     히스토리를 넘겨야 구간 시작 전 과거가 모델 상태에 반영된다(구간만 잘라 넘기면 그 앞 히스토리
-    없이 평가된다 — validation loss 계산과 같은 조건)."""
-    predictions, actuals, persistence, dates = _window_points(model, dataset, feature_names, window_dates, batch_size)
+    없이 평가된다 — validation loss 계산과 같은 조건). `round_trip_cost`는 순 스프레드 계산용 왕복비용."""
+    predictions, actuals, persistence, dates, tickers = _window_points(
+        model, dataset, feature_names, window_dates, batch_size
+    )
     persistence_available = bool(persistence) and not any(math.isnan(p) for p in persistence)
-    model_ic = daily_rank_ic(*_group_by_day(predictions, actuals, dates), min_tickers=min_ic_tickers)
+    model_ic = summarize_predictions(
+        predictions, actuals, dates, tickers, round_trip_cost=round_trip_cost, min_tickers=min_ic_tickers
+    )
     persistence_ic = (
-        daily_rank_ic(*_group_by_day(persistence, actuals, dates), min_tickers=min_ic_tickers)
+        summarize_predictions(
+            persistence, actuals, dates, tickers, round_trip_cost=round_trip_cost, min_tickers=min_ic_tickers
+        )
         if persistence_available else _nan_ic()
     )
     return WindowEvaluation(

@@ -16,9 +16,10 @@
 노출 필터(`wrap_model_call`)와 실행 거부(`wrap_tool_call`)를 둘 다 둔다."""
 
 import json
+import re
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, ToolMessage
@@ -70,28 +71,129 @@ class ExposureGuard(AgentMiddleware):
         return handler(request.override(tools=visible))
 
 
+class TaskPolicy(Protocol):
+    """`task`(서브에이전트 위임) 호출의 사전 검사와 결과 감싸기 — stock_analyst_subagent.StockAnalystTaskPolicy."""
+
+    def check(self, arguments: dict) -> dict | None: ...  # 거부할 결과 dict, 통과면 None
+
+    def wrap(self, raw: str) -> dict: ...  # 서브에이전트가 돌려준 원문 → 기존 도구 결과 모양 dict
+
+
+def _tool_message(result: dict, call: dict) -> ToolMessage:
+    return ToolMessage(content=json.dumps(result, ensure_ascii=False), tool_call_id=call["id"], name=call["name"])
+
+
+def _task_tool_message(output: Any) -> ToolMessage | None:
+    """`task`의 반환은 Command(update={"messages": [ToolMessage]})다(deepagents subagents.py:710-715)."""
+    if isinstance(output, ToolMessage):
+        return output
+    messages = (getattr(output, "update", None) or {}).get("messages") or []
+    return next((m for m in messages if isinstance(m, ToolMessage)), None)
+
+
 class ToolCallGuard(AgentMiddleware):
-    def __init__(self, allowed: frozenset[str], turn_lock: threading.Lock, on_event: EventCallback | None) -> None:
+    def __init__(
+        self,
+        allowed: frozenset[str],
+        turn_lock: threading.Lock,
+        on_event: EventCallback | None,
+        task_policy: TaskPolicy | None = None,
+    ) -> None:
         super().__init__()
         self._allowed = allowed
         self._turn_lock = turn_lock
         self._on_event = on_event
+        self._task_policy = task_policy
+
+    def _run_task(self, request, handler, call: dict) -> Any:
+        """서브에이전트 위임: 허용 종류·위임문 형식·예산을 먼저 보고(통과 못 하면 서브에이전트를 띄우지 않음),
+        결과는 기존 도구 결과 모양(출처 라벨 포함)으로 감싸고, 실패는 `available=false`로 바꾼다
+        (docs/design/stock-analyst-subagent-migration.md §3 — task는 예외를 그대로 올린다)."""
+        refusal = self._task_policy.check(call["args"])
+        if refusal is not None:
+            return _tool_message(refusal, call)
+        try:
+            output = handler(request)
+        except Exception as exc:
+            return _tool_message({"available": False, "error": f"서브에이전트 실행 실패: {type(exc).__name__}"}, call)
+        message = _task_tool_message(output)
+        wrapped = self._task_policy.wrap(message.text if message is not None else "")
+        return _tool_message(wrapped, call)
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
         name, arguments = call["name"], call["args"]
         with self._turn_lock:
             _emit(self._on_event, {"type": "tool_start", "name": name, "arguments": arguments})
-            if name in self._allowed:
+            if name == "task" and self._task_policy is not None and name in self._allowed:
+                message = self._run_task(request, handler, call)
+            elif name in self._allowed:
                 message = handler(request)
             else:
-                message = ToolMessage(
-                    content=json.dumps({"available": False, "error": f"알 수 없는 도구: {name}"}, ensure_ascii=False),
-                    tool_call_id=call["id"],
-                    name=name,
-                )
+                message = _tool_message({"available": False, "error": f"알 수 없는 도구: {name}"}, call)
             result = _parse_result(getattr(message, "content", message))
             _emit(self._on_event, {"type": "tool_done", "name": name, "arguments": arguments, "result": result})
+        return message
+
+
+_DELEGATION_TARGET = re.compile(r"^\s*대상\s*:\s*(\S+)\s+(KOSPI|KOSDAQ|NASDAQ|NYSE)\s*$")
+# deepagents가 서브에이전트에도 붙이는 내장 도구(파일시스템·위임·할일) — 스파이크(2026-10-22)에서 서브에이전트
+# 모델에 ls/read_file/write_file/edit_file/delete/glob/grep이 그대로 노출되는 것을 확인했다.
+_BUILTIN_TOOL_NAMES = frozenset(
+    {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute", "task", "write_todos"}
+)
+
+
+def parse_delegation_target(text: str) -> tuple[str, str] | None:
+    """위임문 첫 줄 `대상: <ticker> <원자 시장>` → (ticker 대문자, market). 형식이 아니면 None."""
+    first_line = next((line for line in (text or "").splitlines() if line.strip()), "")
+    match = _DELEGATION_TARGET.match(first_line)
+    return (match.group(1).upper(), match.group(2)) if match else None
+
+
+class SubagentToolGuard(AgentMiddleware):
+    """서브에이전트용 가드(stock_analyst) — 종목 고정·노출 차단·이벤트 중계.
+
+    - `before_agent`: 첫 메시지(메인이 쓴 위임문)에서 대상(ticker, market)을 읽는다.
+    - `wrap_model_call`: deepagents 내장 도구(파일시스템 등)를 모델에서 숨긴다. 구조화 출력용 도구 같은 그 밖의
+      도구는 남긴다(허용 목록 방식으로 막으면 response_format이 깨질 수 있다).
+    - `wrap_tool_call`: 허용 도구가 아니거나 인자의 ticker/market이 대상과 다르면 실행하지 않는다 — 기존 클로저
+      바인딩과 같은 보장. tool_start/tool_done 이벤트에 `subagent` 이름을 붙여 메인의 `on_event`로 낸다(평가 캡처)."""
+
+    def __init__(self, subagent_name: str, allowed: frozenset[str], on_event: EventCallback | None) -> None:
+        super().__init__()
+        self._subagent_name = subagent_name
+        self._allowed = allowed
+        self._on_event = on_event
+        self._target: tuple[str, str] | None = None
+
+    def before_agent(self, state, runtime):
+        first = next((m for m in state["messages"] if getattr(m, "type", None) == "human"), None)
+        self._target = parse_delegation_target(first.text if first is not None else "")
+        return None
+
+    def wrap_model_call(self, request, handler):
+        visible = [tool for tool in request.tools if _tool_name(tool) not in _BUILTIN_TOOL_NAMES]
+        return handler(request.override(tools=visible))
+
+    def _refusal(self, name: str, arguments: dict) -> str | None:
+        if name not in self._allowed:
+            return f"알 수 없는 도구: {name}"
+        if self._target is None:
+            return "위임 대상(대상: <ticker> <market>)이 없어 분석할 수 없습니다"
+        ticker, market = self._target
+        if str(arguments.get("ticker", "")).upper() != ticker or arguments.get("market") != market:
+            return f"위임 대상({ticker} {market})과 다른 종목은 분석할 수 없습니다"
+        return None
+
+    def wrap_tool_call(self, request, handler):
+        call = request.tool_call
+        name, arguments = call["name"], call["args"]
+        tag = {"name": name, "arguments": arguments, "subagent": self._subagent_name}
+        _emit(self._on_event, {"type": "tool_start", **tag})
+        refusal = self._refusal(name, arguments if isinstance(arguments, dict) else {})
+        message = handler(request) if refusal is None else _tool_message({"available": False, "error": refusal}, call)
+        _emit(self._on_event, {"type": "tool_done", **tag, "result": _parse_result(getattr(message, "content", message))})
         return message
 
 

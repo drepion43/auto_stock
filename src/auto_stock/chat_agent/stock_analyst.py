@@ -23,6 +23,7 @@ from auto_stock.chat_agent.credentials import (
 from auto_stock.chat_agent.models import QueryBudget
 
 _PROVENANCE_LABEL = "서브에이전트 자율 조사 결과"
+PROVENANCE_LABEL = _PROVENANCE_LABEL  # subagents= 경로(stock_analyst_subagent.py)도 같은 라벨을 코드로 붙인다
 
 
 class StockAnalystResult(BaseModel):
@@ -47,6 +48,7 @@ _SYSTEM_PROMPT = (
     "도구를 불렀는지만 기록할 뿐 발견 내용 자체는 담지 않으므로, summary가 그 유일한 "
     "전달 경로다."
 )
+SYSTEM_PROMPT = _SYSTEM_PROMPT
 
 
 def run_stock_analyst(

@@ -21,6 +21,7 @@ Run from the project root:
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -181,7 +182,8 @@ def _build_shared() -> dict:
     return {
         "agent_config": agent_config,
         "reader": OpenAIChatAgentClient(agent_config),
-        "cache": OHLCVCache("data/ohlcv.duckdb"),
+        # DuckDB는 프로세스 간 파일 잠금 — 데이터 수집이 같은 파일을 쓰는 중이면 스냅샷 사본을 가리키게 한다.
+        "cache": OHLCVCache(os.environ.get("EVAL_OHLCV_DB", "data/ohlcv.duckdb")),
         "scan_cache": MarketScanCache("data/market_scan.duckdb"),
         "ml_model": chat_cli._load_ml_model(),
         "llm_client": chat_cli._load_chart_client(),

@@ -29,6 +29,46 @@ def _market_cap_df(market_cap=450_000_000_000_000, volume=10_000_000, trading_va
     )
 
 
+def _full_market_cap_df():
+    return pd.DataFrame(
+        {"종가": [70000, 500], "시가총액": [400, 3], "거래량": [10, 1], "거래대금": [700, 0], "상장주식수": [5, 6]},
+        index=pd.Index(["005930", "000020"], name="티커"),
+    )
+
+
+def test_get_market_cap_table_returns_rows_by_ticker(mocker):
+    call = mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=_full_market_cap_df())
+    table = pykrx_source.get_market_cap_table(date(2021, 10, 25), "KOSPI")
+    assert table == {
+        "005930": {"market_cap": 400, "trading_value": 700},
+        "000020": {"market_cap": 3, "trading_value": 0},
+    }
+    call.assert_called_once_with("20211025", market="KOSPI")
+
+
+def test_get_market_cap_table_walks_back_over_non_trading_days(mocker):
+    call = mocker.patch.object(
+        pykrx_source.stock, "get_market_cap", side_effect=[pd.DataFrame(), pd.DataFrame(), _full_market_cap_df()]
+    )
+    table = pykrx_source.get_market_cap_table(date(2021, 10, 24), "KOSDAQ")
+    assert "005930" in table
+    assert [c.args[0] for c in call.call_args_list] == ["20211024", "20211023", "20211022"]
+
+
+def test_get_market_cap_table_treats_all_zero_table_as_non_trading_day(mocker):
+    # pykrx는 휴장일에 빈 표 대신 전부 0인 표를 준다(2026-10-22 실측)
+    zeros = _full_market_cap_df().assign(시가총액=0, 거래대금=0)
+    call = mocker.patch.object(pykrx_source.stock, "get_market_cap", side_effect=[zeros, _full_market_cap_df()])
+    table = pykrx_source.get_market_cap_table(date(2021, 10, 23), "KOSPI")
+    assert table["005930"]["market_cap"] == 400
+    assert [c.args[0] for c in call.call_args_list] == ["20211023", "20211022"]
+
+
+def test_get_market_cap_table_gives_up_after_lookback(mocker):
+    mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=pd.DataFrame())
+    assert pykrx_source.get_market_cap_table(date(2021, 10, 24), "KOSPI", max_lookback_days=3) == {}
+
+
 def test_get_market_cap_returns_latest_value(mocker):
     mocker.patch.object(pykrx_source.stock, "get_market_cap", return_value=_market_cap_df())
 

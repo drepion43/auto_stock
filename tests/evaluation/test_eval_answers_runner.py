@@ -191,6 +191,35 @@ def test_run_mutations_uses_only_normal_turns(runner):
     assert next(row for row in rows if row.kind == "fabricate_fact").skipped is True
 
 
+def _meta_args(**overrides):
+    defaults = {"judge_model": "gpt-5.6-luna", "replay": None, "answers": None, "repeats": 2}
+    return SimpleNamespace(**{**defaults, **overrides})
+
+
+def test_build_meta_records_fixture_hash_and_expected_counts(runner, tmp_path):
+    fixture = tmp_path / "f.json"
+    fixture.write_text(json.dumps({"meta": {"reference_date": "2026-09-01"}, "entries": {}}), encoding="utf-8")
+    meta = runner.build_meta(_meta_args(replay=fixture), [cases_by_id()["Q12"]], frozenset({"M1"}), "gpt-5.6-luna")
+    assert meta["replay_fixture_sha256"] == runner.fixture_sha256(fixture)
+    assert meta["expected"] == {"Q12": [2, 2]}
+
+
+def test_rescoring_inherits_replay_identity_from_answers(runner, tmp_path):
+    answers = tmp_path / "answers.json"
+    source_meta = {"replay_fixture": "f.json", "replay_fixture_sha256": "abc", "expected": {"Q1": [1, 3]},
+                   "reference_date": "2026-09-01"}
+    answers.write_text(json.dumps({"meta": source_meta, "cases": []}), encoding="utf-8")
+    meta = runner.build_meta(_meta_args(answers=answers), [], frozenset({"M1"}), "gpt-5.6-luna")
+    assert meta["replay_fixture_sha256"] == "abc" and meta["expected"] == {"Q1": [1, 3]}
+
+
+def test_live_run_cannot_be_saved_as_baseline(runner, tmp_path):
+    path = tmp_path / "baseline.json"
+    assert runner.save_baseline(path, {"replay_fixture_sha256": None}, []) is False
+    assert not path.exists()
+    assert runner.save_baseline(path, {"replay_fixture_sha256": "abc"}, []) is True
+
+
 def test_reference_date_comes_from_replay_fixture(runner, tmp_path):
     fixture = tmp_path / "f.json"
     fixture.write_text(json.dumps({"meta": {"reference_date": "2026-09-01"}, "entries": {}}), encoding="utf-8")

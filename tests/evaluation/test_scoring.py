@@ -49,6 +49,31 @@ def test_deterministic_only_scoring_without_judge():
     assert score.skipped_reason is None
 
 
+def test_subagent_internal_calls_count_for_m1_but_not_for_what_the_main_answer_saw():
+    # subagent 모드: 서브에이전트 내부 신호 호출은 M1(도구를 썼나)에는 들어가고, 메인이 본 적 없는 원문이라
+    # 정직성·근거 규칙(M5·M6)과 채점 문맥에는 들어가지 않는다 — tool 모드에서 클로저 도구가 안 보이던 것과 같은 조건
+    news_failed = ToolCallRecord(
+        "analyze_news_sentiment", {"ticker": "005930", "market": "KOSPI"}, {"available": False, "error": "x"},
+        subagent="stock_analyst",
+    )
+    delegation = ToolCallRecord(
+        "stock_analyst", {"ticker": "005930", "market": "KOSPI"},
+        {"available": True, "judgment": {"summary": "s", "outlook": "UP", "signals_used": []}},
+    )
+    resolve = ToolCallRecord(
+        "resolve_ticker", {"query": "삼성전자"}, {"available": True, "matches": [{"ticker": "005930", "market": "KOSPI"}]}
+    )
+    disclosures = ToolCallRecord(
+        "analyze_disclosures", {"ticker": "005930", "market": "KOSPI"}, {"available": True}, subagent="stock_analyst"
+    )
+    captured = _captured(
+        query_id="Q10", answer="서브에이전트 자율 조사 결과 참고용입니다.", calls=(resolve, delegation, disclosures, news_failed)
+    )
+    results = _by_metric(score_turn(captured, cases_by_id()["Q10"], judge=None, today=TODAY))
+    assert results["M1"].passed is True  # 내부 공시·뉴스 호출이 기대 호출을 채운다
+    assert results["M6"].applied is False  # 내부 실패는 메인이 본 결과가 아니다
+
+
 def test_judged_metrics_run_through_deepeval_offline(make_judge):
     judge, ledger = make_judge()
     score = score_turn(_captured(), cases_by_id()["Q1"], judge=judge, today=TODAY)
@@ -105,8 +130,22 @@ def test_truncated_context_downgrades_faithfulness_failure_to_review(make_judge)
     score = score_turn(_captured(query_id="Q3", calls=(huge,)), cases_by_id()["Q3"], judge=judge, today=TODAY, context_limit=1000)
     m2 = _by_metric(score)["M2"]
     assert m2.details["truncated"] is True
-    if m2.passed is not True:
-        assert m2.passed is None and m2.needs_review is True
+    # 잘린 문맥에서는 채점 결과가 통과여도 확정하지 않는다(빠진 근거 때문에 잘못 통과했을 수 있다)
+    assert m2.passed is None and m2.needs_review is True
+    assert "unconfirmed_verdict" in m2.details
+
+
+def test_numbers_without_any_tool_evidence_are_held_for_review(make_judge):
+    judge, _ledger = make_judge()
+    captured = _captured(query_id="Q9", answer="SK하이닉스 종가는 180,000원입니다.", calls=())
+    m2 = _by_metric(score_turn(captured, cases_by_id()["Q9"], judge=judge, today=TODAY))["M2"]
+    assert m2.applied is True and m2.passed is None and m2.needs_review is True
+
+
+def test_no_evidence_and_no_numbers_stays_not_applied(make_judge):
+    judge, _ledger = make_judge()
+    captured = _captured(query_id="Q9", answer="천만에요.", calls=())
+    assert _by_metric(score_turn(captured, cases_by_id()["Q9"], judge=judge, today=TODAY))["M2"].applied is False
 
 
 def test_score_mutation_reports_detection_by_expected_detectors():

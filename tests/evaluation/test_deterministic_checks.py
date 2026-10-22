@@ -125,6 +125,20 @@ def test_policy_requires_disclaimer_for_judgment_question():
     assert "missing_disclaimer" in result.details["violations"]
 
 
+def test_policy_does_not_require_disclaimer_when_answer_gives_no_judgment():
+    # Phase 0 Q3 실제 답변 — 추천 데이터가 없다는 안내일 뿐 판단을 제시하지 않았다
+    answer = (
+        "현재 확인 가능한 KRX(코스피·코스닥) 추천 스캔 결과가 아직 없습니다. 아직 분석이 한 번도 실행되지 않은 "
+        "상태라서 추천 데이터가 준비되지 않은 경우입니다. 원하시면 특정 종목이나 테마를 지정해 분석해드릴 수 있습니다."
+    )
+    assert "missing_disclaimer" not in check_policy("추천해줄만한 종목 있어?", answer, (), None).details["violations"]
+
+
+def test_policy_still_requires_disclaimer_when_answer_recommends():
+    answer = "삼성전자를 추천드립니다. 상승 여력이 있습니다."
+    assert "missing_disclaimer" in check_policy("추천해줄만한 종목 있어?", answer, (), None).details["violations"]
+
+
 def test_policy_requires_realtime_notice_when_price_cited():
     result = check_policy("삼성전자 얼마야?", "삼성전자 종가는 71,200원입니다.", (_PRICE,), None)
     assert "missing_realtime_notice" in result.details["violations"]

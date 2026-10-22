@@ -327,7 +327,9 @@ def _validation_error_json(exc: ValidationError) -> str:
     return json.dumps(_argument_error(exc), ensure_ascii=False)
 
 
-def _langchain_tool(spec: ToolSpec, context: "_tools.ChatToolContext", turn_lock: threading.Lock) -> StructuredTool:
+def _langchain_tool(
+    spec: ToolSpec, context: "_tools.ChatToolContext", turn_lock: threading.Lock, description: str | None = None
+) -> StructuredTool:
     def _run(**kwargs: Any) -> str:
         # LangGraph는 한 응답의 여러 tool_call을 병렬 실행한다(스파이크 S3) — 기존 순차 실행
         # 계약(C11)과 공유 캐시(DuckDB 등) 안전을 위해 턴 단위 Lock으로 직렬화한다.
@@ -338,15 +340,43 @@ def _langchain_tool(spec: ToolSpec, context: "_tools.ChatToolContext", turn_lock
     return StructuredTool.from_function(
         func=_run,
         name=spec.name,
-        description=spec.description,
+        description=description or spec.description,
         args_schema=spec.args_model,
         handle_validation_error=_validation_error_json,
     )
 
 
-def as_langchain_tools(context: "_tools.ChatToolContext", turn_lock: threading.Lock) -> list[StructuredTool]:
-    """1단계 메인 deepagent용 도구 — 턴마다 그 턴의 context(QueryBudget 포함)에 바인딩한다."""
-    return [_langchain_tool(spec, context, turn_lock) for spec in TOOL_SPECS]
+# stock_analyst가 고르는 신호 도구(subagent_description이 있는 8개) — subagent 모드에서는 메인이 아니라
+# stock_analyst 서브에이전트만 갖는다(docs/design/stock-analyst-subagent-migration.md, 결정 D1 안 A).
+SIGNAL_TOOL_NAMES = frozenset(spec.name for spec in TOOL_SPECS if spec.subagent_description is not None)
+
+
+def main_tool_specs(mode: str) -> tuple[ToolSpec, ...]:
+    """메인 에이전트에 보일 도구. `subagent` 모드는 신호 도구 8개와 agent-as-tool `stock_analyst`를 빼고
+    (그 일은 `task`로 위임), `tool` 모드는 지금과 같은 전체 레지스트리."""
+    if mode == "subagent":
+        return tuple(spec for spec in TOOL_SPECS if spec.name not in SIGNAL_TOOL_NAMES and spec.name != "stock_analyst")
+    return TOOL_SPECS
+
+
+def as_langchain_tools(
+    context: "_tools.ChatToolContext", turn_lock: threading.Lock, specs: tuple[ToolSpec, ...] | None = None
+) -> list[StructuredTool]:
+    """메인 deepagent용 도구 — 턴마다 그 턴의 context(QueryBudget 포함)에 바인딩한다. `specs`가 없으면 호출 시점의
+    `TOOL_SPECS`(기본 인자로 고정하지 않는다 — 레지스트리를 호출 시점에 찾는 원칙, patch 호환)."""
+    return [_langchain_tool(spec, context, turn_lock) for spec in (TOOL_SPECS if specs is None else specs)]
+
+
+def as_subagent_signal_tools(context: "_tools.ChatToolContext", lock: threading.Lock) -> list[StructuredTool]:
+    """stock_analyst 서브에이전트(subagents= 경로)용 신호 도구 — 클로저 바인딩(`bind_stock_analyst_tools`)과 달리
+    `ticker`/`market` 인자를 받는다(서브에이전트는 메인 그래프 생성 때 한 번 컴파일되므로 종목을 미리 묶을 수 없음).
+    다른 종목 호출은 `agent_middleware.SubagentToolGuard`가 위임 대상과 비교해 막는다. 실행은 `call_isolated`라
+    예외가 `available=false`로 바뀌고, `lock`으로 직렬화한다(같은 DuckDB 연결 공유 — 바인딩 Lock과 같은 이유)."""
+    return [
+        _langchain_tool(spec, context, lock, description=spec.subagent_description)
+        for spec in TOOL_SPECS
+        if spec.name in SIGNAL_TOOL_NAMES
+    ]
 
 
 def bind_stock_analyst_tools(context: "_tools.ChatToolContext", ticker: str, market: str) -> list:

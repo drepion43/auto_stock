@@ -23,12 +23,18 @@ TEXT_SECONDARY = "#52514e"
 GRID_COLOR = "#e4e3df"
 LINE_WIDTH = 1.5
 
-CSV_FIELDS = ["epoch", "train_loss", "val_loss", "learning_rate", "elapsed_seconds"]
+CSV_FIELDS = ["epoch", "train_loss", "val_loss", "val_ic", "learning_rate", "elapsed_seconds"]
 
 
 def best_val_epoch(history: list[EpochRecord] | tuple[EpochRecord, ...]) -> int | None:
     """val loss가 가장 낮은 epoch(동률이면 앞선 epoch). validation이 없으면 None."""
     scored = [(h.val_loss, h.epoch) for h in history if h.val_loss is not None]
+    return min(scored)[1] if scored else None
+
+
+def best_val_ic_epoch(history: list[EpochRecord] | tuple[EpochRecord, ...]) -> int | None:
+    """val IC가 가장 높은 epoch(동률이면 앞선 epoch) — `training.train`이 저장하는 가중치의 epoch."""
+    scored = [(-h.val_ic, h.epoch) for h in history if h.val_ic is not None and h.val_ic == h.val_ic]
     return min(scored)[1] if scored else None
 
 
@@ -44,6 +50,7 @@ def save_history_csv(history: list[EpochRecord] | tuple[EpochRecord, ...], path:
                     "epoch": h.epoch,
                     "train_loss": h.train_loss,
                     "val_loss": "" if h.val_loss is None else h.val_loss,
+                    "val_ic": "" if h.val_ic is None else h.val_ic,
                     "learning_rate": h.learning_rate,
                     "elapsed_seconds": round(h.elapsed_seconds, 3),
                 }

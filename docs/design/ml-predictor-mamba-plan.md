@@ -88,3 +88,28 @@ DART 매출액(연간)은 "공시 시점"이 있다. `dart_financials_source.py:
 ## 검증
 - `.venv/Scripts/python -m pytest -q -m "not slow" tests/ml_predictor/ tests/data/sources/ tests/orchestrator/ tests/chat_agent/ tests/recommendation_synthesis/` — 로직 변경 전제인 pandas-ta 관련 환경 실패(Python 3.11 venv, numba 미지원 스텁) 외 전부 통과.
 - Mamba forward/backward smoke test(실제 PyTorch 연산) 통과 — `tests/ml_predictor/test_training.py`(`@pytest.mark.slow` 포함, 전체 학습 루프 end-to-end).
+
+## 2026-10-22 진단 — 예측력이 없던 이유와 수정
+
+진단(읽기 전용, 기존 `data/ml_training_dataset.pkl`): 같은 17개 피처의 **선형 ridge가 국내 test IC +0.025(원래 레이블)~+0.046(t=4.1, 시장평균 차감 레이블)**을 낸 반면 Mamba는 ≈0. 신호는 데이터에 있는데 Mamba가 꺼내지 못했고, 그 위에 아래 문제가 겹쳐 있었다.
+
+| # | 문제 | 근거 | 수정 |
+|---|---|---|---|
+| 1 | 유니버스: `universe_for("KRX")[:200]`이 KOSPI 뒤에 KOSDAQ을 붙인 리스트의 앞 200개 → **KOSDAQ 0종목**. pykrx가 가나다순이라 KOSPI도 우선주 섞인 임의 200개. 현재 상장 종목만(생존 편향) | 데이터셋 시장별 종목 수, 첫 종목들(AJ네트웍스, AK홀딩스, BYC우…) | `ml_predictor/universe.py`: 원자 시장별로 **수집 시작일 시점 시가총액 상위 보통주**(우선주·거래정지 제외). 국내는 그 시점 상장 종목이라 이후 상폐 종목 포함. 미국은 과거 시점 목록 소스가 없어 현재 목록 유지(한계). `pykrx_source.get_market_cap_table`은 휴장일에 pykrx가 **전부 0인 표**를 주는 것을 실측으로 확인해 이를 건너뛴다 |
+| 2 | 타깃: 원래 다음날 수익률 + MSE → 같은 날 시장 평균이 라벨 분산의 9~25%, 모델은 평균 드리프트만 학습(예측 74% 양수) | 날짜 고정효과 분산 비율, 예측 분포 | `dataset.cross_sectional_demean`(같은 날·같은 지역 평균 차감)을 학습·검증 타깃 기본값으로(`ML_TRAIN_TARGET=demeaned`). 평가는 원래 레이블. `filter_regions` + `ML_TRAIN_REGIONS`로 KR/US 분리 학습 가능 |
+| 3 | Mamba가 선형보다 못함, 저장 가중치가 마지막 epoch | ridge vs Mamba IC, val loss 최저 58 vs 저장 100 | `ml_predictor/baseline.py`(ridge, 같은 전처리) 리포트에 항상 병기 + **validation IC로 판정**("Mamba가 선형 기준선을 이기지 못함 → 배포하지 말 것"). `training.train`은 매 epoch val IC를 재고 **최고 val IC epoch 가중치**를 저장(history CSV `val_ic` 열) |
+| 4 | 평가가 MSE·비용 전 스프레드 | — | `evaluation.daily_rank_ic`에 상위·하위 20% **회전율**과 **왕복비용 차감 스프레드**(`ML_EVAL_COST_KR` 0.25%, `ML_EVAL_COST_US` 0.05% — 가정값). 리포트는 지역별 |
+| 5 | 미국 극단 라벨(MRNA +177% 등) 데이터 오류 의심 | 미국 \|r\|>40% 28건 전수 점검: **모두 당일 거래량 3배 이상(최대 37배)** — 실제 사건 | 수정 없음. 기존 ±20% 학습 레이블 자르기로 충분(진단 때의 "오류 가능성" 언급은 틀렸음) |
+
+**새 리포트로 본 기존 모델(재학습 전, 기존 데이터셋, `ML_TRAIN_EVAL_ONLY`)**
+
+| 구간 | Mamba IC | ridge IC (시장평균 차감 타깃) | ridge 비용 차감 스프레드 |
+|---|---|---|---|
+| validation KR | −0.003 | +0.023 (t=2.1) | −0.19%/일 (비용 전 −0.03%) |
+| validation US | +0.006 | +0.024 (t=1.8) | +0.16%/일 |
+| test KR | −0.025 | **+0.045 (t=4.0)** | +0.08%/일 (비용 전 +0.25%, 회전율 34%) |
+| test US | +0.002 | +0.003 | +0.07%/일 |
+
+- 판정: 두 지역 모두 Mamba가 선형 기준선을 못 이김 → 배포 금지.
+- ridge도 확정이 아니다: 국내 IC는 두 구간 모두 양수지만 validation에서는 상위−하위 스프레드가 음수(꼬리 종목이 순위와 반대로 움직임), 미국 IC는 test에서 사라진다. 단기 반전(persistence)은 회전율 77%라 비용 차감 후 크게 음수.
+- 아직 안 한 일: 새 유니버스로 **데이터 재수집**(KOSPI·KOSDAQ 각 200 + 미국 400, 국내 펀더멘털 조회 때문에 수 시간), 재학습(타깃 demeaned, 지역별), 그 결과로 Mamba 유지 여부 결정.
