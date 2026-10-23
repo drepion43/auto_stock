@@ -258,3 +258,13 @@ def test_m8_flags_stale_price_presented_as_now():
     assert "stale_as_now" in result.details["violations"]
     ok = check_risk_and_time("2026-10-09 종가 기준 71,200원입니다.", (stale,), TODAY)
     assert "stale_as_now" not in ok.details["violations"]
+
+
+def test_negative_excess_ml_prediction_warns_as_underperformance_not_decline():
+    excess = _rec(
+        "analyze_ml_prediction",
+        {"available": True, "prediction": {"predicted_return": -0.004, "return_basis": "excess_vs_region_mean"}},
+    )
+    absolute = _rec("analyze_ml_prediction", {"available": True, "prediction": {"predicted_return": -0.004}})
+    assert "지역 평균 대비 열위" in extract_warnings((excess,), TODAY)[0]
+    assert extract_warnings((absolute,), TODAY)[0].startswith("ML 예측 수익률 음수")

@@ -61,7 +61,7 @@ from auto_stock.llm_chart_analyst.analyst import analyze as analyze_chart
 from auto_stock.llm_chart_analyst.models import ChartPatternReader
 from auto_stock.ml_predictor.fundamentals import build_fundamentals_by_date
 from auto_stock.ml_predictor.models import ModelBundle
-from auto_stock.ml_predictor.predictor import ML_LOOKBACK_DAYS, predict
+from auto_stock.ml_predictor.predictor import ML_LOOKBACK_DAYS, describe_prediction, predict
 from auto_stock.news_disclosure.analyst import analyze as analyze_disclosures
 from auto_stock.news_disclosure.credentials import DISCLOSURE_LOOKBACK_DAYS
 from auto_stock.news_disclosure.models import DisclosureReader
@@ -171,10 +171,7 @@ def tool_analyze_ml_prediction(context: ChatToolContext, ticker: str, market: st
         return {"available": False, "error": str(exc)}
     if prediction is None:
         return {"available": True, "prediction": None}
-    return {
-        "available": True,
-        "prediction": {"predicted_return": prediction.predicted_return},
-    }
+    return {"available": True, "prediction": describe_prediction(prediction)}
 
 
 def tool_analyze_chart_pattern(context: ChatToolContext, ticker: str, market: str) -> dict:

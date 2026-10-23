@@ -23,6 +23,7 @@ from langchain_core.tools import tool as langchain_tool
 
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.stock_analyst import run_stock_analyst
+from auto_stock.ml_predictor.predictor import describe_prediction
 from auto_stock.orchestrator.deep_scan import TickerJudgment
 from auto_stock.recommendation_synthesis.credentials import (
     RECOMMENDATION_SYNTHESIS_LLM_CALL_ESTIMATE,
@@ -36,7 +37,8 @@ _PROVENANCE_LABEL = "서브에이전트 자율 조사 결과"
 _SYSTEM_PROMPT = (
     "당신은 여러 종목의 분석 결과(judgment)를 비교해 최종 추천 순위를 매기는 "
     "리서치 애널리스트다. 각 judgment는 규칙엔진 후보(rule_candidate)/ML 예측 수익률"
-    "(ml_prediction)/종목별 딥다이브 결과(stock_analyst_result — summary, outlook, "
+    "(ml_prediction — return_basis가 excess_vs_region_mean이면 절대 등락이 아니라 지역 평균 대비 "
+    "초과 수익률이니 interpretation대로 읽어라)/종목별 딥다이브 결과(stock_analyst_result — summary, outlook, "
     "signals_used 포함)로 구성된다. 이 정보를 종합해 상위 top_n개 종목만 순위(rank)와 "
     "구체적 근거(summary)와 함께 반환하라. 두 종목의 우열을 주어진 신호만으로 확신할 "
     "수 없을 때만 reinvestigate_ticker(ticker, market)로 그 종목을 다시 조사하라 — "
@@ -83,7 +85,7 @@ def _judgment_to_payload(judgment: TickerJudgment) -> dict:
             else None
         ),
         "ml_prediction": (
-            {"predicted_return": judgment.ml_prediction.predicted_return}
+            describe_prediction(judgment.ml_prediction)
             if judgment.ml_prediction is not None
             else None
         ),

@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS
-from auto_stock.ml_predictor.models import ModelBundle, ModelMetadata
+from auto_stock.ml_predictor.models import TARGET_RAW, ModelBundle, ModelMetadata
 
 DEFAULT_MODEL_DIR = Path("models/ml_predictor")
 
@@ -85,5 +85,6 @@ def load_model(model_dir: Path | str = DEFAULT_MODEL_DIR) -> ModelBundle:
         test_r2=raw["test_r2"],
         model_config=raw["model_config"],
         trained_at=datetime.fromisoformat(raw["trained_at"]),
+        target=raw.get("target", TARGET_RAW),
     )
     return ModelBundle(estimator=state_dict, metadata=metadata)

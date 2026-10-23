@@ -78,13 +78,18 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="analyze_ml_prediction",
         description=(
-            "학습된 ML 분류 모델의 향후 상승확률 예측과 주요 기여 피처를 조회한다(백테스트 검증 전 "
-            "보조 지표). 해당 시장에 학습된 모델 아티팩트가 없거나 데이터가 부족하면 prediction이 "
-            "null이다."
+            "학습된 ML 회귀 모델의 다음 거래일 수익률 예측을 조회한다(백테스트 검증 전 보조 지표). "
+            "prediction.return_basis가 excess_vs_region_mean이면 predicted_return은 주가 등락(절대 "
+            "수익률)이 아니라 같은 날 같은 지역 종목 평균 대비 초과 수익률이다 — prediction.interpretation"
+            "대로 설명할 것. as_of는 예측 기준일(그날 종가까지 반영). 학습된 모델 아티팩트가 없거나 "
+            "데이터가 부족하면 prediction이 null이다."
         ),
         args_model=TickerMarketArgs,
         fn_name="tool_analyze_ml_prediction",
-        subagent_description="ML 분류 모델의 상승확률 예측을 조회한다.",
+        subagent_description=(
+            "ML 회귀 모델의 다음 거래일 수익률 예측을 조회한다 — return_basis에 따라 절대 수익률 또는 "
+            "지역 평균 대비 초과 수익률."
+        ),
     ),
     ToolSpec(
         name="analyze_chart_pattern",

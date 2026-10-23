@@ -17,7 +17,13 @@ from auto_stock.data.market_routing import KRX_MARKETS
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.features import FEATURE_NAMES, build_feature_vectors
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS, forward_returns
-from auto_stock.ml_predictor.models import LabeledSample, SequenceDataset, SequenceDatasetSplit, TickerSequence
+from auto_stock.ml_predictor.models import (
+    FeatureVector,
+    LabeledSample,
+    SequenceDataset,
+    SequenceDatasetSplit,
+    TickerSequence,
+)
 
 
 def build_ticker_sequence(
@@ -43,6 +49,15 @@ def build_ticker_sequence(
 
     record = records[0]
     return TickerSequence(ticker=record.ticker, market=record.market, samples=samples)
+
+
+def build_inference_features(
+    records: list[OHLCVRecord], fundamentals_by_date: dict[date, dict] | None = None
+) -> list[FeatureVector]:
+    """추론 입력 — 워밍업만 빼고 마지막 날까지 전부. `build_ticker_sequence`는 레이블(다음날 수익률)이 없는
+    마지막 행을 버리므로 추론에 쓰면 최신 피처가 빠져 하루 전 기준 예측이 된다. 그 마지막 행 외에는 학습
+    시퀀스와 같은 행이다(Mamba는 인과적이라 앞쪽 시점의 출력은 뒤 행 유무와 무관하다)."""
+    return [vector for vector in build_feature_vectors(records, fundamentals_by_date) if vector is not None]
 
 
 def build_sequence_dataset(

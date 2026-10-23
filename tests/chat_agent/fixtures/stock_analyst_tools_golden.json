@@ -6,7 +6,7 @@
   },
   {
     "name": "analyze_ml_prediction",
-    "description": "ML 분류 모델의 상승확률 예측을 조회한다.",
+    "description": "ML 회귀 모델의 다음 거래일 수익률 예측을 조회한다 — return_basis에 따라 절대 수익률 또는 지역 평균 대비 초과 수익률.",
     "args": {}
   },
   {

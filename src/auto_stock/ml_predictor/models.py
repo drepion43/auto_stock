@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+# 학습 타깃(= 추론값의 의미). raw = 다음 거래일 절대 수익률 (close[t+1]-close[t])/close[t],
+# demeaned = 그 값에서 같은 날·같은 지역(KR/US) 학습 종목 평균을 뺀 초과 수익률(dataset.cross_sectional_demean).
+TARGET_RAW = "raw"
+TARGET_DEMEANED = "demeaned"
+TRAINING_TARGETS = (TARGET_DEMEANED, TARGET_RAW)
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureVector:
@@ -80,6 +86,8 @@ class ModelMetadata:
     test_r2: float
     model_config: dict[str, int]  # MambaRegressor 재구성에 필요한 하이퍼파라미터(in_dim/hidden_dim/n_layers)
     trained_at: datetime
+    # 이 필드가 생기기 전(2026-10-23 이전) 아티팩트는 모두 raw 타깃으로 학습됐다.
+    target: str = TARGET_RAW
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,5 +102,6 @@ class ModelBundle:
 class MLPrediction:
     ticker: str
     market: str
-    date: date
-    predicted_return: float  # 다음 거래일 예측 수익률(음수 가능), sigmoid로 유사-확률화하지 않음
+    date: date  # 마지막 입력 피처의 날짜 — 이 날 종가까지 보고 다음 거래일을 예측한다
+    predicted_return: float  # 다음 거래일 예측 수익률(음수 가능), 의미는 target에 따른다(절대 vs 지역 평균 대비)
+    target: str = TARGET_RAW

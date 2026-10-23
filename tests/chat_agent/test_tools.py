@@ -23,6 +23,7 @@ from auto_stock.chat_agent.tools import (
 )
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.llm_chart_analyst.models import ChartAnalysis
+from auto_stock.ml_predictor.models import TARGET_DEMEANED, MLPrediction
 from auto_stock.news_disclosure.models import DisclosureAnalysis
 from auto_stock.news_sentiment.models import NewsSentimentAnalysis
 from auto_stock.risk_sizing.models import AccountState, SizingSuggestion
@@ -91,15 +92,19 @@ def test_tool_analyze_ml_prediction_returns_prediction(mocker):
     (사용자 결정 — market/종목별 모델 분리 안 함)."""
     mocker.patch("auto_stock.chat_agent.tools.get_ohlcv", return_value=["fake-record"])
     mocker.patch("auto_stock.chat_agent.tools.build_fundamentals_by_date", return_value=None)
-    prediction = mocker.Mock(predicted_return=0.012)
+    prediction = MLPrediction(
+        ticker="005930", market="KOSPI", date=date(2026, 10, 22), predicted_return=0.012, target=TARGET_DEMEANED
+    )
     mocker.patch("auto_stock.chat_agent.tools.predict", return_value=prediction)
 
     result = tool_analyze_ml_prediction(_context(ml_model=object()), "005930", "KOSPI")
 
-    assert result == {
-        "available": True,
-        "prediction": {"predicted_return": 0.012},
-    }
+    # 값만 넘기면 LLM이 지역 평균 대비 초과 수익률을 절대 등락으로 읽는다 — 기준일·의미를 함께 싣는다.
+    assert result["available"] is True
+    assert result["prediction"]["predicted_return"] == 0.012
+    assert result["prediction"]["return_basis"] == "excess_vs_region_mean"
+    assert result["prediction"]["as_of"] == "2026-10-22"
+    assert "절대" in result["prediction"]["interpretation"]
 
 
 def test_tool_analyze_ml_prediction_unavailable_when_no_model():

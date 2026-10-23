@@ -23,6 +23,7 @@ from auto_stock.ml_predictor.models import (
     EpochRecord,
     ModelBundle,
     ModelMetadata,
+    TARGET_RAW,
     SequenceDataset,
     SequenceDatasetSplit,
 )
@@ -249,6 +250,7 @@ def train(
     grad_clip: float | None = DEFAULT_GRAD_CLIP,
     feature_clip_sigma: float = DEFAULT_FEATURE_CLIP_SIGMA,
     select_by_val_ic: bool = True,
+    target: str = TARGET_RAW,  # split 레이블이 어떤 타깃인지 — 변환은 호출부 몫, 여기선 메타데이터에 기록만
 ) -> ModelBundle:
     """통합(unified) 단일 모델 학습 — market/종목별로 모델을 나누지 않는다(사용자 결정).
     `split.train.sequences`를 종목 단위로 미니배치로 묶어 PyTorch epoch 루프를 돈다.
@@ -328,6 +330,7 @@ def train(
         test_r2=metrics["r2"],
         model_config={"in_dim": in_dim, "hidden_dim": hidden_dim, "n_layers": n_layers},
         trained_at=datetime.now(),
+        target=target,
     )
     # 추론은 CPU 전용 환경에서도 돌아야 하므로 GPU 학습이어도 CPU 텐서로 저장한다.
     cpu_state_dict = {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()}

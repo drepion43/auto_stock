@@ -84,3 +84,21 @@ def test_load_model_round_trips_estimator_and_metadata(tmp_path):
 def test_load_model_raises_helpful_error_when_artifact_missing(tmp_path):
     with pytest.raises(ModelArtifactError, match="scripts/train_ml_model.py"):
         load_model(model_dir=tmp_path)
+
+
+def test_training_target_round_trips_through_metadata(tmp_path):
+    bundle = ModelBundle(estimator=MambaRegressor(in_dim=2, hidden_dim=4, n_layers=1).state_dict(), metadata=_metadata(target="demeaned"))
+    save_model(bundle, model_dir=tmp_path)
+
+    assert load_model(model_dir=tmp_path).metadata.target == "demeaned"
+
+
+def test_metadata_without_target_loads_as_raw(tmp_path):
+    # target 필드 도입 전 아티팩트는 모두 원래 다음날 수익률(raw)로 학습됐다.
+    path = save_model(_fitted_bundle(), model_dir=tmp_path)
+    metadata_path = path.with_suffix(".metadata.json")
+    raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    del raw["target"]
+    metadata_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert load_model(model_dir=tmp_path).metadata.target == "raw"

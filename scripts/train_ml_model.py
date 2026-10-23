@@ -69,7 +69,13 @@ from auto_stock.ml_predictor.evaluation import (
     split_by_region,
     summarize_predictions,
 )
-from auto_stock.ml_predictor.models import SequenceDataset, SequenceDatasetSplit
+from auto_stock.ml_predictor.models import (
+    TARGET_DEMEANED,
+    TARGET_RAW,
+    TRAINING_TARGETS,
+    SequenceDataset,
+    SequenceDatasetSplit,
+)
 from auto_stock.ml_predictor.predictor import ML_AGREE_RETURN_THRESHOLD, build_model
 from auto_stock.ml_predictor.reporting import (
     best_val_epoch,
@@ -111,7 +117,7 @@ EVAL_ONLY = os.environ.get("ML_TRAIN_EVAL_ONLY", "").strip() == "1"
 # EVAL_ONLY에서 평가할 모델 폴더(기본 models/ml_predictor). 보관 모델 비교용: models/ml_predictor/archive/<이름>
 EVAL_MODEL_DIR = os.environ.get("ML_TRAIN_MODEL_DIR")
 # 학습 타깃(2026-10-22 진단): demeaned = 같은 날·같은 지역 평균을 뺀 다음날 수익률(기본), raw = 원래 다음날 수익률.
-TARGET = os.environ.get("ML_TRAIN_TARGET", "demeaned").strip().lower()
+TARGET = os.environ.get("ML_TRAIN_TARGET", TARGET_DEMEANED).strip().lower()
 # 학습·평가할 지역(KR=KOSPI+KOSDAQ, US=NASDAQ+NYSE). 진단상 신호는 KR에만 있었다 — KR만 따로 학습해 비교할 수 있다.
 REGIONS = frozenset(r.strip().upper() for r in os.environ.get("ML_TRAIN_REGIONS", "KR,US").split(",") if r.strip())
 # 순 스프레드용 왕복 거래비용(비율) — 가정값: 국내 = 매도 거래세 약 0.18% + 수수료·슬리피지, 미국 = 수수료·슬리피지.
@@ -153,7 +159,7 @@ def main() -> None:
         saved_path = save_dataset(dataset, DATASET_PATH)
         print(f"데이터셋 저장: {saved_path} (다음 실행부터 재수집 없이 재사용)")
 
-    if TARGET not in ("demeaned", "raw") or not REGIONS <= {"KR", "US"} or not REGIONS:
+    if TARGET not in TRAINING_TARGETS or not REGIONS <= {"KR", "US"} or not REGIONS:
         raise SystemExit(f"ML_TRAIN_TARGET must be demeaned|raw and ML_TRAIN_REGIONS a subset of KR,US (got {TARGET!r}, {sorted(REGIONS)})")
     dataset = filter_regions(dataset, REGIONS)
     print(f"[설정] 타깃={TARGET} 지역={','.join(sorted(REGIONS))} 왕복비용={ROUND_TRIP_COST}")
@@ -192,6 +198,7 @@ def main() -> None:
         batch_size=BATCH_SIZE,
         device=str(device),
         log_every=LOG_EVERY,
+        target=TARGET,  # 추론 결과를 절대 수익률로 읽을지, 지역 평균 대비 초과 수익률로 읽을지
     )
 
     _print_evaluation_report(build_model(bundle).to(device), dataset, split)
@@ -208,7 +215,7 @@ def main() -> None:
 def training_split(split: SequenceDatasetSplit) -> SequenceDatasetSplit:
     """학습 타깃 변환은 train·validation에만 — test는 원래 레이블로 평가한다(날짜별 순위 IC는 같은 지역 안에서
     상수를 빼도 변하지 않고, 스프레드는 실제 수익률로 재야 하므로)."""
-    if TARGET == "raw":
+    if TARGET == TARGET_RAW:
         return split
     return SequenceDatasetSplit(
         train=cross_sectional_demean(split.train),

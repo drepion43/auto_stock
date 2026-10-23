@@ -34,6 +34,8 @@ _MAX_DERIVED_VALUES = 60  # 변화율 재계산 시 도구 결과 1건의 수치
 LABEL_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("예측 수익률", ("predicted_return",)),
     ("예상 수익률", ("predicted_return",)),
+    ("초과 수익률", ("predicted_return",)),
+    ("초과수익률", ("predicted_return",)),
     ("전일 대비", ("change_pct",)),
     ("전일대비", ("change_pct",)),
     ("변화율", ("change_pct",)),
