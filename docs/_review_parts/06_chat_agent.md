@@ -5,6 +5,8 @@
 
 전체 코드베이스에서 가장 복잡한 조율 로직을 담은 모듈이다. 신호 소스(#1 규칙엔진, #2 ML예측, #3 LLM차트분석, #4 공시/뉴스감성, 기술지표·수급·지수·ETF)와 #5 리스크 사이징을 메인 대화 에이전트에게 **도구 16개**로 노출하고, 사용자가 자유 질의하면 모델이 필요한 도구만 골라 호출해 종합 답변한다.
 
+> **갱신(2026-10-24)**: 위임 방식이 두 가지다(`CHAT_AGENT_STOCK_ANALYST_MODE`). **기본 `subagent`**: stock_analyst·find_related_companies·analyze_etf_composition을 메인 `create_deep_agent(subagents=[...])`에 등록하고 `task`로 위임(`main_subagents.py`, 위임 정책 `SubagentTaskRouter`/`*TaskPolicy`, 서브에이전트 가드 `SubagentToolGuard`). 메인에 직접 보이는 도구는 resolve_ticker·get_price_data·스캔/섹터 추천·get_index_quote + task. **`tool`(롤백)**: 아래 설명대로 16개 도구 전체, 서브에이전트는 agent-as-tool. 상세 `docs/design/stock-analyst-subagent-migration.md` §12.
+
 **메인 루프는 두 가지다.**
 - **기본값(2026-10-12~): `deep_loop.py`** — `deepagents.create_deep_agent(model, tools=as_langchain_tools(...), system_prompt=SYSTEM_PROMPT, backend=StateBackend(), middleware=[InvalidToolCallFeedback, ModelCallLimitMiddleware, SessionCallCounter, TurnEvents, ExposureGuard, StrictToolSchemas, ToolCallGuard, FilesystemMiddleware])`. 미들웨어는 `agent_middleware.py`(+ langchain 내장 `ModelCallLimitMiddleware`, deepagents `FilesystemMiddleware`). 설계·결정(D1–D19)은 `docs/design/main-agent-migration-plan.md`.
 - **롤백용: `loop.py`** — OpenAI Responses API 함수콜링을 수동 while 루프로 돌리는 구 루프. `CHAT_AGENT_LOOP=legacy`일 때만 쓰며 ~2026-10-26 제거 예정(D12).

@@ -35,6 +35,13 @@ from auto_stock.chat_agent.tools import ChatToolContext
 REGISTRY_NAMES = [s.name for s in TOOL_SPECS]
 
 
+@pytest.fixture(autouse=True)
+def _tool_mode(monkeypatch):
+    # 이 파일은 메인 루프 계약(도구 노출·직렬화·폴백 등)을 전체 레지스트리(tool 모드, 롤백 경로)로 검증한다.
+    # 기본값인 subagent 모드는 test_stock_analyst_subagent.py / test_main_subagents.py가 다룬다.
+    monkeypatch.setenv("CHAT_AGENT_STOCK_ANALYST_MODE", "tool")
+
+
 class ScriptedModel(BaseChatModel):
     script: list = Field(default_factory=list)
     inputs: list = Field(default_factory=list)

@@ -19,7 +19,13 @@ from typing import Any
 
 from langchain.agents.middleware import ModelCallLimitMiddleware
 
-from auto_stock.chat_agent.agent_middleware import EventCallback, SubagentToolGuard, parse_delegation_target
+from auto_stock.chat_agent.agent_middleware import (
+    EventCallback,
+    SubagentToolGuard,
+    TaskAdmission,
+    parse_delegation_target,
+    refuse,
+)
 from auto_stock.chat_agent.credentials import STOCK_ANALYST_LLM_CALL_ESTIMATE, STOCK_ANALYST_RECURSION_LIMIT
 from auto_stock.chat_agent.models import QueryBudget
 from auto_stock.chat_agent.stock_analyst import PROVENANCE_LABEL, SYSTEM_PROMPT, StockAnalystResult
@@ -40,10 +46,11 @@ _TOOL_ARGS_RULE = (
     " 각 신호 도구는 ticker·market 인자를 받는다 — 위임문 첫 줄 '대상:'의 값을 그대로 넣어라. 다른 종목을 넣으면 거부된다."
 )
 
-_FORMAT_ERROR = (
+# 다른 서브에이전트 정책(main_subagents.py)도 같은 위임문 형식·같은 문구를 쓴다.
+DELEGATION_FORMAT_ERROR = (
     "위임문 첫 줄은 '대상: <ticker> <market>'(KOSPI/KOSDAQ/NASDAQ/NYSE) 형식이어야 합니다 — resolve_ticker로 확정한 값을 쓰세요"
 )
-_BUDGET_ERROR = "이번 대화 턴의 LLM 호출 예산을 모두 사용했습니다"
+BUDGET_ERROR = "이번 대화 턴의 LLM 호출 예산을 모두 사용했습니다"
 _JUDGMENT_KEYS = ("summary", "outlook", "signals_used")
 
 
@@ -66,22 +73,21 @@ def stock_analyst_spec(context: ChatToolContext, model: Any, on_event: EventCall
 
 
 class StockAnalystTaskPolicy:
-    """메인 `ToolCallGuard`가 `task` 호출에 적용하는 정책(agent_middleware.TaskPolicy)."""
+    """메인 `ToolCallGuard`가 `task(subagent_type="stock_analyst")`에 적용하는 정책(agent_middleware.TaskPolicy) —
+    종류 분기는 `SubagentTaskRouter`가 한다."""
 
     def __init__(self, budget: QueryBudget) -> None:
         self._budget = budget
 
-    def check(self, arguments: dict) -> dict | None:
-        if arguments.get("subagent_type") != SUBAGENT_NAME:
-            return {"available": False, "error": f"사용할 수 없는 서브에이전트입니다: {arguments.get('subagent_type')}"}
+    def admit(self, arguments: dict) -> TaskAdmission:
         if parse_delegation_target(arguments.get("description", "")) is None:
-            return {"available": False, "error": _FORMAT_ERROR}
+            return refuse(DELEGATION_FORMAT_ERROR)
         # 기존 run_stock_analyst와 같은 선차감 — 서브에이전트 내부 호출은 메인 호출 상한에 합산되지 않는다.
         if not self._budget.try_consume_llm_calls(STOCK_ANALYST_LLM_CALL_ESTIMATE):
-            return {"available": False, "error": _BUDGET_ERROR}
-        return None
+            return refuse(BUDGET_ERROR)
+        return TaskAdmission(arguments=arguments)
 
-    def wrap(self, raw: str) -> dict:
+    def wrap(self, arguments: dict, raw: str) -> dict:
         """서브에이전트 결과(구조화 출력 JSON) → 기존 agent-as-tool 결과와 같은 모양 + 코드가 붙이는 출처 라벨."""
         try:
             data = json.loads(raw)

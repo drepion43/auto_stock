@@ -122,11 +122,15 @@ SYSTEM_PROMPT = (
 # CHAT_AGENT_STOCK_ANALYST_MODE=subagent에서만 SYSTEM_PROMPT 뒤에 붙는다(docs/design/stock-analyst-subagent-migration.md,
 # 결정 D1 안 A). 위 본문이 언급하는 신호 도구(analyze_*)·stock_analyst 도구는 이 모드에서 메인에 없다 — 이 절이 우선한다.
 SUBAGENT_MODE_ADDENDUM = (
-    "\n\n## 종목 분석 위임(이 절이 위의 도구 안내보다 우선한다)\n"
-    "이 대화에서는 규칙엔진·ML예측·차트패턴·기술지표·수급·공시·뉴스감성·포지션사이징 신호 도구와 stock_analyst 도구를 "
-    "직접 쓸 수 없다. 종목 하나에 대한 분석·판단이 필요하면(신호 하나만 묻는 질의 포함) resolve_ticker로 종목을 확정한 뒤 "
-    "task 도구로 stock_analyst 서브에이전트에 위임하라 — subagent_type은 'stock_analyst', description은 첫 줄 "
-    "'대상: <ticker> <market>', 둘째 줄 '요청: <사용자가 알고 싶은 것>'. 한 번에 한 종목이며, 관련기업 딥다이브처럼 여러 "
-    "종목이면 종목마다 위임하라. 결과의 provenance('서브에이전트 자율 조사 결과')를 답변에서 밝혀라. 가격 조회·지수·스캔/섹터 "
-    "추천·관련기업 탐색·ETF 분석은 지금처럼 각 도구를 직접 쓴다."
+    "\n\n## 서브에이전트 위임(이 절이 위의 도구 안내보다 우선한다)\n"
+    "이 대화에서는 규칙엔진·ML예측·차트패턴·기술지표·수급·공시·뉴스감성·포지션사이징 신호 도구와 stock_analyst·"
+    "find_related_companies·analyze_etf_composition 도구를 직접 쓸 수 없다. 이 일들은 task 도구로 같은 이름의 "
+    "서브에이전트에 위임한다 — subagent_type은 'stock_analyst'(종목 하나의 분석·판단, 신호 하나만 묻는 질의 포함), "
+    "'find_related_companies'(관련기업·경쟁사·계열사 탐색), 'analyze_etf_composition'(ETF가 왜 움직였는지) 중 하나다. "
+    "먼저 resolve_ticker로 종목(ETF 포함)을 확정하고, description은 첫 줄 '대상: <ticker> <market>', 둘째 줄 "
+    "'요청: <사용자가 알고 싶은 것>'으로 쓴다. 위임 1건은 한 종목이다. 관련기업 질의라면 find_related_companies에 먼저 "
+    "위임하고, 반환된 각 관련기업(ticker가 있는 것)과 원래 종목 모두를 stock_analyst에 하나씩 위임해 딥다이브하라. "
+    "위임 결과는 위의 같은 이름 도구 결과와 같은 모양이다 — 출처 표기 규칙(서브에이전트 자율 조사 결과, confirmed/"
+    "inferred 구분, ETF 구성종목 집계 분석·holdings·data_as_of_note)을 그대로 지켜라. 가격 조회·지수·스캔/섹터 추천은 "
+    "지금처럼 각 도구를 직접 쓴다."
 )

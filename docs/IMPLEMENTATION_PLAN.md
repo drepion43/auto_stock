@@ -116,7 +116,7 @@ MVP-0 + 신호 소스 확장(#2~#4)이 전부 **일방향 배치 파이프라인
 핵심 결정 요약:
 - 메인 대화 에이전트는 LangGraph/`deepagents`를 쓰지 않는 네이티브 tool-calling 루프
 - 기존 4개 분석 함수(#1~#4)를 배치 파이프라인과 동일하게 plain tool로 재사용
-- 예외적으로 `find_related_companies`(관련기업 탐색)와 `stock_analyst(ticker)`(종목별 딥다이브, 자율 추가조사 포함)만 `deepagents` 서브에이전트로 구현(agent-as-tool) — 실사용 근거 확인 후(로드맵 E단계) 착수
+- 예외적으로 `find_related_companies`(관련기업 탐색)와 `stock_analyst(ticker)`(종목별 딥다이브, 자율 추가조사 포함)만 `deepagents` 서브에이전트로 구현(agent-as-tool) — 실사용 근거 확인 후(로드맵 E단계) 착수 *(갱신 2026-10-24: 지금은 ETF 분석까지 3개가 메인 `subagents=`로 등록돼 `task`로 위임된다 — `docs/design/stock-analyst-subagent-migration.md` §12)*
 
 **구현 상태(2026-09-06, Stage A~E)**: 관련기업 자율 딥다이브 + 6번째 매수/매도 사이징 tool 포함 구현 완료, `scripts/chat_cli.py` CLI 진입점까지 배선(`src/auto_stock/chat_agent/`, 총 9개 tool). 3중 병렬 리뷰(code/security/risk-policy) 발견사항 전부 TDD로 수정 — 상세는 `chat-agent-plan.md`의 "Stage E 구현 결과" 섹션 참고(이 파일은 현재 `docs/design/`에서 확인되지 않는 stale 포인터임, `docs/_review_parts/06_chat_agent.md` 참고 경고 참조). 실계좌 연결/자동매매/백그라운드 에이전트 확장 시 오케스트레이터 재검토 기준은 `docs/design/multi-asset-automation-roadmap.md`에 별도 기록(이 파일도 동일하게 미확인).
 

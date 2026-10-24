@@ -92,15 +92,17 @@ MAIN_AGENT_COMPACT_KEEP_TURNS = 2  # 압축 시 남기는 최근 (질문, 답변
 MAX_BATCH_TRIGGERS_PER_TURN = 1
 
 LOOP_MODES = ("legacy", "deep")
-# stock_analyst 연결 방식(docs/design/stock-analyst-subagent-migration.md): tool = 기존 agent-as-tool(기본),
-# subagent = 메인 에이전트의 subagents=에 등록하고 신호 도구 8개를 서브에이전트로 옮긴다(결정 D1 안 A).
+# 메인 에이전트의 위임 방식(docs/design/stock-analyst-subagent-migration.md): subagent = stock_analyst·관련기업·ETF
+# 분석을 메인의 subagents=로 등록하고 task로 위임(기본, 2026-10-24 사용자 결정 — 이름은 처음 옮긴 stock_analyst에서
+# 왔다), tool = 기존 agent-as-tool(롤백용).
 STOCK_ANALYST_MODES = ("tool", "subagent")
+DEFAULT_STOCK_ANALYST_MODE = "subagent"
 
 
 def load_stock_analyst_mode() -> str:
-    """`CHAT_AGENT_STOCK_ANALYST_MODE` 기능 플래그 — 평가(설계 §8) 통과 전까지 기본은 `tool`. 알 수 없는 값은 실패."""
+    """`CHAT_AGENT_STOCK_ANALYST_MODE` 기능 플래그 — 기본 `subagent`, `tool`로 즉시 롤백. 알 수 없는 값은 실패."""
     load_dotenv()
-    mode = os.environ.get("CHAT_AGENT_STOCK_ANALYST_MODE", "tool").strip().lower()
+    mode = os.environ.get("CHAT_AGENT_STOCK_ANALYST_MODE", DEFAULT_STOCK_ANALYST_MODE).strip().lower()
     if mode not in STOCK_ANALYST_MODES:
         raise ValueError(f"CHAT_AGENT_STOCK_ANALYST_MODE must be one of {STOCK_ANALYST_MODES}, got {mode!r}")
     return mode

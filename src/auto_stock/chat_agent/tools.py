@@ -447,13 +447,21 @@ def tool_find_related_companies(context: ChatToolContext, ticker: str, market: s
     오귀속을 피한다(예: DART 이름해석 실패를 "서브에이전트 실패"로 잘못 라벨링하지
     않음)."""
     try:
-        name = resolve_corp_name(ticker) if market in KRX_MARKETS else resolve_company_title(ticker)
+        name = resolve_company_name(ticker, market)
     except Exception as exc:
         return {"available": False, "error": str(exc)}
     if name is None:
-        return {"available": False, "error": "종목명을 확인할 수 없어 관련기업을 조사할 수 없습니다"}
+        return {"available": False, "error": COMPANY_NAME_UNRESOLVED_ERROR}
 
     return run_find_related_companies(context.budget, context.agent_model, ticker, market, name)
+
+
+COMPANY_NAME_UNRESOLVED_ERROR = "종목명을 확인할 수 없어 관련기업을 조사할 수 없습니다"
+
+
+def resolve_company_name(ticker: str, market: str) -> str | None:
+    """관련기업 조사용 공식 회사명 — 국내는 DART, 미국은 EDGAR(main_subagents의 위임 정책도 같은 해석을 쓴다)."""
+    return resolve_corp_name(ticker) if market in KRX_MARKETS else resolve_company_title(ticker)
 
 
 def _bind_stock_analyst_tools(context: ChatToolContext, ticker: str, market: str) -> list:
@@ -520,12 +528,16 @@ def tool_get_sector_recommendations(context: ChatToolContext, query: str, market
 _ETF_HOLDING_CANDIDATE_POOL = 50  # 이름 필터링 전 후보 수 — 분석 대상(최대 10)보다 넉넉히
 
 
-def _affordable_etf_holdings(budget: QueryBudget) -> int:
+def affordable_etf_holdings(budget: QueryBudget) -> int:
     """남은 턴 예산에서 종합 단계 몫(`ETF_COMPOSITION_LLM_CALL_ESTIMATE`)을 먼저 떼어두고,
     나머지로 감당 가능한 구성종목 수(종목당 공시+뉴스 최대 2건). 이렇게 해야 신호만 모으고
-    종합은 예산 부족으로 실패하는 낭비가 생기지 않는다."""
+    종합은 예산 부족으로 실패하는 낭비가 생기지 않는다. 0이면 ETF 분석을 시작하지 않는다
+    (서브에이전트 위임 정책도 같은 기준으로 거부한다)."""
     remaining = budget.max_llm_calls - budget.llm_calls_made - ETF_COMPOSITION_LLM_CALL_ESTIMATE
     return max(0, min(ETF_DEFAULT_TOP_N, remaining // ETF_HOLDING_LLM_CALLS_PER_HOLDING))
+
+
+_affordable_etf_holdings = affordable_etf_holdings  # 기존 테스트·호출부 호환
 
 
 def _collect_holding_signals(context: ChatToolContext, holding: tuple[str, float, str, str]) -> dict:
@@ -591,13 +603,28 @@ def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: 
     보존한다. 이름/티커를 확인할 수 없는 항목(현금/선물 등 비상장 구성요소, 또는
     미국 holding 이름이 EDGAR와 완전일치하지 않는 경우)은 공시·뉴스 신호가 존재할
     수 없으므로 건너뛴다."""
+    collected = collect_etf_holding_signals(context, ticker, market)
+    if not collected["available"] or collected["holdings"] is None:
+        return collected
+
+    result = run_etf_composition_synthesis(context.budget, context.agent_model, ticker, collected["holding_signals"])
+    if not result["available"]:
+        return result
+    return {**result, **{key: collected[key] for key in ("data_as_of_note", "holdings") if key in collected}}
+
+
+def collect_etf_holding_signals(context: ChatToolContext, ticker: str, market: str) -> dict:
+    """ETF 분석의 결정론적 수집 단계 — 비중 상위 구성종목과 각 종목의 공시·뉴스감성 신호(종합 LLM 호출 없음).
+    `tool_analyze_etf_composition`(agent-as-tool)과 `analyze_etf_composition` 서브에이전트의 수집 도구가 함께 쓴다.
+    반환: 실패면 `available=false`, ETF가 아니거나 holdings가 없으면 `holdings=None`, 그 외에는 `holdings`
+    (분석한 구성종목·비중) + `holding_signals`(종합 입력) + 미국이면 `data_as_of_note`."""
     if market not in (KRX_MARKETS | US_MARKETS):
         return {
             "available": False,
             "error": f"ETF 구성종목 분석은 국내(KOSPI/KOSDAQ) 또는 미국(NASDAQ/NYSE) ETF만 지원합니다: {market}",
         }
 
-    top_n = _affordable_etf_holdings(context.budget)
+    top_n = affordable_etf_holdings(context.budget)
     if top_n == 0:
         return {"available": False, "error": "이번 대화 턴의 LLM 호출 예산을 모두 사용했습니다"}
 
@@ -616,17 +643,14 @@ def tool_analyze_etf_composition(context: ChatToolContext, ticker: str, market: 
     with ThreadPoolExecutor(max_workers=ETF_HOLDING_MAX_WORKERS) as executor:
         payload = list(executor.map(lambda h: _collect_holding_signals(context, h), named))
 
-    result = run_etf_composition_synthesis(context.budget, context.agent_model, ticker, payload)
-    if not result["available"]:
-        return result
-    if market in US_MARKETS:
-        result = {**result, "data_as_of_note": _US_ETF_FRESHNESS_NOTE}
-    return {
-        **result,
-        "holdings": [
-            {"ticker": code, "name": name, "weight_pct": weight} for code, weight, name, _market in named
-        ],
+    collected = {
+        "available": True,
+        "holdings": [{"ticker": code, "name": name, "weight_pct": weight} for code, weight, name, _market in named],
+        "holding_signals": payload,
     }
+    if market in US_MARKETS:
+        collected["data_as_of_note"] = _US_ETF_FRESHNESS_NOTE
+    return collected
 
 
 def __getattr__(name: str):

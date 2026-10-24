@@ -72,17 +72,23 @@ class ToolCallSink:
 
 
 def _normalize_delegation(name: str, arguments: Any) -> tuple[str, Any]:
-    """subagent 모드(docs/design/stock-analyst-subagent-migration.md)의 `task(subagent_type="stock_analyst")` 위임을
-    tool 모드와 같은 `stock_analyst(ticker, market)` 호출로 기록한다 — 골든 기대 호출·LLM 생성 도구 분류·도구 설명이
-    두 모드에서 같게 적용되도록. 서브에이전트 내부 신호 도구 호출은 원래 이름 그대로 남는다."""
-    if name != "task" or not isinstance(arguments, dict) or arguments.get("subagent_type") != "stock_analyst":
+    """subagent 모드(docs/design/stock-analyst-subagent-migration.md)의 `task(subagent_type=X)` 위임을 tool 모드와 같은
+    `X(ticker, market)` 호출로 기록한다(X = stock_analyst/find_related_companies/analyze_etf_composition) — 골든 기대
+    호출·LLM 생성 도구 분류·도구 설명이 두 모드에서 같게 적용되도록. 서브에이전트 내부 도구 호출은 원래 이름 그대로 남는다."""
+    if name != "task" or not isinstance(arguments, dict) or arguments.get("subagent_type") not in _DELEGATED_TYPES:
         return name, arguments
+    delegated = arguments["subagent_type"]
     description = str(arguments.get("description", ""))
     target = parse_delegation_target(description)
     if target is None:
-        return "stock_analyst", {"raw": description}
+        return delegated, {"raw": description}
     request = "\n".join(line for line in description.splitlines()[1:] if line.strip())
-    return "stock_analyst", {"ticker": target[0], "market": target[1], "request": request}
+    return delegated, {"ticker": target[0], "market": target[1], "request": request}
+
+
+# main_subagents.SUBAGENT_NAMES와 같은 값 — 평가 패키지가 서브에이전트 조립 모듈(LLM·데이터 소스 의존)을 import하지
+# 않도록 리터럴로 둔다(테스트로 고정).
+_DELEGATED_TYPES = frozenset({"stock_analyst", "find_related_companies", "analyze_etf_composition"})
 
 
 def _dump(value: Any) -> str:

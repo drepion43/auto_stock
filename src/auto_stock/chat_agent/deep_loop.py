@@ -40,6 +40,7 @@ from auto_stock.chat_agent.agent_middleware import (
     SessionCallCounter,
     SessionLimitExceededError,
     StrictToolSchemas,
+    SubagentTaskRouter,
     ToolCallGuard,
     TurnEvents,
 )
@@ -57,7 +58,7 @@ from auto_stock.chat_agent.fallbacks import (
 )
 from auto_stock.chat_agent.models import LLMConfig, QueryBudget
 from auto_stock.chat_agent.prompt import SUBAGENT_MODE_ADDENDUM, SYSTEM_PROMPT
-from auto_stock.chat_agent.stock_analyst_subagent import StockAnalystTaskPolicy, stock_analyst_spec
+from auto_stock.chat_agent.main_subagents import build_main_subagents
 from auto_stock.chat_agent.tool_registry import as_langchain_tools, main_tool_specs
 from auto_stock.chat_agent.tools import ChatToolContext
 
@@ -94,7 +95,7 @@ class DeepChatSession:
     session_call_limit: int = MAIN_AGENT_SESSION_CALL_LIMIT
     input_token_limit: int = MAIN_AGENT_INPUT_TOKEN_LIMIT
     turn_lock: threading.Lock = field(default_factory=threading.Lock)
-    # subagent 모드에서 stock_analyst 서브에이전트가 쓸 모델 — None이면 기존과 같은 "openai:<agent_model>".
+    # subagent 모드에서 서브에이전트들(stock_analyst·관련기업·ETF)이 쓸 모델 — None이면 기존과 같은 "openai:<agent_model>".
     # 테스트·노출 점검이 가짜 모델을 넣는 자리다.
     subagent_model: Any = None
 
@@ -133,17 +134,21 @@ def _expected_tool_names() -> frozenset[str]:
     return _allowed_tool_names(load_stock_analyst_mode())
 
 
-def _subagent_kwargs(mode: str, session: DeepChatSession, context: ChatToolContext, on_event: EventCallback | None) -> dict:
+def _subagent_setup(
+    mode: str, session: DeepChatSession, context: ChatToolContext, on_event: EventCallback | None
+) -> tuple[dict, SubagentTaskRouter | None]:
+    """subagent 모드: `create_deep_agent` 인자(subagents=)와 메인 `ToolCallGuard`의 위임 정책 — 같은 턴 예산을 공유한다."""
     if mode != "subagent":
-        return {}
+        return {}, None
     model = session.subagent_model or f"openai:{context.agent_model}"
-    return {"subagents": [stock_analyst_spec(context, model, on_event)]}
+    specs, router = build_main_subagents(context, model, on_event)
+    return {"subagents": specs}, router
 
 
 def _build_main_agent(session: DeepChatSession, context: ChatToolContext, on_event: EventCallback | None):
     mode = load_stock_analyst_mode()
     allowed = _allowed_tool_names(mode)
-    task_policy = StockAnalystTaskPolicy(context.budget) if mode == "subagent" else None
+    subagent_kwargs, task_policy = _subagent_setup(mode, session, context, on_event)
     backend = StateBackend()  # 실제 파일시스템·셸 백엔드 금지(내장 도구는 어차피 노출·실행 차단)
     return create_deep_agent(
         model=session.model,
@@ -152,7 +157,7 @@ def _build_main_agent(session: DeepChatSession, context: ChatToolContext, on_eve
         tools=as_langchain_tools(context, threading.Lock(), main_tool_specs(mode)),
         system_prompt=SYSTEM_PROMPT + (SUBAGENT_MODE_ADDENDUM if mode == "subagent" else ""),
         backend=backend,
-        **_subagent_kwargs(mode, session, context, on_event),
+        **subagent_kwargs,
         middleware=[
             # after_model 훅은 목록의 역순으로 실행된다. 깨진 호출 피드백은 jump_to="model"로 다른
             # after_model을 건너뛰므로 반드시 맨 앞(= 마지막 실행)에 둔다 — 그렇지 않으면

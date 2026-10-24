@@ -50,6 +50,12 @@ def verify_companies_co_mentioned_in_news(company_a: str, company_b: str, market
     신호다. market이 KOSPI/KOSDAQ이면 네이버뉴스, NASDAQ/NYSE이면 GDELT를 쓴다. 함께 언급된 기사가
     있으면 confidence를 'confirmed'로, 없으면(이 도구 실패 포함) 'inferred'로
     매기는 판단은 호출하는 에이전트의 몫이다 — 이 도구는 사실 확인만 한다."""
+    return co_mention_check(company_a, company_b, market)
+
+
+def co_mention_check(company_a: str, company_b: str, market: str) -> dict:
+    """`verify_companies_co_mentioned_in_news`의 본체 — 도구 객체와 분리해 평가 재생(evaluation/replay.py)이 이 함수만
+    갈아끼울 수 있게 한다(도구 객체는 서브에이전트 정의가 import 시점에 잡아 두므로 패치가 닿지 않는다)."""
     end = date.today()
     start = end - timedelta(days=NEWS_LOOKBACK_DAYS)
     try:
@@ -81,6 +87,25 @@ _SYSTEM_PROMPT = (
 )
 
 
+# subagents= 경로(main_subagents.py)도 같은 지시문·상한·결과 변환을 쓴다.
+SYSTEM_PROMPT = _SYSTEM_PROMPT
+MAX_RELATED = _MAX_RELATED
+
+
+def related_payload(structured: RelatedCompaniesResult) -> list[dict]:
+    """구조화 출력 → 도구 결과의 `related` 목록(상한 적용). 형태가 다르면 AttributeError — 호출부가 격리한다."""
+    return [
+        {
+            "ticker": item.ticker,
+            "market": item.market,
+            "name": item.name,
+            "relation": item.relation,
+            "confidence": item.confidence,
+        }
+        for item in structured.related[:_MAX_RELATED]
+    ]
+
+
 def run_find_related_companies(
     budget: QueryBudget, model: str, ticker: str, market: str, company_name: str
 ) -> dict:
@@ -105,17 +130,7 @@ def run_find_related_companies(
             },
             config={"recursion_limit": FIND_RELATED_RECURSION_LIMIT},
         )
-        structured = result["structured_response"]
-        related = [
-            {
-                "ticker": item.ticker,
-                "market": item.market,
-                "name": item.name,
-                "relation": item.relation,
-                "confidence": item.confidence,
-            }
-            for item in structured.related[:_MAX_RELATED]
-        ]
+        related = related_payload(result["structured_response"])
     except Exception as exc:
         # structured_response가 존재해도 기대한 pydantic 인스턴스가 아니면(예: None,
         # 라이브러리 버전차로 인한 형태 불일치) 위 필드 접근에서 AttributeError가 날 수

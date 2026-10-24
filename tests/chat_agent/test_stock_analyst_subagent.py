@@ -64,7 +64,7 @@ def test_parse_delegation_target_reads_first_line_only_with_atomic_market():
 def test_main_tool_specs_subagent_mode_moves_signal_tools_out_of_the_main_agent():
     names = {spec.name for spec in main_tool_specs("subagent")}
     assert not names & SIGNAL_TOOL_NAMES and "stock_analyst" not in names
-    assert {"resolve_ticker", "get_price_data", "find_related_companies"} <= names
+    assert {"resolve_ticker", "get_price_data", "get_index_quote"} <= names
     assert {spec.name for spec in main_tool_specs("tool")} >= SIGNAL_TOOL_NAMES | {"stock_analyst"}
 
 
@@ -103,25 +103,27 @@ def test_subagent_guard_refuses_other_ticker_and_builtin_tools_and_tags_events()
     assert [e["type"] for e in events] == ["tool_start", "tool_done"] * 3
 
 
-def test_task_policy_checks_type_format_and_budget_before_running():
+def test_task_policy_checks_format_and_budget_before_running():
     budget = QueryBudget(max_llm_calls=STOCK_ANALYST_LLM_CALL_ESTIMATE)
     policy = StockAnalystTaskPolicy(budget)
-    assert policy.check({"subagent_type": "general-purpose", "description": DELEGATION})["available"] is False
-    assert "대상" in policy.check({"subagent_type": SUBAGENT_NAME, "description": "삼성전자 분석해줘"})["error"]
-    assert policy.check({"subagent_type": SUBAGENT_NAME, "description": DELEGATION}) is None
+    args = {"subagent_type": SUBAGENT_NAME, "description": DELEGATION}
+    assert "대상" in policy.admit({"subagent_type": SUBAGENT_NAME, "description": "삼성전자 분석해줘"}).refusal["error"]
+    admitted = policy.admit(args)
+    assert admitted.refusal is None and admitted.arguments == args
     assert budget.llm_calls_made == STOCK_ANALYST_LLM_CALL_ESTIMATE
-    assert "예산" in policy.check({"subagent_type": SUBAGENT_NAME, "description": DELEGATION})["error"]
+    assert "예산" in policy.admit(args).refusal["error"]
 
 
 def test_task_policy_wraps_structured_result_with_code_provenance():
     policy = StockAnalystTaskPolicy(QueryBudget(max_llm_calls=50))
-    wrapped = policy.wrap(json.dumps({"summary": "s", "outlook": "UP", "signals_used": ["analyze_rule_engine"]}))
+    args = {"subagent_type": SUBAGENT_NAME, "description": DELEGATION}
+    wrapped = policy.wrap(args, json.dumps({"summary": "s", "outlook": "UP", "signals_used": ["analyze_rule_engine"]}))
     assert wrapped == {
         "available": True,
         "judgment": {"summary": "s", "outlook": "UP", "signals_used": ["analyze_rule_engine"]},
         "provenance": PROVENANCE_LABEL,
     }
-    assert policy.wrap("plain text without structure")["available"] is False
+    assert policy.wrap(args, "plain text without structure")["available"] is False
 
 
 @pytest.fixture
@@ -172,9 +174,17 @@ def test_subagent_mode_refuses_unknown_subagent_without_running_it(subagent_mode
 
 
 def test_verify_exposure_passes_in_both_modes(monkeypatch):
+    monkeypatch.delenv("CHAT_AGENT_STOCK_ANALYST_MODE", raising=False)
+    monkeypatch.setattr("auto_stock.chat_agent.credentials.load_dotenv", lambda: None)  # ignore a local .env
+    verify_exposure()  # default (subagent)
+    monkeypatch.setenv("CHAT_AGENT_STOCK_ANALYST_MODE", "tool")
     verify_exposure()
-    monkeypatch.setenv("CHAT_AGENT_STOCK_ANALYST_MODE", "subagent")
-    verify_exposure()
+
+
+def test_default_mode_is_subagent(monkeypatch):
+    monkeypatch.delenv("CHAT_AGENT_STOCK_ANALYST_MODE", raising=False)
+    monkeypatch.setattr("auto_stock.chat_agent.credentials.load_dotenv", lambda: None)  # ignore a local .env
+    assert load_stock_analyst_mode() == "subagent"
 
 
 def test_unknown_mode_fails_loudly(monkeypatch):

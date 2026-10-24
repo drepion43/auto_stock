@@ -3,6 +3,8 @@
 > **결정 변경(2026-10-22)**: 사용자가 메인 에이전트 관제 구조를 택해, `stock_analyst`부터 `subagents=`로 옮기는 설계를 시작했다 —
 > `stock-analyst-subagent-migration.md`. 아래 각 "맞지 않는 이유"는 그 설계 §3에서 미들웨어·단일 정의로 메운다. 이 문서는 기존 구조를
 > 택했던 근거 기록으로 남긴다.
+>
+> **갱신(2026-10-24)**: subagent 모드가 기본이 됐고, 메인 대화가 쓰는 서브에이전트 3개(stock_analyst·find_related_companies·analyze_etf_composition)가 모두 `subagents=`로 옮겨졌다(`docs/design/stock-analyst-subagent-migration.md` §12). 이 문서의 결론("도구 안에서 create_deep_agent")은 이제 `tool` 모드(롤백)와 배치 경로(`deep_scan`·`recommendation_synthesis`·섹터 2차 탐색)에만 해당한다.
 
 > 작성 2026-10-21. 상태: **설명 문서(코드 변경 없음)**.
 > 근거: 설치된 `deepagents 0.7.13` 소스(`.venv/.../deepagents/middleware/subagents.py`, `graph.py`)와 이 저장소 코드를 직접 읽어 확인했다. 줄 번호는 이 날짜·버전 기준.

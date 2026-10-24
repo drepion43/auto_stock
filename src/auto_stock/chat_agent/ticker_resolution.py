@@ -145,10 +145,16 @@ def _us_markets_for(ticker: str) -> list[str]:
     return [exchange] if exchange is not None else list(_US_SUB_MARKETS)
 
 
+def _etf_markets_for(code: str) -> list[str]:
+    """국내 ETF의 거래소. 국내 ETF는 모두 유가증권시장(KOSPI)에 상장된다 — `resolve_market`의 종목→거래소 표는
+    주식 목록이라 ETF가 없어 None을 돌려주므로(2026-10-24 실측: 069500 → None), 주식처럼 "둘 다 후보"로 두면
+    모든 국내 ETF 질의가 모호 처리돼 분석이 시작되지 않는다. 표가 아는 값이 있으면 그것을 쓴다."""
+    return [resolve_market(code) or "KOSPI"]
+
+
 def _match_etf_by_name(query: str) -> list[TickerMatch]:
     """`dart_source.resolve_ticker_by_name`과 동일 규칙: 대소문자 무시 완전일치가 있으면
-    그것만, 없으면 부분문자열 포함으로 폴백한다. ETF는 전부 KRX 상장이므로 KOSPI/KOSDAQ
-    역조회(실패 시 둘 다 후보)를 거친다."""
+    그것만, 없으면 부분문자열 포함으로 폴백한다. 거래소는 `_etf_markets_for`."""
     listing = _etf_listing_or_empty()
     query_casefold = query.casefold()
     exact = [(t, n) for t, n in listing if n.casefold() == query_casefold]
@@ -156,7 +162,7 @@ def _match_etf_by_name(query: str) -> list[TickerMatch]:
     return [
         TickerMatch(ticker=t, market=market, name=n)
         for t, n in found
-        for market in _krx_markets_for(t)
+        for market in _etf_markets_for(t)
     ]
 
 
@@ -164,7 +170,7 @@ def _match_etf_by_code(code: str) -> list[TickerMatch]:
     name = dict(_etf_listing_or_empty()).get(code)
     if name is None:
         return []
-    return [TickerMatch(ticker=code, market=market, name=name) for market in _krx_markets_for(code)]
+    return [TickerMatch(ticker=code, market=market, name=name) for market in _etf_markets_for(code)]
 
 
 def _try_direct_code_match(query: str) -> list[TickerMatch]:

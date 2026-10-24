@@ -1,6 +1,6 @@
 # stock_analyst를 메인 에이전트의 `subagents=`로 옮기는 설계
 
-> 작성 2026-10-22. 상태: **구현됨(기능 플래그 뒤, 기본 꺼짐) — 실제 API 비교 평가(§8) 미실행.** 구현 결과는 §11. 사용자 결정: 메인 에이전트가 위임까지 관제하는 구조로 간다 — `stock_analyst`를 메인의
+> 작성 2026-10-22. 상태: **2026-10-24 기본값 전환(`subagent`) + 관련기업·ETF 분석도 `subagents=`로 이전(§12).** 구현 결과는 §11, 실제 API 비교는 §11.5~11.6(1회). 사용자 결정: 메인 에이전트가 위임까지 관제하는 구조로 간다 — `stock_analyst`를 메인의
 > `create_deep_agent(subagents=[...])`에 등록하고, 신호 도구는 그 서브에이전트가 갖는다.
 > 관련: `subagent-wiring-rationale.md`(기존 agent-as-tool 구조를 택했던 이유 — 이 설계가 각 이유를 어떻게 메우는지 §3),
 > `main-agent-migration-plan.md` §7(원래 "타입 인자 agent-as-tool 유지, 자유 질의형만 SubAgent" 권고).
@@ -278,3 +278,97 @@ flowchart LR
 
 **판정(§8)**: 종목 오인 0건 ✔, 실측 비용 +13% ✔, 답변 지표 — M1·M4 개선, M2는 비교 가능한 10턴에서 0.665→0.62로 소폭 낮고 표본이 1회라 "회귀 없음"을
 확정할 수 없다. → **기본값은 `tool` 유지.** 전환 판단에 필요한 다음 단계: Q2·Q9를 두 모드 각 3회 반복(`--repeats 3`)해 M2 차이가 편차를 넘는지 확인.
+
+---
+
+## 12. 기본값 전환 + 관련기업·ETF 분석 이전 (2026-10-24)
+
+**사용자 결정(2026-10-24)**: 지향 구조는 "메인 에이전트가 위임을 관제하고 서브에이전트가 도구를 골라 쓰는" 구조다 →
+(1) `CHAT_AGENT_STOCK_ANALYST_MODE` 기본값을 `subagent`로 바꾸고, (2) 메인 대화가 쓰는 나머지 서브에이전트도 `subagents=`로 옮긴다.
+§11.6의 반복 평가(`--repeats 3`) 없이 전환했다 — M2 차이가 실행 편차인지는 여전히 미확인이며, 롤백은 `CHAT_AGENT_STOCK_ANALYST_MODE=tool`.
+플래그 이름은 처음 옮긴 stock_analyst에서 왔지만 이제 세 서브에이전트 전체의 위임 방식을 정한다(평가 기록·문서 호환 때문에 이름 유지).
+
+### 12.1 범위
+
+| 서브에이전트 | 이전 | 비고 |
+|---|---|---|
+| `stock_analyst` | 이미 §11 | 배치 `deep_scan`은 계속 agent-as-tool `run_stock_analyst` |
+| `find_related_companies` | **이전** | `main_subagents.py` |
+| `analyze_etf_composition` | **이전** | 수집 단계를 서브에이전트 도구로 분리(§12.3) |
+| `recommendation_synthesis` | 대상 아님 | 메인 대화가 아니라 백그라운드 배치(`recommendation_coordinator`)가 호출 — 메인 그래프 밖 |
+| 섹터 2차 탐색(`run_sector_theme_search`) | 대상 아님 | 같은 이유(배치 안의 한 단계) |
+
+subagent 모드에서 메인에 남는 도구: `resolve_ticker`, `get_price_data`, `get_market_scan_recommendations`, `get_sector_recommendations`,
+`get_index_quote` + `task`. (`tool_registry.DELEGATED_TOOL_NAMES` = 신호 8개 + `stock_analyst`·`find_related_companies`·`analyze_etf_composition`)
+
+### 12.2 위임 정책 일반화 (`agent_middleware.py`)
+
+- `TaskPolicy`: `check(args) -> dict|None` → **`admit(args) -> TaskAdmission(arguments | refusal)`**, `wrap(raw)` → **`wrap(arguments, raw)`**.
+  정책이 위임문에 결정론적 정보를 덧붙일 수 있게 인자를 돌려받는다 — `ToolCallGuard`는 `request.override(tool_call=...)`로 바뀐 인자를 실행한다.
+- `SubagentTaskRouter`: `subagent_type`별 정책으로 분기. 등록 안 된 종류(general-purpose 포함)는 서브에이전트를 띄우기 전에 거부(기존 보장 유지).
+- `SubagentToolGuard(lock_target=False)`: 도구 인자에 종목이 없는 서브에이전트(뉴스 공동언급 확인은 후보 회사명을 받음)용. 내장 도구 숨김·
+  허용 목록 실행·`subagent` 표시 이벤트는 그대로.
+
+### 12.3 서브에이전트별 설계
+
+**find_related_companies**
+- 위임 정책이 DART/EDGAR로 공식 회사명을 해석해(`tools.resolve_company_name`, 기존 도구와 같은 함수) 위임문 둘째 줄에 `회사명: …`을 넣는다.
+  이름 해석 실패·예외는 기존 도구와 같은 문구로 **예산을 쓰기 전에** 거부. 그 다음 `FIND_RELATED_LLM_CALL_ESTIMATE` 선차감.
+  메인이 쓴 `회사명:` 줄은 지운다(서브에이전트가 보는 회사명은 코드가 해석한 하나뿐).
+- 지시문·스키마(`RelatedCompaniesResult`)·상한(`MAX_RELATED`)·결과 변환(`related_payload`)은 `related_companies.py`와 공유 → 결과 모양
+  `{"available", "related": [...]}` 동일. 재귀 상한은 `ModelCallLimitMiddleware(FIND_RELATED_RECURSION_LIMIT)`.
+
+**analyze_etf_composition**
+- 기존 도구 = "결정론적 수집(비중 상위 구성종목 + 종목별 공시·뉴스감성) → 종합 전용 서브에이전트". 수집을 `tools.collect_etf_holding_signals`로
+  분리해 기존 도구와 서브에이전트가 같이 쓴다.
+- 서브에이전트는 수집 도구 `collect_etf_holding_signals(ticker, market)` 1개를 갖고 위임 대상 ETF에 고정(`SubagentToolGuard`)된다.
+- 예산(기존 도구와 같은 방식): 위임 정책은 구성종목 1개도 감당할 수 없으면(`tools.affordable_etf_holdings == 0`) 위임 전에 거부만 하고
+  차감하지 않는다. 수집은 종합 몫을 떼어 두고 구성종목 수를 정하며, **실제 holdings가 나왔을 때만** 종합 몫
+  (`ETF_COMPOSITION_LLM_CALL_ESTIMATE`)을 차감한다 — ETF가 아니면 종합 몫을 쓰지 않는다.
+- 수집은 위임 1건에 한 번만 실행된다 — 두 번째 호출은 거부(비용 이중 지출·holdings와 요약 불일치 방지, 구성종목 공시·뉴스 문구에 섞인
+  "다시 수집하라" 같은 지시도 여기서 막힘).
+- **holdings·data_as_of_note는 LLM 출력이 아니라** 수집 도구가 실제로 돌려준 값(`EtfCollectionRecorder`)에서 붙인다. 수집 실패 → 그 오류 그대로,
+  holdings 없음 → `{"available": true, "holdings": null}`, 수집 도구 미호출 → `available=false`. 위임은 메인 `ToolCallGuard`의 턴 Lock 안에서
+  1건씩 실행되므로 턴 단위 recorder 하나로 충분하다.
+
+### 12.4 그 밖의 변경
+
+- `prompt.SUBAGENT_MODE_ADDENDUM`: 세 위임 대상·위임문 형식·관련기업 딥다이브 순서(find_related_companies → 각 종목 stock_analyst)·출처 표기 규칙.
+- `evaluation/answer_capture`: `task(find_related_companies|analyze_etf_composition)`도 tool 모드 이름·인자로 기록(`_DELEGATED_TYPES`, 테스트로
+  `main_subagents.SUBAGENT_NAMES`와 일치 고정).
+- `tests/chat_agent/test_deep_loop.py`: 메인 루프 계약을 전체 레지스트리로 검증하는 파일이라 `tool` 모드로 고정(autouse fixture).
+  subagent 모드는 `test_stock_analyst_subagent.py`·`test_main_subagents.py`(새: 정책·라우터·recorder·예산·1회 수집·회사명 줄·재생·end-to-end 2건).
+- `evaluation/replay.py`: subagent 모드의 서브에이전트 내부 데이터 도구(`collect_etf_holding_signals`, 뉴스 공동언급 확인 →
+  `related_companies.co_mention_check`)도 녹화·재생한다 — stock_analyst의 신호 도구가 재생되던 것과 같은 방식(서브에이전트 LLM은 라이브).
+- 코드 리뷰(2026-10-24) 반영: 재생 누락, ETF 수집 중복 호출, ETF 예산 선차감, `회사명:` 줄 위조.
+- 검증: 오프라인 `pytest -m "not slow"` 1072 통과(이전 1052). 실제 API 확인은 §12.6.
+
+### 12.5 남은 일
+
+- ~~실제 API로 subagent 모드 관련기업·ETF 질의 확인~~ → §12.6에서 Q2·Q6 확인(Q9 10턴은 미실행).
+
+### 12.6 실제 API 확인 (2026-10-24, `gpt-5.6-luna`, 생성+채점 $0.24)
+
+결과 파일(커밋 안 함): `data/eval/answers_20261024_185053.json`(Q2·Q6 1차), `answers_20261024_190006.json`(Q6 재실행),
+녹화 픽스처 `fixtures_subagent_q2_q6_20261024.json`·`fixtures_subagent_q6_20261024.json`(이후 `--replay`로 비용 없이 재실행 가능).
+
+| 질의 | 위임 흐름 | 지표 | 판정 |
+|---|---|---|---|
+| Q2 SK하이닉스 관련기업 | resolve_ticker → `task(find_related_companies)`(내부 공동언급 확인 4회, GDELT 1회 실패 → inferred) → `task(stock_analyst)` 4건(000660·005930·MU·TSM). 5번째(SK스퀘어)는 턴 예산 소진으로 위임 거부 | M1 1.0, M2 0.50, M4 실패(면책 고지 누락), M7 실패(예산 소진 미언급) | **위임 구조 정상**. 답변 품질 실패는 tool 모드에서도 있던 유형(§11.6 Q2 M4) |
+| Q6 KODEX 200 (1차) | resolve_ticker가 069500을 KOSPI/KOSDAQ **모호**로 반환 → 메인이 되물음, 위임 없음 | M1 실패 | **기존 버그 발견**(아래) |
+| Q6 (수정 후 재실행) | resolve_ticker(KOSPI 확정) → `task(analyze_etf_composition)` → 수집 도구 1회(대상 고정) → 종합 | M1~M5·M8 전부 통과(M2 0.87) | **통과** — holdings·provenance가 수집 결과와 일치 |
+
+발견·수정:
+- **국내 ETF 종목코드 해석 버그(2026-10-13 시장 세분화 이후, 모드 무관)**: `pykrx_source.resolve_market`의 종목→거래소 표는 주식 목록이라 ETF에
+  None → `ticker_resolution`이 KOSPI/KOSDAQ 둘 다 후보로 둬 **모든 국내 ETF 질의가 모호 처리**됐다. 국내 ETF는 전부 유가증권시장 상장이므로
+  `_etf_markets_for`로 KOSPI(표가 알면 그 값)로 해석. 단위 테스트가 `resolve_market`을 모킹해 놓쳤다 — 회귀 테스트 추가.
+- **관련기업 relation 문장화**: 자유 형식 `요청:`을 받자 서브에이전트가 `relation`에 사업 설명 문단을 써 메인 문맥이 커졌다(예산 소진의 한 원인으로 추정).
+  지시문에 "짧은 관계 유형만"을 추가 — **이 변경 후 라이브 재확인은 아직 안 함**.
+- Q2의 예산 소진: 관련기업 4개 + 자기 자신을 각각 stock_analyst로 위임하면 `MAX_LLM_CALLS_PER_QUERY=50`을 넘는다(stock_analyst 1건 선차감 8 + 내부
+  LLM 신호 도구 호출). tool 모드에서도 같았다(§11.5 "예산 소진 오류 2"). 상한 조정은 별도 결정.
+- §11.6의 M2 반복 평가(`--repeats 3`)는 여전히 미실행.
+- 명시적 계획 단계(`write_todos`)는 여전히 노출 안 함 — 도입 여부는 별도 결정.
+- 알려진 차이: 서브에이전트 재귀 상한이 `recursion_limit`(그래프 단계 수)에서 `ModelCallLimitMiddleware(run_limit)`(모델 호출 수)로 바뀌어
+  관련기업·ETF 서브에이전트가 기존보다 모델을 더 부를 수 있다(상한 = 선차감 추정치라 예산 계산은 맞음, stock_analyst와 같은 방식).
+- 알려진 한계: 실패 주입(`evaluation/faults.py`)은 레지스트리 `tool_*` 함수를 바꾸므로 subagent 모드의 위임 대상
+  (stock_analyst·find_related_companies·analyze_etf_composition)에는 닿지 않는다 — 현재 이들을 쓰는 F-케이스는 없다.

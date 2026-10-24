@@ -652,6 +652,7 @@ python scripts/eval_answers.py --answers data/eval/answers_<id>.json --mutations
   통과될 수 있으며, M6이 메인이 알 수 없는 실패의 공개를 요구해 tool 모드와 조건이 달라진다.
 - **실측 토큰**: 턴마다 `usage.measured`(메인 + 서브에이전트 모든 모델 호출의 입출력 토큰, `langchain_core` `get_usage_metadata_callback`). 비용 상한 장부는
   기존 보수적 추정 그대로이고, `measured`는 모드·버전 간 비용 비교용.
+- **위임 대상 확대(2026-10-24)**: `find_related_companies`·`analyze_etf_composition`도 `subagents=`로 옮겨져, 같은 방식으로 tool 모드 이름·인자로 기록한다(`answer_capture._DELEGATED_TYPES`). 녹화·재생은 서브에이전트 LLM을 라이브로 두고 그 안의 데이터 도구(`collect_etf_holding_signals`, 뉴스 공동언급 확인)를 재생한다(`replay._SUBAGENT_LEAF_TOOLS`). 실패 주입(`faults.py`)은 레지스트리 `tool_*`만 바꾸므로 subagent 모드의 위임 대상에는 닿지 않는다(현재 해당 F-케이스 없음). `docs/design/stock-analyst-subagent-migration.md` §12.
 - **DB 잠금 회피**: `EVAL_OHLCV_DB`로 OHLCV DuckDB 경로를 바꿀 수 있다(데이터 수집이 원본을 잠그고 있을 때 스냅샷 사본 사용, 기본값은 `data/ohlcv.duckdb`).
 
 ### 16.4 남은 일 — **아직 실행되지 않은 검증(2026-10-22 기준, 품질 회귀 판정을 믿기 전에 필요)**

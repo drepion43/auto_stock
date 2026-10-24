@@ -2,6 +2,8 @@
 
 > 챗봇에 ETF 지원을 추가한 뒤 작성한 가이드 문서. 이전 컴포넌트 가이드들과 같은 위치·형식. 상세 코드 리뷰는 `docs/_review_parts/01_data_layer.md`(`sources/etf_source.py`)와 `docs/_review_parts/06_chat_agent.md`(`etf_composition.py`, `tool_analyze_etf_composition`, `ticker_resolution.py`의 ETF 폴백)를 참고.
 
+> **갱신(2026-10-24)**: 기본(subagent 모드)에서는 메인이 `task(subagent_type="analyze_etf_composition")`로 위임한다. 수집 단계는 `tools.collect_etf_holding_signals`로 분리돼 서브에이전트의 도구(위임 대상 ETF 고정, 위임 1건에 1회)가 되고, 결과의 holdings·data_as_of_note는 그 도구가 실제로 돌려준 값으로 붙는다(LLM 출력 아님). 결과 모양·출처 라벨·예산 방식은 아래 설명과 같다. `tool` 모드(롤백)는 아래 흐름 그대로. 상세 `docs/design/stock-analyst-subagent-migration.md` §12.
+
 ## 목적
 
 사용자가 "이 ETF 왜 올랐어/추천해줘" 같은 질의를 했을 때, 지금까지 전혀 다루지 않던 ETF를 분석할 수 있게 한다. 유니버스 조회(`get_universe`)가 일반 주식만 보고 있었고, 공시/뉴스/수급 분석(`analyze_disclosures`/`analyze_news_sentiment`/`analyze_supply_demand`)은 "그 회사가 직접 내는 공시·뉴스"를 전제로 하는데, ETF는 운용사가 발행하는 펀드라 이 전제가 맞지 않았다.

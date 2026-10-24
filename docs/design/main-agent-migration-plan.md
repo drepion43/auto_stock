@@ -21,6 +21,8 @@
 
 ## 0. 진행 현황 (2026-10-11 갱신)
 
+> **갱신(2026-10-24)**: §4.2 2단계의 "agent-as-tool 유지" 추천은 사용자 결정으로 바뀌었다 — stock_analyst·find_related_companies·analyze_etf_composition이 메인 `subagents=`로 등록되고 `task`로 위임된다(기본 `CHAT_AGENT_STOCK_ANALYST_MODE=subagent`). 자유 텍스트 위임의 타입 손실은 위임문 첫 줄 `대상: <ticker> <market>` 형식 검사와 서브에이전트 종목 고정 미들웨어로 메운다. TodoList(§4.3)는 여전히 미도입. 상세 `docs/design/stock-analyst-subagent-migration.md` §12.
+
 | 단계 | 상태 | 비고 |
 |---|---|---|
 | 4.-1 체크포인트 커밋 | 완료 — `25f9409` | 브랜치 `feat/main-agent-registry` |
@@ -468,6 +470,8 @@ def run_turn_deep(session, context, user_message, on_event=None) -> str:
 - `MAX_TOOL_ITERATIONS` 삭제 시 함께 고칠 것: `credentials.py`(:30 주석, :79 상수), `tests/chat_agent/test_credentials.py`(:9 import, :51 단언, :59 docstring, :65 `max_calls_per_run >= MAX_TOOL_ITERATIONS * 20` → `MAIN_AGENT_RUN_LIMIT` 기준으로 재작성).
 
 ### 4.2 2단계: 도메인별 서브에이전트 그룹화 (트리거 기반, 지금 착수 안 함)
+
+> **갱신(2026-10-24)**: 아래 "agent-as-tool 유지" 추천과 달리 위임형 `SubAgent` 3개로 구현됨 — `docs/design/stock-analyst-subagent-migration.md` §12. 도구 수 트리거(D13)와 무관한 사용자 결정(지향 구조).
 
 - **트리거**: 메인 노출 도구가 18개를 넘거나 eval 도구 오선택이 늘 때 [D13]. 마이그레이션·market 세분화 때문에 늘린 도구는 판단에서 제외.
 - **그룹 후보(예시)**: 개별 종목 분석(rule/ml/chart/disclosures/sentiment/sizing/price + stock_analyst), 탐색·추천(scan/sector/related), ETF·지수(etf_composition + 향후 승인된 도구), 해석(resolve_ticker는 메인에 남김).

@@ -356,11 +356,16 @@ def _langchain_tool(
 SIGNAL_TOOL_NAMES = frozenset(spec.name for spec in TOOL_SPECS if spec.subagent_description is not None)
 
 
+# subagent 모드에서 메인 대신 `task` 위임으로 처리하는 도구 — 신호 도구 8개(stock_analyst 서브에이전트가 가짐)와
+# 서브에이전트로 옮긴 agent-as-tool 3개(main_subagents.py, 문서 §12).
+DELEGATED_TOOL_NAMES = SIGNAL_TOOL_NAMES | {"stock_analyst", "find_related_companies", "analyze_etf_composition"}
+
+
 def main_tool_specs(mode: str) -> tuple[ToolSpec, ...]:
-    """메인 에이전트에 보일 도구. `subagent` 모드는 신호 도구 8개와 agent-as-tool `stock_analyst`를 빼고
-    (그 일은 `task`로 위임), `tool` 모드는 지금과 같은 전체 레지스트리."""
+    """메인 에이전트에 보일 도구. `subagent` 모드는 `DELEGATED_TOOL_NAMES`를 빼고(그 일은 `task`로 위임),
+    `tool` 모드는 전체 레지스트리(롤백 경로)."""
     if mode == "subagent":
-        return tuple(spec for spec in TOOL_SPECS if spec.name not in SIGNAL_TOOL_NAMES and spec.name != "stock_analyst")
+        return tuple(spec for spec in TOOL_SPECS if spec.name not in DELEGATED_TOOL_NAMES)
     return TOOL_SPECS
 
 

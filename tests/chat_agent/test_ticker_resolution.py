@@ -201,6 +201,20 @@ def test_resolve_ticker_etf_code_falls_back_to_etf_listing(mocker):
     mock_name_search.assert_not_called()
 
 
+def test_resolve_ticker_etf_unknown_to_the_stock_market_table_resolves_to_kospi(mocker):
+    # 실측(2026-10-24): resolve_market은 주식 표라 ETF 코드에 None — 이때 KOSPI/KOSDAQ 모호로 빠지면 안 된다
+    mocker.patch("auto_stock.chat_agent.ticker_resolution.resolve_market", return_value=None)
+    mocker.patch("auto_stock.chat_agent.ticker_resolution.resolve_corp_name", return_value=None)
+    mocker.patch("auto_stock.chat_agent.ticker_resolution.resolve_dart_ticker_by_name", return_value=[])
+    mocker.patch("auto_stock.chat_agent.ticker_resolution.resolve_edgar_ticker_by_name", return_value=[])
+    mocker.patch("auto_stock.chat_agent.ticker_resolution.fetch_etf_listing", return_value=_ETF_LISTING)
+
+    for query in ("069500", "KODEX 200"):
+        result = resolve_ticker(query)
+        assert result.matches == [TickerMatch(ticker="069500", market="KOSPI", name="KODEX 200")], query
+        assert result.is_resolved
+
+
 def test_resolve_ticker_stock_code_does_not_consult_etf_listing(mocker):
     mocker.patch("auto_stock.chat_agent.ticker_resolution.resolve_corp_name", return_value="삼성전자")
     mock_etf = mocker.patch("auto_stock.chat_agent.ticker_resolution.fetch_etf_listing")

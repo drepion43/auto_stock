@@ -46,6 +46,11 @@ _SYSTEM_PROMPT = (
 )
 
 
+# subagents= 경로(main_subagents.py)도 같은 지시문·출처 라벨을 쓴다.
+SYSTEM_PROMPT = _SYSTEM_PROMPT
+PROVENANCE_LABEL = _PROVENANCE_LABEL
+
+
 def _holding_to_payload(ticker: str, weight: float, name: str | None, disclosure: dict, sentiment: dict) -> dict:
     return {
         "ticker": ticker,

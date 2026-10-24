@@ -18,7 +18,8 @@
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
@@ -71,12 +72,43 @@ class ExposureGuard(AgentMiddleware):
         return handler(request.override(tools=visible))
 
 
+@dataclass(frozen=True, slots=True)
+class TaskAdmission:
+    """`task` 사전 검사 결과 — 거부(`refusal`)이거나, 서브에이전트에 실제로 넘길 인자(`arguments`).
+    정책이 위임문에 결정론적 정보(예: 공시 기준 회사명)를 덧붙일 수 있도록 인자를 돌려받는다."""
+
+    arguments: dict | None = None
+    refusal: dict | None = None
+
+
+def refuse(error: str) -> TaskAdmission:
+    return TaskAdmission(refusal={"available": False, "error": error})
+
+
 class TaskPolicy(Protocol):
-    """`task`(서브에이전트 위임) 호출의 사전 검사와 결과 감싸기 — stock_analyst_subagent.StockAnalystTaskPolicy."""
+    """`task`(서브에이전트 위임) 1종의 사전 검사와 결과 감싸기 — 예: stock_analyst_subagent.StockAnalystTaskPolicy."""
 
-    def check(self, arguments: dict) -> dict | None: ...  # 거부할 결과 dict, 통과면 None
+    def admit(self, arguments: dict) -> TaskAdmission: ...
 
-    def wrap(self, raw: str) -> dict: ...  # 서브에이전트가 돌려준 원문 → 기존 도구 결과 모양 dict
+    # 서브에이전트가 돌려준 원문 → 기존 agent-as-tool 결과와 같은 모양 dict. arguments는 admit이 돌려준 인자.
+    def wrap(self, arguments: dict, raw: str) -> dict: ...
+
+
+class SubagentTaskRouter:
+    """`subagent_type`별 정책으로 나눠 보내는 TaskPolicy — 메인 `ToolCallGuard`에는 이것 하나만 넘긴다.
+    등록되지 않은 종류(deepagents가 자동으로 붙이는 general-purpose 포함)는 서브에이전트를 띄우기 전에 거부한다."""
+
+    def __init__(self, policies: Mapping[str, TaskPolicy]) -> None:
+        self._policies = dict(policies)
+
+    def admit(self, arguments: dict) -> TaskAdmission:
+        policy = self._policies.get(arguments.get("subagent_type"))
+        if policy is None:
+            return refuse(f"사용할 수 없는 서브에이전트입니다: {arguments.get('subagent_type')}")
+        return policy.admit(arguments)
+
+    def wrap(self, arguments: dict, raw: str) -> dict:
+        return self._policies[arguments["subagent_type"]].wrap(arguments, raw)
 
 
 def _tool_message(result: dict, call: dict) -> ToolMessage:
@@ -109,15 +141,16 @@ class ToolCallGuard(AgentMiddleware):
         """서브에이전트 위임: 허용 종류·위임문 형식·예산을 먼저 보고(통과 못 하면 서브에이전트를 띄우지 않음),
         결과는 기존 도구 결과 모양(출처 라벨 포함)으로 감싸고, 실패는 `available=false`로 바꾼다
         (docs/design/stock-analyst-subagent-migration.md §3 — task는 예외를 그대로 올린다)."""
-        refusal = self._task_policy.check(call["args"])
-        if refusal is not None:
-            return _tool_message(refusal, call)
+        admission = self._task_policy.admit(call["args"])
+        if admission.refusal is not None:
+            return _tool_message(admission.refusal, call)
+        arguments = admission.arguments
         try:
-            output = handler(request)
+            output = handler(request.override(tool_call={**call, "args": arguments}))
         except Exception as exc:
             return _tool_message({"available": False, "error": f"서브에이전트 실행 실패: {type(exc).__name__}"}, call)
         message = _task_tool_message(output)
-        wrapped = self._task_policy.wrap(message.text if message is not None else "")
+        wrapped = self._task_policy.wrap(arguments, message.text if message is not None else "")
         return _tool_message(wrapped, call)
 
     def wrap_tool_call(self, request, handler):
@@ -152,19 +185,29 @@ def parse_delegation_target(text: str) -> tuple[str, str] | None:
 
 
 class SubagentToolGuard(AgentMiddleware):
-    """서브에이전트용 가드(stock_analyst) — 종목 고정·노출 차단·이벤트 중계.
+    """서브에이전트용 가드 — 종목 고정·노출 차단·이벤트 중계.
 
     - `before_agent`: 첫 메시지(메인이 쓴 위임문)에서 대상(ticker, market)을 읽는다.
     - `wrap_model_call`: deepagents 내장 도구(파일시스템 등)를 모델에서 숨긴다. 구조화 출력용 도구 같은 그 밖의
       도구는 남긴다(허용 목록 방식으로 막으면 response_format이 깨질 수 있다).
-    - `wrap_tool_call`: 허용 도구가 아니거나 인자의 ticker/market이 대상과 다르면 실행하지 않는다 — 기존 클로저
-      바인딩과 같은 보장. tool_start/tool_done 이벤트에 `subagent` 이름을 붙여 메인의 `on_event`로 낸다(평가 캡처)."""
+    - `wrap_tool_call`: 허용 도구가 아니거나, `lock_target`일 때 인자의 ticker/market이 대상과 다르면 실행하지
+      않는다 — 기존 클로저 바인딩과 같은 보장. tool_start/tool_done 이벤트에 `subagent` 이름을 붙여 메인의
+      `on_event`로 낸다(평가 캡처). `lock_target=False`는 도구 인자에 종목이 없는 서브에이전트용(관련기업 탐색의
+      뉴스 공동언급 확인 — 후보 회사명을 인자로 받는다)."""
 
-    def __init__(self, subagent_name: str, allowed: frozenset[str], on_event: EventCallback | None) -> None:
+    def __init__(
+        self,
+        subagent_name: str,
+        allowed: frozenset[str],
+        on_event: EventCallback | None,
+        *,
+        lock_target: bool = True,
+    ) -> None:
         super().__init__()
         self._subagent_name = subagent_name
         self._allowed = allowed
         self._on_event = on_event
+        self._lock_target = lock_target
         self._target: tuple[str, str] | None = None
 
     def before_agent(self, state, runtime):
@@ -179,6 +222,8 @@ class SubagentToolGuard(AgentMiddleware):
     def _refusal(self, name: str, arguments: dict) -> str | None:
         if name not in self._allowed:
             return f"알 수 없는 도구: {name}"
+        if not self._lock_target:
+            return None
         if self._target is None:
             return "위임 대상(대상: <ticker> <market>)이 없어 분석할 수 없습니다"
         ticker, market = self._target

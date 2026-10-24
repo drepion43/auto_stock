@@ -50,6 +50,8 @@
 
 > **갱신 (2026-10-12)**: 메인 루프는 deepagents `create_deep_agent` 기반(`chat_agent/deep_loop.py` + `agent_middleware.py`)이 기본이 됐다(구 수동 루프 `loop.py`는 `CHAT_AGENT_LOOP=legacy` 롤백용, 2026-10-26 이후 제거 예정). 도구는 `chat_agent/tool_registry.py`의 `TOOL_SPECS` 한 곳에서 정의한다. deepagents 서브에이전트는 4개(find_related_companies, stock_analyst, recommendation_synthesis, etf_composition). 상세: `docs/design/main-agent-migration-plan.md`.
 
+> **갱신 (2026-10-24)**: 메인 대화의 서브에이전트 3개(stock_analyst·find_related_companies·analyze_etf_composition)는 agent-as-tool이 아니라 메인 `create_deep_agent(subagents=[...])`에 등록돼 `task`로 위임된다(기본 `CHAT_AGENT_STOCK_ANALYST_MODE=subagent`, `=tool`이 롤백). recommendation_synthesis는 배치 전용이라 그대로. 아래 본문의 agent-as-tool 설명은 tool 모드 기준. 상세: `docs/design/stock-analyst-subagent-migration.md` §12.
+
 ## 전체 그림
 
 ```
