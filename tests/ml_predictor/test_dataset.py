@@ -193,3 +193,22 @@ def test_collate_sequences_feature_row_matches_feature_order():
 
     for t, sample in enumerate(seq.samples):
         assert X[0][t] == [sample.feature.values[name] for name in dataset.feature_names]
+
+
+def test_drop_nonfinite_labels_removes_nan_samples_and_empty_sequences():
+    from dataclasses import replace
+
+    from auto_stock.ml_predictor.dataset import drop_nonfinite_labels
+    from auto_stock.ml_predictor.models import SequenceDataset
+
+    samples = list(build_ticker_sequence(make_records(random_walk_prices(90))).samples)
+    samples[-1] = replace(samples[-1], label=float("nan"))
+    with_nan = TickerSequence(ticker="AAPL", market="NASDAQ", samples=samples)
+    all_inf = TickerSequence(ticker="MSFT", market="NASDAQ", samples=[replace(samples[0], label=float("inf"))])
+    dataset = SequenceDataset(sequences=[with_nan, all_inf], feature_names=FEATURE_NAMES)
+
+    cleaned, dropped = drop_nonfinite_labels(dataset)
+
+    assert dropped == 2
+    assert [seq.ticker for seq in cleaned.sequences] == ["AAPL"]
+    assert len(cleaned.sequences[0].samples) == len(samples) - 1

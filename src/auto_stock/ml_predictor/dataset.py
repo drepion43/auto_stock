@@ -9,6 +9,7 @@ pooled 구조에서 "표본 1개 = 종목의 (가변 길이) 시퀀스" 구조�
 전역 날짜 컷오프를 구한 뒤, 각 종목의 시퀀스를 그 컷오프(+embargo)로 "같은 지점에서"
 자른다 — 종목마다 길이가 달라도 자르는 **날짜**는 전부 동일하다."""
 
+import math
 from collections import defaultdict
 from collections.abc import Collection
 from datetime import date
@@ -85,6 +86,20 @@ def filter_regions(dataset: SequenceDataset, regions: Collection[str]) -> Sequen
     합쳐 학습하면 국내 신호가 표본 2/3인 미국에 희석된다. 지역별 학습·비교용."""
     kept = [seq for seq in dataset.sequences if region_of(seq.market) in regions]
     return SequenceDataset(sequences=kept, feature_names=dataset.feature_names)
+
+
+def drop_nonfinite_labels(dataset: SequenceDataset) -> tuple[SequenceDataset, int]:
+    """레이블이 NaN/inf인 표본을 뺀 새 데이터셋과 뺀 개수. 2026-10-23 수집본은 미국 종목 마지막 날 종가가
+    NaN(장중 미완성 봉)이라 그 전날 레이블이 NaN이었다 — `forward_returns`가 이제 막지만 이미 저장된
+    데이터셋은 이 함수로 정리한다. 빈 시퀀스가 되면 종목째 뺀다."""
+    kept: list[TickerSequence] = []
+    dropped = 0
+    for seq in dataset.sequences:
+        samples = [s for s in seq.samples if math.isfinite(s.label)]
+        dropped += len(seq.samples) - len(samples)
+        if samples:
+            kept.append(TickerSequence(ticker=seq.ticker, market=seq.market, samples=samples))
+    return SequenceDataset(sequences=kept, feature_names=dataset.feature_names), dropped
 
 
 def cross_sectional_demean(dataset: SequenceDataset) -> SequenceDataset:

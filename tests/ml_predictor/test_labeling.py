@@ -34,3 +34,9 @@ def test_forward_returns_is_empty_safe():
 def test_forward_returns_guards_against_zero_division():
     closes = [0.0, 100.0]
     assert forward_returns(closes, horizon=1) == [None, None]
+
+
+def test_nan_close_yields_no_label_instead_of_nan():
+    # Yahoo returns the still-open session's bar with Close=NaN — the day before must not get a NaN label.
+    closes = [100.0, 101.0, float("nan")]
+    assert forward_returns(closes, horizon=1) == [pytest.approx(0.01), None, None]

@@ -59,6 +59,7 @@ from auto_stock.ml_predictor.baseline import fit_ridge, ridge_predictions
 from auto_stock.ml_predictor.dataset import (
     build_sequence_dataset,
     cross_sectional_demean,
+    drop_nonfinite_labels,
     filter_regions,
     train_val_test_split,
 )
@@ -158,6 +159,9 @@ def main() -> None:
         dataset = _collect_dataset()
         saved_path = save_dataset(dataset, DATASET_PATH)
         print(f"데이터셋 저장: {saved_path} (다음 실행부터 재수집 없이 재사용)")
+    dataset, dropped = drop_nonfinite_labels(dataset)
+    if dropped:
+        print(f"레이블 NaN/inf 표본 {dropped}개 제외 (미완성 봉 종가 등)")
 
     if TARGET not in TRAINING_TARGETS or not REGIONS <= {"KR", "US"} or not REGIONS:
         raise SystemExit(f"ML_TRAIN_TARGET must be demeaned|raw and ML_TRAIN_REGIONS a subset of KR,US (got {TARGET!r}, {sorted(REGIONS)})")

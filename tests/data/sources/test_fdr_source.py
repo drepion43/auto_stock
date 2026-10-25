@@ -49,3 +49,13 @@ def test_fetch_ohlcv_returns_empty_list_for_empty_response(mocker):
     records = fdr_source.fetch_ohlcv("000000", date(2026, 1, 1), date(2026, 1, 6), market="KOSPI")
 
     assert records == []
+
+
+def test_fetch_ohlcv_skips_incomplete_bar_with_nan_close(mocker):
+    df = _fake_fdr_dataframe()
+    df.loc[df.index[-1], "Close"] = float("nan")  # still-open session bar from Yahoo
+    mocker.patch.object(fdr_source.fdr, "DataReader", return_value=df)
+
+    records = fdr_source.fetch_ohlcv("AAPL", date(2026, 1, 1), date(2026, 1, 6), market="NASDAQ")
+
+    assert [r.date for r in records] == [date(2026, 1, 2)]

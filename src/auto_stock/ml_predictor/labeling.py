@@ -4,6 +4,8 @@
 잘못 잡으면 조용한 lookahead가 되므로 test_labeling.py에서 경계를 못박아 검증한다.
 """
 
+import math
+
 LABEL_HORIZON_DAYS = 1
 
 
@@ -12,5 +14,8 @@ def forward_returns(closes: list[float], horizon: int = LABEL_HORIZON_DAYS) -> l
     out: list[float | None] = [None] * n
     for i in range(n - horizon):
         base = closes[i]
-        out[i] = None if base == 0 else closes[i + horizon] / base - 1
+        if base == 0:
+            continue
+        value = closes[i + horizon] / base - 1
+        out[i] = value if math.isfinite(value) else None  # NaN close(미완성 봉)는 레이블 없음으로 본다
     return out
