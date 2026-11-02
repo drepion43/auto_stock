@@ -56,6 +56,22 @@ def _nan_ic() -> IcSummary:
                      mean_top_bottom_spread=math.nan)
 
 
+MIN_DEPLOY_IC_T_STAT = 2.0  # 평균 IC가 우연이 아니라고 볼 최소 t값
+
+
+def deployment_verdict(model: IcSummary, baseline: IcSummary) -> tuple[bool, str]:
+    """validation 순위 IC로 배포 여부를 판정한다 — 셋 다 만족해야 통과: ① 평균 IC > 0, ② t >= 2,
+    ③ 선형 기준선(ridge)보다 높음. 2026-10-24 이전에는 ③만 봐서, 미국처럼 둘 다 음수일 때 ridge가 더 나쁘다는
+    이유만으로 "사용 가능"이 나왔다. NaN은 비교가 전부 거짓이라 자동으로 불통과."""
+    if not model.mean_ic > 0:
+        return False, f"평균 IC {model.mean_ic:+.4f} ≤ 0 → 신호 없음, 배포하지 말 것"
+    if not model.ic_t_stat >= MIN_DEPLOY_IC_T_STAT:
+        return False, f"t={model.ic_t_stat:+.2f} < {MIN_DEPLOY_IC_T_STAT:.0f} → 우연과 구분 안 됨, 배포하지 말 것"
+    if not model.mean_ic > baseline.mean_ic:
+        return False, f"선형 기준선(IC {baseline.mean_ic:+.4f})을 이기지 못함 → 배포하지 말 것"
+    return True, "사용 가능"
+
+
 def _replaced_share(current: set[str], previous: set[str] | None) -> float:
     if previous is None:
         return 1.0

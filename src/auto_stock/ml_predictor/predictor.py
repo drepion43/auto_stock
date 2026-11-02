@@ -13,7 +13,13 @@ import torch
 
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.dataset import build_inference_features
-from auto_stock.ml_predictor.models import TARGET_DEMEANED, MLPrediction, ModelBundle
+from auto_stock.ml_predictor.models import (
+    RANK_TARGET_SCALE,
+    TARGET_DEMEANED,
+    TARGET_RANK,
+    MLPrediction,
+    ModelBundle,
+)
 from auto_stock.ml_predictor.training import MambaRegressor
 
 # 같은 임계값을 타깃에 따라 다르게 읽는다 — raw면 "오른다/내린다", demeaned면 "시장 평균보다 낫다/못하다".
@@ -22,7 +28,7 @@ ML_CONFLICT_RETURN_THRESHOLD = -0.003  # <= -0.3% 를 "하락(미달) 예측"으
 DISCLAIMER = "(ML 신호는 백테스트 검증 전 참고용 보조 지표입니다)"
 
 # LLM·사용자에게 보이는 값의 의미 — 지역 평균 대비 초과 수익률을 절대 등락으로 읽지 않게 결과마다 붙인다.
-_RETURN_BASIS = {TARGET_DEMEANED: "excess_vs_region_mean"}
+_RETURN_BASIS = {TARGET_DEMEANED: "excess_vs_region_mean", TARGET_RANK: "rank_score_vs_region"}
 _ABSOLUTE_BASIS = "absolute"
 _INTERPRETATION = {
     TARGET_DEMEANED: (
@@ -30,7 +36,13 @@ _INTERPRETATION = {
         "주가가 오를지 내릴지(절대 수익률)가 아니다 — 양수는 시장 평균보다 더 오르거나 덜 내린다는 뜻이고, "
         "음수는 덜 오르거나 더 내린다는 뜻이다. '예상 수익률 +x%'처럼 절대 등락으로 표현하지 말 것."
     ),
+    TARGET_RANK: (
+        "다음 거래일 '상대 순위 점수' 예측치다: 같은 날 같은 지역(국내/미국) 학습 대상 종목들 사이에서 이 종목 수익률이 "
+        f"몇 번째쯤일지를 표준정규 점수로 나타낸 값 × {RANK_TARGET_SCALE} (0.01 ≈ 상위 16%, -0.01 ≈ 하위 16%). "
+        "수익률(%)도, 주가가 오를지 내릴지도 아니다 — '+x%'처럼 표현하지 말고 '평균보다 상위/하위로 예상'으로 말할 것."
+    ),
 }
+_RETURN_LABEL = {TARGET_DEMEANED: "시장 평균 대비 예상 초과 수익률", TARGET_RANK: "시장 내 상대 순위 점수"}
 _ABSOLUTE_INTERPRETATION = "다음 거래일 절대 수익률 예측치다: (다음 거래일 종가 - 기준일 종가) / 기준일 종가."
 
 # Mamba는 종목 전체 히스토리를 하나의 시퀀스로 받는다(MambaStock 원본 방식, 사용자
@@ -82,7 +94,13 @@ def predict(
 
 
 def return_label(prediction: MLPrediction) -> str:
-    return "시장 평균 대비 예상 초과 수익률" if prediction.target == TARGET_DEMEANED else "예상 수익률"
+    return _RETURN_LABEL.get(prediction.target, "예상 수익률")
+
+
+def _format_value(prediction: MLPrediction) -> str:
+    if prediction.target == TARGET_RANK:
+        return f"z {prediction.predicted_return / RANK_TARGET_SCALE:+.2f}"  # 순위 점수는 %가 아니다
+    return f"{prediction.predicted_return * 100:+.2f}%"
 
 
 def describe_prediction(prediction: MLPrediction) -> dict:
@@ -97,7 +115,7 @@ def describe_prediction(prediction: MLPrediction) -> dict:
 
 
 def _stance(prediction: MLPrediction, action: str) -> str:
-    pct = prediction.predicted_return * 100
+    value = _format_value(prediction)
     predicts_up = prediction.predicted_return >= ML_AGREE_RETURN_THRESHOLD
     predicts_down = prediction.predicted_return <= ML_CONFLICT_RETURN_THRESHOLD
 
@@ -106,10 +124,10 @@ def _stance(prediction: MLPrediction, action: str) -> str:
 
     label = return_label(prediction)
     if agrees:
-        return f"ML 모델({label} {pct:+.2f}%)도 {action} 신호에 동의합니다"
+        return f"ML 모델({label} {value})도 {action} 신호에 동의합니다"
     if conflicts:
-        return f"ML 모델({label} {pct:+.2f}%)은 {action} 신호와 상충됩니다 — 주의"
-    return f"ML 모델 {label} {pct:+.2f}% (중립)"
+        return f"ML 모델({label} {value})은 {action} 신호와 상충됩니다 — 주의"
+    return f"ML 모델 {label} {value} (중립)"
 
 
 def to_reasons(prediction: MLPrediction | None, action: str) -> list[str]:

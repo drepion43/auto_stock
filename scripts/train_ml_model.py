@@ -44,11 +44,11 @@ import logging
 
 from tqdm.contrib.logging import logging_redirect_tqdm
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from auto_stock.data.cache import OHLCVCache
-from auto_stock.ml_predictor.artifact import load_model, save_model
+from auto_stock.ml_predictor.artifact import DEFAULT_MODEL_DIR, load_model, save_model
 from auto_stock.ml_predictor.collection import (
     DEFAULT_DATASET_PATH,
     collect_training_records,
@@ -59,6 +59,7 @@ from auto_stock.ml_predictor.baseline import fit_ridge, ridge_predictions
 from auto_stock.ml_predictor.dataset import (
     build_sequence_dataset,
     cross_sectional_demean,
+    cross_sectional_rank_gauss,
     drop_nonfinite_labels,
     filter_regions,
     train_val_test_split,
@@ -66,12 +67,14 @@ from auto_stock.ml_predictor.dataset import (
 from auto_stock.ml_predictor.evaluation import (
     IcSummary,
     WindowEvaluation,
+    deployment_verdict,
     evaluate_window,
     split_by_region,
     summarize_predictions,
 )
 from auto_stock.ml_predictor.models import (
     TARGET_DEMEANED,
+    TARGET_RANK,
     TARGET_RAW,
     TRAINING_TARGETS,
     SequenceDataset,
@@ -164,7 +167,7 @@ def main() -> None:
         print(f"레이블 NaN/inf 표본 {dropped}개 제외 (미완성 봉 종가 등)")
 
     if TARGET not in TRAINING_TARGETS or not REGIONS <= {"KR", "US"} or not REGIONS:
-        raise SystemExit(f"ML_TRAIN_TARGET must be demeaned|raw and ML_TRAIN_REGIONS a subset of KR,US (got {TARGET!r}, {sorted(REGIONS)})")
+        raise SystemExit(f"ML_TRAIN_TARGET must be one of {'|'.join(TRAINING_TARGETS)} and ML_TRAIN_REGIONS a subset of KR,US (got {TARGET!r}, {sorted(REGIONS)})")
     dataset = filter_regions(dataset, REGIONS)
     print(f"[설정] 타깃={TARGET} 지역={','.join(sorted(REGIONS))} 왕복비용={ROUND_TRIP_COST}")
     universe_size = len(dataset.sequences)
@@ -205,10 +208,14 @@ def main() -> None:
         target=TARGET,  # 추론 결과를 절대 수익률로 읽을지, 지역 평균 대비 초과 수익률로 읽을지
     )
 
-    _print_evaluation_report(build_model(bundle).to(device), dataset, split)
+    deployable = _print_evaluation_report(build_model(bundle).to(device), dataset, split)
 
-    path = save_model(bundle)
+    # 판정을 통과하지 못한 모델은 챗봇이 읽는 기본 경로에 두지 않는다(chat_cli가 파일이 있으면 바로 쓴다).
+    model_dir = DEFAULT_MODEL_DIR if deployable else DEFAULT_MODEL_DIR / "archive" / _experiment_name()
+    path = save_model(bundle, model_dir)
     print(f"저장 완료: {path} (+ {path.with_suffix('.metadata.json')})")
+    if not deployable:
+        print("판정 불통과 — 기본 경로가 아닌 archive에 저장했다. 챗봇 ML 신호에는 쓰이지 않는다.")
     csv_path = save_history_csv(bundle.history, path.with_name(f"{path.stem}.history.csv"))
     png_path = plot_training_history(bundle.history, path.with_name(f"{path.stem}.history.png"))
     print(f"학습 곡선: {png_path} (+ {csv_path})")
@@ -221,11 +228,17 @@ def training_split(split: SequenceDatasetSplit) -> SequenceDatasetSplit:
     상수를 빼도 변하지 않고, 스프레드는 실제 수익률로 재야 하므로)."""
     if TARGET == TARGET_RAW:
         return split
+    transform = cross_sectional_rank_gauss if TARGET == TARGET_RANK else cross_sectional_demean
     return SequenceDatasetSplit(
-        train=cross_sectional_demean(split.train),
+        train=transform(split.train),
         test=split.test,
-        validation=cross_sectional_demean(split.validation) if split.validation else None,
+        validation=transform(split.validation) if split.validation else None,
     )
+
+
+def _experiment_name() -> str:
+    regions = "-".join(sorted(REGIONS))
+    return f"{datetime.now():%Y%m%d_%H%M}_{TARGET}_{regions}_lr{LEARNING_RATE:g}"
 
 
 def _print_window(name: str, dataset: SequenceDataset) -> None:
@@ -269,16 +282,18 @@ def _format_ic(ic: IcSummary) -> str:
 _REGION_DATASET_KEY = {"KR": "domestic", "US": "us"}
 
 
-def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, split: SequenceDatasetSplit) -> None:
+def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, split: SequenceDatasetSplit) -> bool:
     """학습 후 검증 리포트 — validation/test 구간의 **모든 (종목, 날짜)**를 지역별로 채점한다(evaluation.py).
     모델에는 종목의 전체 히스토리를 넣고 구간 안 시점만 채점한다(추론과 같은 조건). 비교 기준:
     `0 예측`·`persistence`(내일 = 오늘)·**선형 기준선(ridge, 같은 피처·같은 타깃)**. 순위 IC와 거래비용을 뺀
-    상위−하위 스프레드가 판단 기준이다(MSE는 시장 전체 움직임과 극단값에 끌려 판단에 쓰지 않는다)."""
+    상위−하위 스프레드가 판단 기준이다(MSE는 시장 전체 움직임과 극단값에 끌려 판단에 쓰지 않는다).
+    학습한 모든 지역이 `deployment_verdict`를 통과하면 True — 통합 모델 하나라 한 지역만 통과해도 나머지
+    지역 종목에 그대로 쓰이기 때문이다."""
     feature_names = split.train.feature_names
     windows = {"validation": _window_dates(split.validation), "test": _window_dates(split.test)}
     by_region = {region: split_by_region(dataset)[_REGION_DATASET_KEY[region]] for region in sorted(REGIONS)}
     ridge = fit_ridge(training_split(split).train, feature_names)
-    verdict: dict[str, tuple[float, float]] = {}
+    verdict: dict[str, tuple[IcSummary, IcSummary]] = {}
 
     print("\n===== 검증 리포트 (구간 내 모든 시점, 지역별) =====")
     for window_name, window in windows.items():
@@ -296,12 +311,18 @@ def _print_evaluation_report(model: MambaRegressor, dataset: SequenceDataset, sp
             ridge_ic = summarize_predictions(*ridge_predictions(ridge, region_dataset, feature_names, window), round_trip_cost=cost)
             print(f"  순위IC ridge      : {_format_ic(ridge_ic)}")
             if window_name == "validation":
-                verdict[region] = (evaluation.model_ic.mean_ic, ridge_ic.mean_ic)
+                verdict[region] = (evaluation.model_ic, ridge_ic)
     print("-- 판정(validation IC 기준 — test는 판정에 쓰지 않음) --")
+    passed_all = bool(verdict)
     for region, (mamba_ic, ridge_ic) in verdict.items():
-        status = "Mamba 사용 가능" if mamba_ic > ridge_ic else "Mamba가 선형 기준선을 이기지 못함 → 배포하지 말 것"
-        print(f"  {region}: mamba {mamba_ic:+.4f} vs ridge {ridge_ic:+.4f} → {status}")
+        passed, reason = deployment_verdict(mamba_ic, ridge_ic)
+        passed_all = passed_all and passed
+        print(
+            f"  {region}: mamba {mamba_ic.mean_ic:+.4f} (t={mamba_ic.ic_t_stat:+.2f}) "
+            f"vs ridge {ridge_ic.mean_ic:+.4f} → {reason}"
+        )
     print("==========================================\n")
+    return passed_all
 
 
 if __name__ == "__main__":

@@ -268,3 +268,11 @@ def test_negative_excess_ml_prediction_warns_as_underperformance_not_decline():
     absolute = _rec("analyze_ml_prediction", {"available": True, "prediction": {"predicted_return": -0.004}})
     assert "지역 평균 대비 열위" in extract_warnings((excess,), TODAY)[0]
     assert extract_warnings((absolute,), TODAY)[0].startswith("ML 예측 수익률 음수")
+
+
+def test_negative_rank_score_ml_prediction_warns_as_lower_rank():
+    ranked = _rec(
+        "analyze_ml_prediction",
+        {"available": True, "prediction": {"predicted_return": -0.004, "return_basis": "rank_score_vs_region"}},
+    )
+    assert "지역 내 하위 예상" in extract_warnings((ranked,), TODAY)[0]

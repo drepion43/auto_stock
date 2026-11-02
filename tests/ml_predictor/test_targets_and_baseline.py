@@ -75,3 +75,52 @@ def test_daily_rank_ic_without_tickers_keeps_old_behaviour():
     summary = daily_rank_ic([[1.0, 2.0, 3.0] * 4], [[0.1, 0.2, 0.3] * 4])
     assert summary.mean_ic > 0.9
     assert np.isnan(summary.mean_net_spread)
+
+
+def test_cross_sectional_rank_gauss_orders_within_region_and_day():
+    from auto_stock.ml_predictor.dataset import cross_sectional_rank_gauss
+    from auto_stock.ml_predictor.models import RANK_TARGET_SCALE
+
+    dataset = SequenceDataset(
+        sequences=[
+            _seq("A", "KOSPI", [0.30, 0.0]),  # huge outlier day 0 — rank caps its influence
+            _seq("B", "KOSDAQ", [0.01, 0.02]),
+            _seq("D", "KOSPI", [-0.02, 0.02]),  # tie with B on day 1
+            _seq("C", "NASDAQ", [0.05, -0.01]),
+        ],
+        feature_names=["x"],
+    )
+    ranked = cross_sectional_rank_gauss(dataset)
+    labels = {seq.ticker: [s.label for s in seq.samples] for seq in ranked.sequences}
+
+    assert labels["A"][0] > labels["B"][0] > labels["D"][0]
+    assert labels["A"][0] == pytest.approx(-labels["D"][0])  # symmetric around 0, outlier is just "top"
+    assert abs(labels["A"][0]) < 3 * RANK_TARGET_SCALE
+    assert labels["B"][1] == labels["D"][1] > labels["A"][1]  # ties share the average rank
+    assert labels["C"] == pytest.approx([0.0, 0.0])  # alone in its region that day
+    assert dataset.sequences[0].samples[0].label == 0.30  # original untouched
+
+
+def _ic(mean_ic, t_stat):
+    from auto_stock.ml_predictor.evaluation import IcSummary
+
+    return IcSummary(n_days=100, mean_ic=mean_ic, ic_t_stat=t_stat, positive_day_share=0.5, mean_top_bottom_spread=0.0)
+
+
+@pytest.mark.parametrize(
+    ("model", "baseline", "passed", "reason_part"),
+    [
+        ((-0.003, -0.3), (-0.017, -1.2), False, "신호 없음"),  # 2026-10-24 US: was wrongly "사용 가능"
+        ((0.0075, 0.74), (0.0376, 3.36), False, "우연과 구분 안 됨"),
+        ((0.03, 2.5), (0.04, 3.0), False, "선형 기준선"),
+        ((0.05, 3.1), (0.04, 3.0), True, "사용 가능"),
+        ((float("nan"), float("nan")), (0.04, 3.0), False, "신호 없음"),
+    ],
+)
+def test_deployment_verdict_requires_positive_significant_ic_above_baseline(model, baseline, passed, reason_part):
+    from auto_stock.ml_predictor.evaluation import deployment_verdict
+
+    ok, reason = deployment_verdict(_ic(*model), _ic(*baseline))
+
+    assert ok is passed
+    assert reason_part in reason

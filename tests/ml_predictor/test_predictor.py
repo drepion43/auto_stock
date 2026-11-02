@@ -182,3 +182,19 @@ def test_raw_prediction_is_described_as_absolute_return(mocker):
 
     assert describe_prediction(prediction)["return_basis"] == "absolute"
     assert to_reasons(prediction, action="BUY")[0].startswith("ML 모델(예상 수익률 +1.00%)")
+
+
+def test_rank_prediction_is_described_as_relative_score_not_percent(mocker):
+    from auto_stock.ml_predictor.models import TARGET_RANK
+
+    mocker.patch("auto_stock.ml_predictor.predictor.build_inference_features", return_value=_features())
+    mocker.patch("auto_stock.ml_predictor.predictor.build_model", return_value=_StubModel(0.005))
+    prediction = predict(_bundle(TARGET_RANK), records=[])
+
+    payload = describe_prediction(prediction)
+    reasons = to_reasons(prediction, action="BUY")
+
+    assert payload["return_basis"] == "rank_score_vs_region"
+    assert "순위" in payload["interpretation"]
+    assert "상대 순위 점수 z +0.50" in reasons[0] and "동의" in reasons[0]
+    assert "%" not in reasons[0]

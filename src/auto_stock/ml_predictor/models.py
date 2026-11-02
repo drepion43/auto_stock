@@ -15,7 +15,11 @@ from typing import Any
 # demeaned = 그 값에서 같은 날·같은 지역(KR/US) 학습 종목 평균을 뺀 초과 수익률(dataset.cross_sectional_demean).
 TARGET_RAW = "raw"
 TARGET_DEMEANED = "demeaned"
-TRAINING_TARGETS = (TARGET_DEMEANED, TARGET_RAW)
+TARGET_RANK = "rank"
+TRAINING_TARGETS = (TARGET_DEMEANED, TARGET_RAW, TARGET_RANK)
+# rank 타깃 = 같은 날·같은 지역 순위를 표준정규 점수(z)로 바꾼 값 × 이 배율. 학습 경로의 레이블 자르기(±20%)와
+# 국내 가격제한폭 마스크(±30%)가 수익률 단위를 가정하므로 z를 수익률과 같은 자릿수(1σ = 0.01)로 둔다.
+RANK_TARGET_SCALE = 0.01
 
 
 @dataclass(frozen=True, slots=True)

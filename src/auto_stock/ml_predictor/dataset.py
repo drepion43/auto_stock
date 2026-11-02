@@ -14,11 +14,14 @@ from collections import defaultdict
 from collections.abc import Collection
 from datetime import date
 
+from scipy.stats import norm, rankdata
+
 from auto_stock.data.market_routing import KRX_MARKETS
 from auto_stock.data.models import OHLCVRecord
 from auto_stock.ml_predictor.features import FEATURE_NAMES, build_feature_vectors
 from auto_stock.ml_predictor.labeling import LABEL_HORIZON_DAYS, forward_returns
 from auto_stock.ml_predictor.models import (
+    RANK_TARGET_SCALE,
     FeatureVector,
     LabeledSample,
     SequenceDataset,
@@ -126,6 +129,31 @@ def cross_sectional_demean(dataset: SequenceDataset) -> SequenceDataset:
         return TickerSequence(ticker=seq.ticker, market=seq.market, samples=samples)
 
     return SequenceDataset(sequences=[_demeaned(seq) for seq in dataset.sequences], feature_names=dataset.feature_names)
+
+
+def cross_sectional_rank_gauss(dataset: SequenceDataset, scale: float = RANK_TARGET_SCALE) -> SequenceDataset:
+    """레이블을 같은 날·같은 지역 안의 순위 → 표준정규 점수(z) × `scale`로 바꾼 새 데이터셋(rank 타깃).
+
+    평가 기준(날짜별 순위 IC)과 학습 목표를 맞추고, 일간 수익률의 두꺼운 꼬리(급등락 몇 종목)가 MSE를 지배하지
+    않게 한다(2026-10-24 진단: demeaned 타깃 Mamba는 국내 val IC +0.008로 ridge +0.038에 못 미쳤다).
+    동점은 평균 순위. 그날 종목이 1개면 z=0."""
+    labels: dict[tuple[str, date], list[float]] = defaultdict(list)
+    for seq in dataset.sequences:
+        for sample in seq.samples:
+            labels[(region_of(seq.market), sample.feature.date)].append(sample.label)
+    scores: dict[tuple[str, date], dict[float, float]] = {}
+    for key, values in labels.items():
+        uniform = (rankdata(values) - 0.5) / len(values)  # (0, 1) 안 — 양끝이 ±inf가 되지 않게
+        scores[key] = dict(zip(values, (norm.ppf(uniform) * scale).tolist()))
+
+    def _ranked(seq: TickerSequence) -> TickerSequence:
+        region = region_of(seq.market)
+        samples = [
+            LabeledSample(feature=s.feature, label=scores[(region, s.feature.date)][s.label]) for s in seq.samples
+        ]
+        return TickerSequence(ticker=seq.ticker, market=seq.market, samples=samples)
+
+    return SequenceDataset(sequences=[_ranked(seq) for seq in dataset.sequences], feature_names=dataset.feature_names)
 
 
 def _all_dates(dataset: SequenceDataset) -> list[date]:

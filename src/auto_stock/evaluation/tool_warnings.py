@@ -37,8 +37,11 @@ def _signal_warnings(name: str, result: dict) -> list[str]:
     predicted = _get(result, "prediction", "predicted_return")
     if isinstance(predicted, (int, float)) and predicted < 0:
         # 초과 수익률 음수는 "시장 평균보다 못하다"이지 하락 예측이 아니다 — 경고 문구도 그 의미로 남긴다.
-        if _get(result, "prediction", "return_basis") == "excess_vs_region_mean":
+        basis = _get(result, "prediction", "return_basis")
+        if basis == "excess_vs_region_mean":
             found.append(f"ML 예측 초과 수익률 음수 — 지역 평균 대비 열위({predicted})")
+        elif basis == "rank_score_vs_region":
+            found.append(f"ML 예측 상대 순위 점수 음수 — 지역 내 하위 예상({predicted})")
         else:
             found.append(f"ML 예측 수익률 음수({predicted})")
     if name == "analyze_chart_pattern" and _get(result, "analysis", "direction") == "DOWN":
